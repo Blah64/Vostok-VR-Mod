@@ -40,7 +40,7 @@ var _weapon_hand := ""  # "left" or "right" — which hand currently holds weapo
 var _weapon_slot := 0   # 1-4 mapped to KEY_1..KEY_4, 0 = none
 
 const HOLSTER_ZONES := {
-	1: {"name": "right_shoulder", "offset": Vector3(0.25, -0.15, -0.10), "key": KEY_1},
+	1: {"name": "right_shoulder", "offset": Vector3(0.25, -0.15, 0.20), "key": KEY_1},
 	2: {"name": "right_hip",     "offset": Vector3(0.25, -0.55, 0.0),   "key": KEY_2},
 	3: {"name": "left_hip",      "offset": Vector3(-0.25, -0.55, 0.0),  "key": KEY_3},
 	4: {"name": "chest",         "offset": Vector3(0.0, -0.15, 0.10),   "key": KEY_4},
@@ -1234,26 +1234,10 @@ func _update_hand_visibility() -> void:
 
 	# Hide weapon hand only when the game actually has a weapon model present.
 	# This prevents hands vanishing during the draw-pending window on empty slots.
-	var weapon_visible = game_has_weapon
-
-	if not weapon_visible:
-		# Truly unarmed — both hands visible
-		if left_hand: left_hand.visible = true
-		if right_hand: right_hand.visible = true
-	else:
-		# Weapon is visible — hide the weapon hand, show support hand
-		# (unless two-handing in DRAWN state)
-		var wh = _weapon_hand if _weapon_hand != "" else _config_dominant_hand
-		if left_hand:
-			if wh == "left":
-				left_hand.visible = false
-			else:
-				left_hand.visible = not (_support_grip_held and _holster_state == HolsterState.DRAWN)
-		if right_hand:
-			if wh == "right":
-				right_hand.visible = false
-			else:
-				right_hand.visible = not (_support_grip_held and _holster_state == HolsterState.DRAWN)
+	# Always show VR hand models — the game's first-person arm mesh is
+	# hidden separately via _hide_arms_in_subtree on the weapon rig.
+	if left_hand: left_hand.visible = true
+	if right_hand: right_hand.visible = true
 
 	# Grab range laser: show when unarmed and no menu is open
 	if _laser_mesh and not _menu_open:
