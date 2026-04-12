@@ -1681,10 +1681,25 @@ render_mode unshaded;
 uniform sampler2D scope_texture : source_color;
 uniform sampler2D reticle : source_color;
 uniform float intensity = 5.0;
+uniform float depth = 0.35;
+uniform float eye_distance = 0.3;
 void fragment() {
-	vec3 bg = texture(scope_texture, vec2(1.0 - UV.x, UV.y)).rgb;
+	vec3 view_dir = normalize(normalize(-VERTEX + EYE_OFFSET) * mat3(TANGENT, -BINORMAL, NORMAL));
+	// Parallax shift
+	vec2 pip_uv = vec2(1.0 - UV.x, UV.y) - view_dir.xy * (depth * 10.0);
+	pip_uv = (pip_uv - vec2(0.5)) * 0.5 + vec2(0.5);
+	// Eye relief — visible radius shrinks as eye moves away
+	// At 0.3m (typical hold): vis~0.9. At 0.15m: full. At 1m+: ~0.5
+	float vis = clamp(0.3 / max(eye_distance, 0.1), 0.4, 1.0);
+	vec2 center = UV - vec2(0.5);
+	float dist = length(center) * 2.0;
+	// Soft scope shadow at edges only
+	float vignette = 1.0 - smoothstep(vis * 0.92, vis, dist);
+	float shadow = 1.0 - 0.15 * smoothstep(vis * 0.6, vis, dist);
+	vec3 bg = texture(scope_texture, pip_uv).rgb * shadow * vignette;
+	// Reticle overlay
 	vec4 ret = texture(reticle, UV);
-	ALBEDO = mix(bg, ret.rgb * intensity, ret.a);
+	ALBEDO = mix(bg, ret.rgb * intensity, ret.a * vignette);
 }
 """
 
@@ -1811,6 +1826,13 @@ func _update_scope_camera() -> void:
 	var barrel_up = weapon_rig.global_basis.y
 	_scope_camera.global_position = scope_pos
 	_scope_camera.look_at(scope_pos + barrel_forward * 100.0, barrel_up)
+	# Update eye distance for vignette effect
+	if xr_camera and is_instance_valid(xr_camera) and _scope_lens_mesh and is_instance_valid(_scope_lens_mesh):
+		var eye_dist = xr_camera.global_position.distance_to(scope_pos)
+		for entry in _scope_overridden_surfaces:
+			var mat = _scope_lens_mesh.get_surface_override_material(entry["surf"])
+			if mat is ShaderMaterial:
+				mat.set_shader_parameter("eye_distance", eye_dist)
 
 
 func _cleanup_scope() -> void:
