@@ -9,7 +9,7 @@ No compiled extensions. The mod is a single autoload script injected via `overri
 - `VR Mod/resources/vr_mod_init.gd` — source of truth, ALL edits go here
 - After every edit, deploy with: `cp "VR Mod/resources/vr_mod_init.gd" "C:/Program Files (x86)/Steam/steamapps/common/Road to Vostok/vr_mod_init.gd"`
 - `C:/Program Files (x86)/Steam/steamapps/common/Road to Vostok/vr_mod_debug.log` — diagnostic log
-- `VR Mod/config/default_config.json` — user-tunable settings (holster radius, per-slot grip offsets)
+- `VR Mod/config/default_config.json` — user-tunable settings (holster positions, grip offsets, HUD settings, etc.)
 
 ## Critical Rules
 
@@ -20,6 +20,7 @@ No compiled extensions. The mod is a single autoload script injected via `overri
 4. **process_priority = 1000** — mod runs after all game scripts; weapon/object position overrides stick.
 5. **No freeze on grabbed RigidBody3D** — use position override + zero velocity each frame instead.
 6. **No Co-Authored-By in commits** — user preference.
+7. **No inline lambdas with semicolons** — GDScript 4 inline lambda only accepts one statement. Semicolons end the lambda body and leave unmatched parens → parse error → black HMD. Always use named methods or multi-line lambdas.
 
 ## Architecture
 
@@ -33,9 +34,11 @@ vr_mod_init.gd (autoload, extends Node)
   │   └── XRController3D ("RightHand", tracker="right_hand")
   │       ├── Node3D "RightHandModel" → Palm/Fingers/Thumb MeshInstance3Ds
   │       └── RayCast3D "GrabRayRight" (1m, all layers)
-  └── _laser_mesh: MeshInstance3D (CylinderMesh, dual-purpose)
-        Red/green 1m = grab range indicator (hand empty, no menu)
-        Blue 5m      = UI laser pointer    (menu/inventory open)
+  ├── _laser_mesh: MeshInstance3D (CylinderMesh, dual-purpose)
+  │     Red/green 1m = grab range indicator (hand empty, no menu)
+  │     Blue 5m      = UI laser pointer    (menu/inventory/config open)
+  └── SubViewport "VRHudViewport" — shares World2D with main viewport
+        ↳ hud_mesh: MeshInstance3D (QuadMesh) — parented to xr_camera or scene root
 ```
 
 ## Scene Structure (game)
@@ -46,6 +49,10 @@ vr_mod_init.gd (autoload, extends Node)
 - Arm mesh: `MeshInstance3D` named `"Arms"` somewhere in weapon_rig subtree — surfaces 0-1 hidden via `_hide_arms_in_subtree()`
 - Loose items: `RigidBody3D` with `collision_layer & 4 != 0`, direct children of `/root/Map/`, script `res://Scripts/Pickup.gd`, group `"Item"`, method `Interact()` adds to inventory
 - HUD/UI: `game_camera/Core/UI` — shared via `World2D` into a `SubViewport`
+- HUD node tree (key elements):
+  - `Map/Core/UI/HUD/Stats/Vitals` — Health/Energy/Hydration/Mental/Temp (bottom-left, pos.x = -960 * spread)
+  - `Map/Core/UI/HUD/Stats/Medical` — Status effect icons (bottom-right, pos.x = 960 * spread)
+  - `Map/Core/UI/HUD/Info` — Map/FPS labels (top-left)
 - LOS: `game_camera/LOS` — BoxMesh raycast the game uses to detect interactable objects
 
 ## State Machine (_phase)
@@ -69,15 +76,22 @@ LOWERED  grip near different zone         → _holster_weapon() + _draw_weapon()
 ## Holster Zones
 
 Body-relative positions using **yaw-only** rotation from `xr_camera` (ignores head pitch/roll).
+Offsets are runtime-mutable (loaded from config, tunable via F8 config screen).
 
 ```gdscript
 const HOLSTER_ZONES := {
-    1: {"name": "right_shoulder", "offset": Vector3(0.25, -0.15,  0.20), "key": KEY_1},
-    2: {"name": "right_hip",      "offset": Vector3(0.25, -0.55,  0.0),  "key": KEY_2},
-    3: {"name": "left_hip",       "offset": Vector3(-0.25, -0.55, 0.0),  "key": KEY_3},
-    4: {"name": "chest",          "offset": Vector3(0.0,  -0.15,  0.10), "key": KEY_4},
+    1: {"name": "right_shoulder", "key": KEY_1},
+    2: {"name": "right_hip",      "key": KEY_2},
+    3: {"name": "left_hip",       "key": KEY_3},
+    4: {"name": "chest",          "key": KEY_4},
 }
-var _holster_zone_radius := 0.20  # loaded from config: holsters.zone_radius
+var _holster_offsets := {           # tunable via config screen
+    1: Vector3(0.25, -0.15,  0.20),
+    2: Vector3(0.25, -0.55,  0.0),
+    3: Vector3(-0.25, -0.55, 0.0),
+    4: Vector3(0.0,  -0.15,  0.10),
+}
+var _holster_zone_radius := 0.20    # loaded from config: holsters.zone_radius
 ```
 
 Weapon equip/unequip uses KEY injection (KEY_1–KEY_4). To avoid double-toggle on rapid
@@ -90,8 +104,8 @@ Reaching behind the right shoulder while holding a loose item and releasing grip
 `item.Interact()` directly, adding the item to inventory.
 
 ```gdscript
-const BAG_ZONE_OFFSET := Vector3(0.15, -0.10, 0.35)  # right-back, upper body
-const BAG_ZONE_RADIUS := 0.35
+var _bag_zone_offset := Vector3(0.15, -0.10, 0.35)  # runtime-tunable
+var _bag_zone_radius := 0.35
 ```
 
 Haptic buzz on zone entry (only when `_grabbed_object` is valid).
@@ -109,13 +123,16 @@ Haptic buzz on zone entry (only when `_grabbed_object` is valid).
 | Support grip (near different zone) | Swap weapon |
 | Left trigger + DRAWN | Toggle flashlight (with support grip) or reload |
 | Left stick | Move (WASD) |
-| Right stick L/R | Snap turn (45°) |
+| Right stick L/R | Snap/smooth turn |
+| Right stick U/D (config screen open) | Scroll config panel |
 | Right stick click | Crouch |
 | A/X button | Jump |
 | B (right, DRAWN) | Enter grip adjust mode |
 | A (right, adjust mode) | Save grip offsets to config |
 | B (right, adjust mode) | Discard and exit adjust mode |
 | Release grabbed item near bag zone | Add item to inventory |
+| F8 | Toggle in-game VR config screen |
+| F9 | Dump HUD node tree to vr_mod_debug.log |
 
 ## Weapon Sync
 
@@ -151,14 +168,42 @@ Tuned live in-game via **grip adjust mode** (B button when DRAWN).
 ## HUD System
 
 - `SubViewport` shares `World2D` with main viewport → renders game's 2D UI without reparenting nodes
-- Head-locked during gameplay (follows `xr_camera` at `HUD_DISTANCE = 1.5m`)
-- World-fixed during menus (`MENU_DISTANCE = 1.3m`, `MENU_WIDTH = 3.0m`)
+- Head-locked during gameplay (follows `xr_camera`); world-fixed during menus
+- `_hud_smooth_follow`: when true, HUD lerps toward head each frame instead of snapping
 - `_interface_open` detected by checking `game_camera/Core/UI` visibility each frame
 - Laser pointer: raycasts from dominant controller → intersects HUD quad plane → warps OS mouse
+- HUD spread: `_apply_hud_spread()` adjusts `Stats/Vitals` and `Stats/Medical` x positions directly
+
+## Runtime-Tunable HUD Variables
+
+```gdscript
+var _hud_width := 2.0          # quad width × height (uniform scale)
+var _hud_distance := 1.5       # metres from head when head-locked
+var _hud_height_offset := -0.1 # vertical offset
+var _hud_lr_offset := 0.0      # left/right offset
+var _hud_smooth_follow := false # smooth lerp vs instant snap
+var _hud_smooth_speed := 3.0
+var _hud_spread := 1.0         # HUD element spread (Vitals/Medical x position multiplier)
+var _menu_width := 3.0
+var _menu_distance := 1.3
+var _menu_lr_offset := 0.0
+var _menu_laser_uv_x := 0.02   # laser UV correction for menu quad
+var _menu_laser_uv_y := 0.06
+```
+
+## F8 Config Screen
+
+- Opens a SubViewport-based panel (`_config_panel_vp` / `_config_panel_quad`) in world space
+- Laser from dominant hand drives `_config_laser_pos` → `push_input()` to SubViewport
+- Right stick Y scrolls the `CfgRoot/CfgScroll` ScrollContainer
+- All buttons use `Callable(self, "named_method_string")` — no inline lambdas
+- Steppers work by disconnecting/reconnecting button signals with updated value in bound args
+- Save & Close calls `_save_full_config()` which writes the full config JSON
 
 ## Known Issues / Constraints
 
 - Adding a `MeshInstance3D` directly to `XRController3D` causes black HMD (Forward Mobile bug). Always wrap in `Node3D` container OR reuse existing nodes.
 - `godot.log` truncates on startup — all debug must go to `vr_mod_debug.log`.
 - Weapon nodes load late (after camera); `_weapon_raise_timer` (3 s) detects load and auto-raises.
-- Weapon can occasionally snap to camera position after rapid holster/draw sequences; holstering and re-drawing restores sync. Root cause: game may re-parent or reset weapon rig on reload/stance events.
+- Weapon can occasionally snap to camera position after rapid holster/draw sequences; holstering and re-drawing restores sync.
+- GDScript parse errors produce no output (mod silently fails to load → black HMD). If black HMD occurs after a code change, revert and add changes incrementally.
