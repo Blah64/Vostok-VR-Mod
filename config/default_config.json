@@ -44,7 +44,7 @@
     },
 
     "holsters": {
-        "zone_radius": 0.20
+        "zone_radius": 0.25
     },
 
     "performance": {
