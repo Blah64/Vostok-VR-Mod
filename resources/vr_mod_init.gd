@@ -900,15 +900,19 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				_inject_action("context", false)
 			else:
 				if hand == _weapon_hand and _holster_state == HolsterState.DRAWN:
-					# Weapon hand releasing grip — check holster zone
-					var ctrl = _get_controller(hand)
-					var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
-					if zone == _weapon_slot:
-						# Near own holster zone — holster completely
+					if not _weapon_loaded:
+						# Slot was empty — revert to unarmed regardless of position
 						_holster_weapon()
 					else:
-						# Not near holster — lower weapon
-						_lower_weapon()
+						# Weapon hand releasing grip — check holster zone
+						var ctrl = _get_controller(hand)
+						var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
+						if zone == _weapon_slot:
+							# Near own holster zone — holster completely
+							_holster_weapon()
+						else:
+							# Not near holster — lower weapon
+							_lower_weapon()
 				elif is_support_hand:
 					_support_grip_held = false
 					print("[VR Mod] Support grip: two-hand aim OFF")
@@ -1293,6 +1297,22 @@ func _update_grabbed() -> void:
 		_throw_samples.pop_front()
 
 
+var _invis_mat: StandardMaterial3D = null
+
+func _hide_arms_in_subtree(node: Node) -> void:
+	if node is MeshInstance3D and node.name == "Arms":
+		if not _invis_mat:
+			_invis_mat = StandardMaterial3D.new()
+			_invis_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_invis_mat.albedo_color = Color(0, 0, 0, 0)
+		var mesh := node as MeshInstance3D
+		for i in mesh.mesh.get_surface_count():
+			mesh.set_surface_override_material(i, _invis_mat)
+		return  # Arms found, no need to go deeper
+	for child in node.get_children():
+		_hide_arms_in_subtree(child)
+
+
 func _sync_weapon_to_controller() -> void:
 	if not game_camera or not is_instance_valid(game_camera):
 		return
@@ -1339,32 +1359,8 @@ func _sync_weapon_to_controller() -> void:
 	var grip_offset = aim_basis * Vector3(0, 0.15, -0.20)
 	weapon_rig.global_position = controller.global_position + grip_offset
 
-	# Hide left arm only (keep right arm visible for grip hand)
-	# Arms mesh has 2 surfaces - try hiding surface 0 (left arm)
-	var handling = weapon_rig.get_node_or_null("Handling")
-	if handling:
-		var node = handling
-		# Walk down: Handling → Sway → Noise → Tilt → Impulse → Recoil → Holder → [Weapon]
-		for _i in 7:
-			if node.get_child_count() > 0:
-				var next = node.get_child(0)
-				if next is Node3D:
-					node = next
-				else:
-					break
-			else:
-				break
-		var armature = node.get_node_or_null("Armature")
-		if armature:
-			var skeleton = armature.get_node_or_null("Skeleton3D")
-			if skeleton:
-				var arms = skeleton.get_node_or_null("Arms")
-				if arms and arms is MeshInstance3D:
-					var invis_mat = StandardMaterial3D.new()
-					invis_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-					invis_mat.albedo_color = Color(0, 0, 0, 0)
-					arms.set_surface_override_material(0, invis_mat)
-					print("[VR Mod] Hidden left arm (surface 0)")
+	# Hide all arm surfaces on every weapon type (guns, knives, grenades)
+	_hide_arms_in_subtree(weapon_rig)
 
 
 func _force_debug_dump(label: String) -> void:
