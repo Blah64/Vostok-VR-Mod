@@ -50,6 +50,11 @@ var _holster_zone_radius := 0.20
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
 var _right_in_zone := 0  # Which zone right controller is in (0 = none)
 
+# Bag zone: reach behind the right shoulder to add a held item to inventory
+const BAG_ZONE_OFFSET := Vector3(0.15, -0.10, 0.35)  # Right-back, upper body (yaw-relative)
+const BAG_ZONE_RADIUS := 0.35
+var _grab_in_bag_zone := false  # For haptic edge-detection while holding item
+
 # Per-slot grip offsets in aim-local space (up, forward from controller)
 # Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
 var _slot_grip_offsets := {
@@ -101,6 +106,15 @@ func _get_nearby_holster_zone(controller_pos: Vector3) -> int:
 	return closest_zone
 
 
+func _is_in_bag_zone(world_pos: Vector3) -> bool:
+	if not xr_camera or not is_instance_valid(xr_camera):
+		return false
+	var yaw := xr_camera.global_rotation.y
+	var yaw_basis := Basis(Vector3.UP, yaw)
+	var local := yaw_basis.inverse() * (world_pos - xr_camera.global_position)
+	return local.distance_to(BAG_ZONE_OFFSET) < BAG_ZONE_RADIUS
+
+
 func _update_holster_zone_haptics() -> void:
 	# Check each controller against holster zones and pulse haptic on entry
 	for hand in ["left", "right"]:
@@ -118,6 +132,18 @@ func _update_holster_zone_haptics() -> void:
 				_left_in_zone = zone
 			else:
 				_right_in_zone = zone
+
+	# Bag zone haptic: buzz when the grabbing hand enters the bag zone while holding a loose item
+	if _grabbed_object and is_instance_valid(_grabbed_object) and _grab_hand != "":
+		var grab_ctrl = _get_controller(_grab_hand)
+		if grab_ctrl and grab_ctrl.get_is_active():
+			var in_zone := _is_in_bag_zone(grab_ctrl.global_position)
+			if in_zone and not _grab_in_bag_zone:
+				grab_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.6, 0.2, 0.0)
+				print("[VR Mod] Grab hand entered bag zone")
+			_grab_in_bag_zone = in_zone
+	else:
+		_grab_in_bag_zone = false
 
 
 func _draw_weapon(hand: String, slot: int) -> void:
@@ -1302,6 +1328,12 @@ func _drop_grabbed() -> void:
 	if not _grabbed_object:
 		return
 
+	# If the grabbing hand is behind the shoulder, add to inventory instead of dropping
+	var ctrl = _get_controller(_grab_hand) if _grab_hand != "" else null
+	if ctrl and _is_in_bag_zone(ctrl.global_position):
+		_pickup_to_inventory()
+		return
+
 	# Compute throw velocity from the last 3 samples only (captures peak, not deceleration)
 	var throw_vel := Vector3.ZERO
 	if _throw_samples.size() >= 2:
@@ -1324,6 +1356,43 @@ func _drop_grabbed() -> void:
 	_grab_hand = ""
 	_grab_offset = Vector3.ZERO
 	_throw_samples.clear()
+
+
+func _pickup_to_inventory() -> void:
+	if not _grabbed_object or not is_instance_valid(_grabbed_object):
+		return
+
+	print("[VR Mod] INVENTORY PICKUP: ", _grabbed_object.name)
+
+	# Haptic confirmation
+	var ctrl = _get_controller(_grab_hand) if _grab_hand != "" else null
+	if ctrl:
+		ctrl.trigger_haptic_pulse("haptic", 0.0, 1.0, 0.25, 0.0)
+
+	var item := _grabbed_object
+	_grabbed_object = null
+	_grab_hand = ""
+	_grab_offset = Vector3.ZERO
+	_throw_samples.clear()
+	_grab_in_bag_zone = false
+
+	# Call the game's Interact method directly (Pickup.gd script)
+	if item.has_method("Interact"):
+		item.call("Interact")
+	else:
+		# Fallback: drop at feet
+		if xr_camera and is_instance_valid(xr_camera):
+			var fwd := -xr_camera.global_basis.z
+			fwd.y = 0.0
+			if fwd.length_squared() > 0.001:
+				fwd = fwd.normalized()
+			item.global_position = xr_camera.global_position + Vector3(0, -1.5, 0) + fwd * 0.3
+		if item is RigidBody3D:
+			var rb := item as RigidBody3D
+			rb.sleeping = false
+			rb.linear_damp = 0.0
+			rb.linear_velocity = Vector3.ZERO
+			rb.angular_velocity = Vector3.ZERO
 
 
 func _update_grabbed() -> void:
