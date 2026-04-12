@@ -23,13 +23,145 @@ var _weapons_reparented := false
 var _weapon_debug_timer := 0.0
 var _last_cam_child_snapshot := []  # Track changes to camera children
 var _scroll_cooldown := 0.0  # Prevent rapid-fire scroll
-var _left_grip_held := false  # Left grip held = two-hand weapon grip
+var _support_grip_held := false  # Support hand grip held = two-hand weapon grip
 var _grabbed_object: Node3D = null  # Currently grabbed loose item
 var _grab_offset := Vector3.ZERO  # Offset from controller to grabbed object
-var _grab_ray: RayCast3D  # Raycast on right controller for item detection
+var _grab_hand := ""  # Which hand holds the grabbed object ("left" or "right")
+var _grab_ray_left: RayCast3D   # Grab raycast on left controller
+var _grab_ray_right: RayCast3D  # Grab raycast on right controller
 var _throw_samples: Array = []  # Recent [position, time] pairs for throw velocity
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
+
+# Holster system
+enum HolsterState { UNARMED, DRAWN, LOWERED }
+var _holster_state: int = HolsterState.UNARMED
+var _weapon_hand := ""  # "left" or "right" — which hand currently holds weapon
+var _weapon_slot := 0   # 1-4 mapped to KEY_1..KEY_4, 0 = none
+
+const HOLSTER_ZONES := {
+	1: {"name": "right_shoulder", "offset": Vector3(0.25, -0.15, -0.10), "key": KEY_1},
+	2: {"name": "right_hip",     "offset": Vector3(0.25, -0.55, 0.0),   "key": KEY_2},
+	3: {"name": "left_hip",      "offset": Vector3(-0.25, -0.55, 0.0),  "key": KEY_3},
+	4: {"name": "chest",         "offset": Vector3(0.0, -0.15, 0.10),   "key": KEY_4},
+}
+var _holster_zone_radius := 0.20
+var _left_in_zone := 0   # Which zone left controller is in (0 = none)
+var _right_in_zone := 0  # Which zone right controller is in (0 = none)
+
+
+func _get_weapon_hand() -> String:
+	if _holster_state != HolsterState.UNARMED and _weapon_hand != "":
+		return _weapon_hand
+	return _config_dominant_hand
+
+
+func _get_support_hand() -> String:
+	return "left" if _get_weapon_hand() == "right" else "right"
+
+
+func _get_controller(hand: String) -> XRController3D:
+	return right_controller if hand == "right" else left_controller
+
+
+func _get_nearby_holster_zone(controller_pos: Vector3) -> int:
+	if not xr_camera or not is_instance_valid(xr_camera):
+		return 0
+	var head_pos = xr_camera.global_position
+	var head_yaw = xr_camera.global_rotation.y
+	var yaw_basis = Basis(Vector3.UP, head_yaw)
+	var closest_zone := 0
+	var closest_dist := _holster_zone_radius
+	for slot in HOLSTER_ZONES:
+		var zone = HOLSTER_ZONES[slot]
+		var zone_world_pos = head_pos + yaw_basis * zone["offset"]
+		var dist = controller_pos.distance_to(zone_world_pos)
+		if dist < closest_dist:
+			closest_dist = dist
+			closest_zone = slot
+	return closest_zone
+
+
+func _update_holster_zone_haptics() -> void:
+	# Check each controller against holster zones and pulse haptic on entry
+	for hand in ["left", "right"]:
+		var ctrl = _get_controller(hand)
+		if not ctrl or not ctrl.get_is_active():
+			continue
+		var zone = _get_nearby_holster_zone(ctrl.global_position)
+		var prev_zone = _left_in_zone if hand == "left" else _right_in_zone
+		if zone != prev_zone:
+			if zone > 0:
+				# Entered a new zone — haptic buzz
+				ctrl.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.15, 0.0)
+				print("[VR Mod] ", hand, " hand entered zone: ", HOLSTER_ZONES[zone]["name"])
+			if hand == "left":
+				_left_in_zone = zone
+			else:
+				_right_in_zone = zone
+
+
+func _draw_weapon(hand: String, slot: int) -> void:
+	print("[VR Mod] DRAW weapon slot ", slot, " (", HOLSTER_ZONES[slot]["name"], ") with ", hand, " hand")
+	_holster_state = HolsterState.DRAWN
+	_weapon_hand = hand
+	_weapon_slot = slot
+
+	# Inject the key to equip this weapon slot
+	var key: int = HOLSTER_ZONES[slot]["key"]
+	_inject_key(key, true)
+	get_tree().create_timer(0.1).timeout.connect(func(): _inject_key(key, false))
+
+	# Start weapon load detection + auto-raise sequence
+	_weapon_loaded = false
+	_weapon_raise_timer = 1.5
+	_scroll_cooldown = 1.0
+
+
+func _lower_weapon() -> void:
+	print("[VR Mod] LOWER weapon (slot ", _weapon_slot, ")")
+	_holster_state = HolsterState.LOWERED
+	_support_grip_held = false
+	# Set weapon_low to lower the weapon visually
+	_inject_action("weapon_low", true)
+	get_tree().create_timer(0.1).timeout.connect(func(): _inject_action("weapon_low", false))
+	# Release fire/aim in case they were held
+	Input.action_release("fire")
+	Input.action_release("left_mouse")
+	_inject_action("fire", false)
+	_inject_action("left_mouse", false)
+	_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
+	_inject_action("aim", false)
+	_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
+
+
+func _raise_weapon() -> void:
+	print("[VR Mod] RAISE weapon (slot ", _weapon_slot, ")")
+	_holster_state = HolsterState.DRAWN
+	# Re-raise the weapon
+	_inject_action("weapon_high", true)
+	get_tree().create_timer(0.1).timeout.connect(func(): _inject_action("weapon_high", false))
+
+
+func _holster_weapon() -> void:
+	print("[VR Mod] HOLSTER weapon (slot ", _weapon_slot, ")")
+	# Release aim
+	_inject_action("aim", false)
+	_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
+	_inject_action("weapon_high", false)
+
+	# Unequip: inject the same key to toggle off
+	if _weapon_slot > 0 and HOLSTER_ZONES.has(_weapon_slot):
+		var key: int = HOLSTER_ZONES[_weapon_slot]["key"]
+		_inject_key(key, true)
+		get_tree().create_timer(0.1).timeout.connect(func(): _inject_key(key, false))
+
+	_holster_state = HolsterState.UNARMED
+	_weapon_hand = ""
+	_weapon_slot = 0
+	_weapon_loaded = false
+	_support_grip_held = false
+
 
 # HUD
 var hud_viewport: SubViewport
@@ -53,7 +185,7 @@ var snap_turn_degrees := 45.0
 var smooth_turn_speed := 120.0
 var use_snap_turn := true
 var thumbstick_deadzone := 0.15
-var dominant_hand := "right"
+var _config_dominant_hand := "right"
 var _snap_turn_cooldown := false
 var _last_game_cam_pos := Vector3.ZERO
 
@@ -157,17 +289,25 @@ func _process(delta: float) -> void:
 						_weapon_raise_timer = 0.5
 						print("[VR Mod] Will auto-raise weapon in 0.5s")
 
-				# Auto-raise weapon timer
+				# Auto-raise weapon timer (only if weapon is still DRAWN)
 				if _weapon_raise_timer > 0:
 					_weapon_raise_timer -= delta
 					if _weapon_raise_timer <= 0:
 						_weapon_raise_timer = -1.0
-						print("[VR Mod] Auto-raising weapon (weapon_high)")
-						_inject_action("weapon_high", true)
-						# Release after a frame via deferred
-						get_tree().create_timer(0.1).timeout.connect(
-							func(): _inject_action("weapon_high", false)
-						)
+						if _holster_state == HolsterState.DRAWN:
+							if not _weapon_loaded:
+								# Slot was empty — abort and revert to unarmed
+								print("[VR Mod] Slot ", _weapon_slot, " empty, reverting to UNARMED")
+								_holster_state = HolsterState.UNARMED
+								_weapon_hand = ""
+								_weapon_slot = 0
+								_support_grip_held = false
+							else:
+								print("[VR Mod] Auto-raising weapon (weapon_high)")
+								_inject_action("weapon_high", true)
+								get_tree().create_timer(0.1).timeout.connect(
+									func(): _inject_action("weapon_high", false)
+								)
 
 				# Continuous weapon debug: detect any changes to camera subtree
 				_weapon_debug_timer += delta
@@ -175,14 +315,17 @@ func _process(delta: float) -> void:
 					_weapon_debug_timer = 0.0
 					_deep_camera_debug()
 
-				# Sync weapon rig to controller + hand visibility + grabbed objects
-				_sync_weapon_to_controller()
-				_update_hand_visibility()
-				_update_grabbed()
+				# Holster zone haptic feedback
+				_update_holster_zone_haptics()
 
 				_update_interface_state()
 				_sync_origin_to_game()
 				_process_input(delta)
+
+				# Sync weapon AFTER origin/camera so our position override wins
+				_sync_weapon_to_controller()
+				_update_hand_visibility()
+				_update_grabbed()
 
 				if _interface_open:
 					_update_laser_pointer()
@@ -219,17 +362,19 @@ func _install_xr_rig() -> void:
 	_create_hand_model(left_controller, "LeftHandModel")
 	_create_hand_model(right_controller, "RightHandModel")
 
-	# Grab raycast on dominant hand controller - short range for picking up items
-	_grab_ray = RayCast3D.new()
-	_grab_ray.name = "GrabRay"
-	_grab_ray.target_position = Vector3(0, 0, -1.0)  # 1m forward from controller
-	_grab_ray.enabled = true
-	_grab_ray.collide_with_areas = true  # Detect Area3D (interactive items)
-	_grab_ray.collide_with_bodies = true  # Also detect physics bodies
-	_grab_ray.collision_mask = 0xFFFFF  # All 20 layers
-	var dom_ctrl = right_controller if dominant_hand == "right" else left_controller
-	dom_ctrl.add_child(_grab_ray)
-	print("[VR Mod] Grab raycast added to ", dominant_hand, " controller")
+	# Grab raycasts on both controllers - short range for picking up items / holster detection
+	for ctrl in [left_controller, right_controller]:
+		var ray = RayCast3D.new()
+		ray.name = "GrabRay"
+		ray.target_position = Vector3(0, 0, -1.0)  # 1m forward from controller
+		ray.enabled = true
+		ray.collide_with_areas = true
+		ray.collide_with_bodies = true
+		ray.collision_mask = 0xFFFFF  # All 20 layers
+		ctrl.add_child(ray)
+	_grab_ray_left = left_controller.get_node("GrabRay")
+	_grab_ray_right = right_controller.get_node("GrabRay")
+	print("[VR Mod] Grab raycasts added to both controllers")
 
 
 	if game_camera and is_instance_valid(game_camera):
@@ -318,7 +463,7 @@ func _install_xr_rig() -> void:
 	_laser_mesh.rotation.x = deg_to_rad(90)
 	_laser_mesh.position.z = -cylinder.height / 2.0
 
-	var pointer_controller = right_controller if dominant_hand == "right" else left_controller
+	var pointer_controller = _get_controller(_config_dominant_hand)
 	pointer_controller.add_child(_laser_mesh)
 
 	print("[VR Mod] === VR rig active ===")
@@ -462,8 +607,8 @@ func _update_laser_pointer() -> void:
 	if not hud_mesh or not _laser_mesh:
 		return
 
-	# Get the dominant controller
-	var controller = right_controller if dominant_hand == "right" else left_controller
+	# Get the pointer controller (config dominant hand for UI)
+	var controller = _get_controller(_config_dominant_hand)
 	if not controller or not controller.get_is_active():
 		return
 
@@ -571,7 +716,7 @@ func _sync_origin_to_game() -> void:
 func _steer_game_camera_via_mouse() -> void:
 	# Steer game camera to match dominant hand controller direction
 	# This makes weapon firing/aiming follow the controller, not the head
-	var aim_controller = right_controller if dominant_hand == "right" else left_controller
+	var aim_controller = _get_controller(_get_weapon_hand())
 	if not aim_controller or not aim_controller.get_is_active():
 		return
 
@@ -649,52 +794,74 @@ func _process_input(delta: float) -> void:
 
 
 func _on_button_pressed(button_name: String, hand: String) -> void:
+	# Resolve hand roles dynamically based on holster state
+	var is_weapon_hand := (hand == _weapon_hand) if _holster_state != HolsterState.UNARMED else (hand == _config_dominant_hand)
+	var is_support_hand := not is_weapon_hand
+
 	match button_name:
 		"trigger_click":
 			if _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				_inject_action("left_mouse", true)
 			else:
-				if hand == dominant_hand:
-					# Fire weapon
+				if is_weapon_hand and _holster_state == HolsterState.DRAWN:
+					# Weapon hand trigger = fire (only when weapon is raised/drawn)
 					Input.action_press("fire", 1.0)
 					Input.action_press("left_mouse", 1.0)
 					_inject_action("fire", true)
 					_inject_action("left_mouse", true)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
-				else:
-					if _left_grip_held:
-						# Left trigger while gripping = toggle flashlight
+				elif is_support_hand and _holster_state == HolsterState.DRAWN:
+					# Support hand trigger = reload or flashlight (only when drawn)
+					if _support_grip_held:
 						_inject_action("flashlight", true)
-						print("[VR Mod] FLASHLIGHT toggled (left trigger + grip)")
+						print("[VR Mod] FLASHLIGHT toggled (support trigger + grip)")
 					else:
-						# Left trigger without grip = reload
 						_inject_action("reload", true)
-						print("[VR Mod] RELOAD pressed (left trigger)")
+						print("[VR Mod] RELOAD pressed (support trigger)")
 		"grip_click":
 			if _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
 				_inject_action("context", true)
 			else:
-				if hand == dominant_hand:
-					# Right grip: aim if weapon equipped, grab item if not
-					var mgr = game_camera.get_node_or_null("Manager") if game_camera else null
-					var has_wep = mgr and mgr.get_child_count() > 0 if mgr else false
-					if has_wep:
-						_inject_action("aim", true)
-						_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
-					else:
-						_try_grab()
-				else:
-					# Left grip = grab front of weapon (two-hand aim)
-					_left_grip_held = true
-					print("[VR Mod] Left grip: two-hand aim ON")
-		"ax_button":  # A on right, X on left
+				var ctrl = _get_controller(hand)
+				var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
+				match _holster_state:
+					HolsterState.UNARMED:
+						if zone > 0:
+							_draw_weapon(hand, zone)
+						else:
+							_try_grab(hand)
+					HolsterState.DRAWN:
+						if hand == _weapon_hand:
+							pass  # Already gripping weapon
+						else:
+							if zone > 0 and zone != _weapon_slot:
+								# Support hand near different holster — holster current, draw new
+								_holster_weapon()
+								_draw_weapon(hand, zone)
+							else:
+								# Support hand grip = two-hand aim
+								_support_grip_held = true
+								print("[VR Mod] Support grip: two-hand aim ON")
+					HolsterState.LOWERED:
+						if zone > 0 and zone != _weapon_slot:
+							# Near a different holster — holster old, draw new
+							_holster_weapon()
+							_draw_weapon(hand, zone)
+						elif hand == _weapon_hand:
+							# Same hand re-gripping — raise weapon
+							_raise_weapon()
+						else:
+							# Different hand, no new holster — raise with original hand
+							_raise_weapon()
+							_support_grip_held = true
+		"ax_button":  # A on right, X on left (physical mapping)
 			if hand == "left":
 				_inject_action("jump", true)
 			else:
 				_inject_action("reload", true)
-		"by_button":  # B on right, Y on left
+		"by_button":  # B on right, Y on left (physical mapping)
 			if hand == "left":
 				_inject_action("interface", true)  # Y = toggle inventory
 			else:
@@ -704,26 +871,19 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", true)
-			else:
-				# Right stick click = equip primary weapon + auto-raise
-				if _scroll_cooldown <= 0:
-					_scroll_cooldown = 1.0
-					print("[VR Mod] EQUIP WEAPON (KEY_1)")
-					_inject_key(KEY_1, true)
-					_weapon_loaded = false
-					_weapon_raise_timer = 1.5  # Raise after equip animation
-				else:
-					print("[VR Mod] EQUIP blocked (cooldown: ", snapped(_scroll_cooldown, 0.1), "s)")
 
 
 func _on_button_released(button_name: String, hand: String) -> void:
+	var is_weapon_hand := (hand == _weapon_hand) if _holster_state != HolsterState.UNARMED else (hand == _config_dominant_hand)
+	var is_support_hand := not is_weapon_hand
+
 	match button_name:
 		"trigger_click":
 			if _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
 				_inject_action("left_mouse", false)
 			else:
-				if hand == dominant_hand:
+				if is_weapon_hand:
 					Input.action_release("fire")
 					Input.action_release("left_mouse")
 					_inject_action("fire", false)
@@ -737,13 +897,22 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
 				_inject_action("context", false)
 			else:
-				if hand == dominant_hand:
-					_inject_action("aim", false)
-					_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
+				if hand == _weapon_hand and _holster_state == HolsterState.DRAWN:
+					# Weapon hand releasing grip — check holster zone
+					var ctrl = _get_controller(hand)
+					var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
+					if zone == _weapon_slot:
+						# Near own holster zone — holster completely
+						_holster_weapon()
+					else:
+						# Not near holster — lower weapon
+						_lower_weapon()
+				elif is_support_hand:
+					_support_grip_held = false
+					print("[VR Mod] Support grip: two-hand aim OFF")
+				# Always try to drop grabbed objects from this hand
+				if _grab_hand == hand:
 					_drop_grabbed()
-				else:
-					_left_grip_held = false
-					print("[VR Mod] Left grip: two-hand aim OFF")
 		"ax_button":
 			if hand == "left":
 				_inject_action("jump", false)
@@ -759,8 +928,6 @@ func _on_button_released(button_name: String, hand: String) -> void:
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", false)
-			else:
-				_inject_key(KEY_1, false)
 
 
 var _key_states := {}
@@ -980,31 +1147,46 @@ func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 
 
 func _update_hand_visibility() -> void:
-	# Show hand models when no weapon is equipped, hide when weapon is held
-	var has_weapon = false
+	var left_hand = left_controller.get_node_or_null("LeftHandModel")
+	var right_hand = right_controller.get_node_or_null("RightHandModel")
+
+	# Check if the game actually has a weapon model visible
+	var game_has_weapon := false
 	if game_camera and is_instance_valid(game_camera):
 		var mgr = game_camera.get_node_or_null("Manager")
 		if mgr and mgr.get_child_count() > 0:
-			has_weapon = true
+			game_has_weapon = true
 
-	# Right hand: hide when holding weapon (weapon model replaces it)
-	var right_hand = right_controller.get_node_or_null("RightHandModel")
-	if right_hand:
-		right_hand.visible = not has_weapon
+	# Weapon visible (drawn, lowered, or game still showing model) = hide weapon hand
+	var weapon_visible = _holster_state != HolsterState.UNARMED or game_has_weapon
 
-	# Left hand: hide when gripping weapon front (two-hand mode)
-	var left_hand = left_controller.get_node_or_null("LeftHandModel")
-	if left_hand:
-		left_hand.visible = not (_left_grip_held and has_weapon)
+	if not weapon_visible:
+		# Truly unarmed — both hands visible
+		if left_hand: left_hand.visible = true
+		if right_hand: right_hand.visible = true
+	else:
+		# Weapon is visible — hide the weapon hand, show support hand
+		# (unless two-handing in DRAWN state)
+		var wh = _weapon_hand if _weapon_hand != "" else _config_dominant_hand
+		if left_hand:
+			if wh == "left":
+				left_hand.visible = false
+			else:
+				left_hand.visible = not (_support_grip_held and _holster_state == HolsterState.DRAWN)
+		if right_hand:
+			if wh == "right":
+				right_hand.visible = false
+			else:
+				right_hand.visible = not (_support_grip_held and _holster_state == HolsterState.DRAWN)
 
-	# Grab range: show laser when hand is empty and no menu is open
-	# Green = grabbable item in range, red = nothing grabbable
+	# Grab range laser: show when unarmed and no menu is open
 	if _laser_mesh and not _menu_open:
-		var show_grab = not has_weapon and _grabbed_object == null
+		var show_grab = _holster_state == HolsterState.UNARMED and _grabbed_object == null
 		if show_grab:
 			var pointing_at_grabbable := false
-			if _grab_ray and _grab_ray.is_colliding():
-				var c = _grab_ray.get_collider()
+			var grab_ray = _grab_ray_right if _config_dominant_hand == "right" else _grab_ray_left
+			if grab_ray and grab_ray.is_colliding():
+				var c = grab_ray.get_collider()
 				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
@@ -1017,14 +1199,15 @@ func _update_hand_visibility() -> void:
 
 
 
-func _try_grab() -> void:
+func _try_grab(hand: String) -> void:
 	if _grabbed_object:
 		return  # Already holding something
 
-	if not _grab_ray or not _grab_ray.is_colliding():
+	var grab_ray = _grab_ray_right if hand == "right" else _grab_ray_left
+	if not grab_ray or not grab_ray.is_colliding():
 		return
 
-	var collider = _grab_ray.get_collider()
+	var collider = grab_ray.get_collider()
 	if not collider:
 		return
 
@@ -1032,17 +1215,15 @@ func _try_grab() -> void:
 	if not (collider is RigidBody3D and (collider.collision_layer & 4) != 0):
 		return
 
-	var controller = right_controller if dominant_hand == "right" else left_controller
+	var controller = _get_controller(hand)
 	if not controller:
 		return
 
-	var hand_model_name = "RightHandModel" if dominant_hand == "right" else "LeftHandModel"
-	var hand_model = controller.get_node_or_null(hand_model_name)
-
 	_grabbed_object = collider
+	_grab_hand = hand
 	_throw_samples.clear()
 	# No freeze — override position each frame at process_priority=1000
-	print("[VR Mod] Grabbed: ", collider.name)
+	print("[VR Mod] Grabbed: ", collider.name, " with ", hand, " hand")
 
 
 func _drop_grabbed() -> void:
@@ -1068,6 +1249,7 @@ func _drop_grabbed() -> void:
 
 	print("[VR Mod] Dropped: ", _grabbed_object.name, " vel=", throw_vel)
 	_grabbed_object = null
+	_grab_hand = ""
 	_grab_offset = Vector3.ZERO
 	_throw_samples.clear()
 
@@ -1075,13 +1257,14 @@ func _drop_grabbed() -> void:
 func _update_grabbed() -> void:
 	if not _grabbed_object or not is_instance_valid(_grabbed_object):
 		_grabbed_object = null
+		_grab_hand = ""
 		return
 
-	var controller = right_controller if dominant_hand == "right" else left_controller
+	var controller = _get_controller(_grab_hand) if _grab_hand != "" else _get_controller(_config_dominant_hand)
 	if not controller or not controller.get_is_active():
 		return
 
-	var hand_model_name = "RightHandModel" if dominant_hand == "right" else "LeftHandModel"
+	var hand_model_name = "RightHandModel" if _grab_hand == "right" else "LeftHandModel"
 	var hand_model = controller.get_node_or_null(hand_model_name)
 	var hand_pos: Vector3
 	if hand_model:
@@ -1119,16 +1302,20 @@ func _sync_weapon_to_controller() -> void:
 	if not weapon_rig or not weapon_rig is Node3D:
 		return
 
-	var controller = right_controller if dominant_hand == "right" else left_controller
+	# Only sync when weapon is equipped (DRAWN or LOWERED)
+	if _holster_state == HolsterState.UNARMED:
+		return
+
+	var controller = _get_controller(_get_weapon_hand())
 	if not controller or not controller.get_is_active():
 		return
 
-	# Two-hand aiming: only when left grip is held
-	var off_controller = left_controller if dominant_hand == "right" else right_controller
+	# Two-hand aiming: only when support grip is held
+	var off_controller = _get_controller(_get_support_hand())
 	var use_two_hand = false
 	var aim_basis: Basis
 
-	if _left_grip_held and off_controller and off_controller.get_is_active():
+	if _support_grip_held and off_controller and off_controller.get_is_active():
 		var hand_dist = controller.global_position.distance_to(off_controller.global_position)
 		if hand_dist > 0.1:
 			use_two_hand = true
@@ -1329,6 +1516,8 @@ func _load_config() -> void:
 				smooth_turn_speed = data["comfort"].get("smooth_turn_speed", 120.0)
 			if data.has("controls"):
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
-				dominant_hand = data["controls"].get("dominant_hand", "right")
+				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
+			if data.has("holsters"):
+				_holster_zone_radius = data["holsters"].get("zone_radius", 0.20)
 			print("[VR Mod] Config loaded successfully")
 	file.close()

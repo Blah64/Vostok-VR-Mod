@@ -43,6 +43,10 @@
         "laser_pointer_visible": true
     },
 
+    "holsters": {
+        "zone_radius": 0.20
+    },
+
     "performance": {
         "perf_overlay_enabled": false,
         "async_spacewarp": true
