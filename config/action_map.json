@@ -37,7 +37,7 @@
                     "snap_angle_degrees": 45
                 },
                 "button_ax_left": {
-                    "godot_action": "jump",
+                    "godot_action": "reload",
                     "type": "bool"
                 },
                 "button_by_left": {
@@ -45,7 +45,7 @@
                     "type": "bool"
                 },
                 "button_ax_right": {
-                    "godot_action": "reload",
+                    "godot_action": "jump",
                     "type": "bool"
                 },
                 "button_by_right": {
