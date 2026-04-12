@@ -76,6 +76,16 @@ var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
 # Reticle parallax fix — patch fragment shader with VR-compatible ray-plane intersection
 var _fixed_reticle_instances := {}  # MeshInstance3D instance_id → true
 
+# Scope PIP — our own SubViewport + Camera3D for VR scope rendering
+var _scope_camera: Camera3D = null       # Our scope camera
+var _scope_viewport: SubViewport = null  # Our rendering viewport
+var _scope_attachment: Node3D = null     # The visible scope attachment node
+var _scope_lens_mesh: MeshInstance3D = null  # MeshInstance3D with the lens surface
+var _scope_overridden_surfaces: Array = []   # [{surf: int, original: Material}]
+var _scope_active := false
+var _scope_weapon_slot := 0
+var _scope_vp_created := false           # True once our VP is created (reuse across weapons)
+
 # Grip adjust mode — tune offsets live with thumbsticks
 var _adjust_mode := false
 var _adjust_saved_offset := Vector3.ZERO  # Backup to discard changes
@@ -175,6 +185,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_weapon_raise_timer = 3.0
 	_scroll_cooldown = 1.0
 	_fixed_reticle_instances.clear()  # Re-scan for reticle on new weapon
+	_cleanup_scope()  # Re-detect scope on new weapon
 
 
 func _lower_weapon() -> void:
@@ -206,6 +217,7 @@ func _raise_weapon() -> void:
 func _holster_weapon() -> void:
 	print("[VR Mod] HOLSTER weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
+	_cleanup_scope()
 	# Release aim
 	_inject_action("aim", false)
 	_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
@@ -1572,7 +1584,9 @@ func _sync_weapon_to_controller() -> void:
 	# Fix reticle parallax for VR (once per sight mesh)
 	_fix_reticle_parallax(weapon_rig)
 
-
+	# Scope PIP: detect and activate game's scope SubViewport, position camera
+	_setup_scope_pip(weapon_rig)
+	_update_scope_camera()
 
 
 func _log(msg: String) -> void:
@@ -1657,6 +1671,160 @@ func _find_node_by_class(root: Node, class_name_str: String) -> Node:
 		if found:
 			return found
 	return null
+
+
+# ── Scope PIP system — hijack game's SubViewport + Camera for VR ─────────
+
+const SCOPE_PIP_SHADER := """
+shader_type spatial;
+render_mode unshaded;
+uniform sampler2D scope_texture : source_color;
+uniform sampler2D reticle : source_color;
+uniform float intensity = 5.0;
+void fragment() {
+	vec3 bg = texture(scope_texture, vec2(1.0 - UV.x, UV.y)).rgb;
+	vec4 ret = texture(reticle, UV);
+	ALBEDO = mix(bg, ret.rgb * intensity, ret.a);
+}
+"""
+
+func _setup_scope_pip(weapon_rig: Node3D) -> void:
+	if _scope_active and _scope_weapon_slot == _weapon_slot:
+		return
+	_cleanup_scope()
+	var skel = _find_node_by_class(weapon_rig, "Skeleton3D")
+	if not skel:
+		return
+	var attachments = skel.get_node_or_null("Attachments")
+	if not attachments:
+		return
+	for child in attachments.get_children():
+		if not child is Node3D or not child.visible:
+			continue
+		var game_vp = child.get_node_or_null("Viewport")
+		if not game_vp or not (game_vp is SubViewport):
+			continue
+		# Found a visible scope attachment with a SubViewport — it's a zoom scope
+		var mesh_node = child.get_node_or_null("Mesh")
+		if not mesh_node or not (mesh_node is MeshInstance3D):
+			continue
+		var mi = mesh_node as MeshInstance3D
+		if not mi.mesh:
+			continue
+		_scope_attachment = child
+		_scope_lens_mesh = mi
+		_scope_weapon_slot = _weapon_slot
+		_scope_active = true
+		# Create our own SubViewport + Camera if not already done
+		if not _scope_vp_created:
+			_scope_viewport = SubViewport.new()
+			_scope_viewport.name = "VRScopeVP"
+			_scope_viewport.size = Vector2i(512, 512)
+			_scope_viewport.transparent_bg = false
+			_scope_viewport.disable_3d = false
+			_scope_viewport.world_3d = get_viewport().world_3d
+			add_child(_scope_viewport)
+			_scope_camera = Camera3D.new()
+			_scope_camera.name = "ScopeCamera"
+			_scope_camera.fov = 3.0
+			_scope_camera.near = 0.05
+			_scope_camera.far = 4000.0
+			_scope_viewport.add_child(_scope_camera)
+			_scope_vp_created = true
+			_log("scope: created own SubViewport + Camera, world_3d=" + str(_scope_viewport.world_3d))
+		# Read FOV from the game's scope camera
+		var game_cam: Camera3D = null
+		for vp_child in game_vp.get_children():
+			if vp_child is Camera3D:
+				game_cam = vp_child as Camera3D
+				break
+		var scope_fov := 3.0
+		if game_cam:
+			scope_fov = game_cam.fov
+		_scope_camera.fov = scope_fov
+		# Re-enable rendering (may have been disabled by cleanup)
+		_scope_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		# Disable game's scope viewport to save perf
+		(game_vp as SubViewport).render_target_update_mode = SubViewport.UPDATE_DISABLED
+		# Build PIP shader + material
+		var shader = Shader.new()
+		shader.code = SCOPE_PIP_SHADER
+		# Find the scope lens surface (has "reticle" uniform AND "scope" = true)
+		_scope_overridden_surfaces.clear()
+		var patched_count := 0
+		for s in range(mi.mesh.get_surface_count()):
+			var mat = mi.get_active_material(s)
+			if not (mat is ShaderMaterial) or not mat.shader:
+				continue
+			var has_reticle := false
+			var scope_flag = false
+			for param in mat.shader.get_shader_uniform_list():
+				if param["name"] == "reticle":
+					has_reticle = true
+				if param["name"] == "scope":
+					scope_flag = true
+			if not has_reticle:
+				continue
+			# Only patch the main scope lens (scope=true), not mini red dots (scope=false)
+			if scope_flag:
+				var scope_val = mat.get_shader_parameter("scope")
+				if not scope_val:
+					continue
+			# This is the scope lens surface — replace with PIP+reticle combo
+			_scope_overridden_surfaces.append({"surf": s, "original": mat})
+			var pip_mat = ShaderMaterial.new()
+			pip_mat.shader = shader
+			pip_mat.set_shader_parameter("scope_texture", _scope_viewport.get_texture())
+			# Copy reticle uniforms from original material
+			var reticle_tex = mat.get_shader_parameter("reticle")
+			if reticle_tex:
+				pip_mat.set_shader_parameter("reticle", reticle_tex)
+			var ret_intensity = mat.get_shader_parameter("intensity")
+			if ret_intensity != null:
+				pip_mat.set_shader_parameter("intensity", ret_intensity)
+			mi.set_surface_override_material(s, pip_mat)
+			patched_count += 1
+			_log("scope: patched lens surf " + str(s) + " scope_flag=" + str(scope_flag))
+		_log("scope: activated on " + child.name + " patched=" + str(patched_count) + " fov=" + str(scope_fov))
+		return
+
+
+func _update_scope_camera() -> void:
+	if not _scope_active or not _scope_camera or not is_instance_valid(_scope_camera):
+		_scope_active = false
+		return
+	if not _scope_attachment or not is_instance_valid(_scope_attachment):
+		_scope_active = false
+		return
+	# Position scope camera at the scope, looking along weapon barrel
+	if not game_camera or not is_instance_valid(game_camera):
+		return
+	var mgr = game_camera.get_node_or_null("Manager")
+	if not mgr or mgr.get_child_count() == 0:
+		return
+	var weapon_rig = mgr.get_child(0)
+	if not weapon_rig:
+		return
+	var scope_pos = _scope_attachment.global_position
+	# Weapon rig basis has 180° Y flip, so +Z is barrel forward
+	var barrel_forward = weapon_rig.global_basis.z
+	var barrel_up = weapon_rig.global_basis.y
+	_scope_camera.global_position = scope_pos
+	_scope_camera.look_at(scope_pos + barrel_forward * 100.0, barrel_up)
+
+
+func _cleanup_scope() -> void:
+	if _scope_lens_mesh and is_instance_valid(_scope_lens_mesh):
+		for entry in _scope_overridden_surfaces:
+			_scope_lens_mesh.set_surface_override_material(entry["surf"], entry["original"])
+	_scope_overridden_surfaces.clear()
+	_scope_lens_mesh = null
+	_scope_attachment = null
+	_scope_active = false
+	_scope_weapon_slot = 0
+	# Don't destroy viewport/camera — reuse across weapon changes
+	if _scope_viewport and is_instance_valid(_scope_viewport):
+		_scope_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 
 
 func _force_debug_dump(label: String) -> void:
@@ -2660,6 +2828,10 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 		if mi.mesh:
 			line += " mesh=" + mi.mesh.get_class()
 			line += " surfs=" + str(mi.mesh.get_surface_count())
+			var aabb = mi.mesh.get_aabb()
+			line += " aabb_size=" + str(aabb.size)
+			if mi.mesh.resource_path != "":
+				line += " res=" + mi.mesh.resource_path
 		# Log material info for each surface
 		var surf_count = mi.mesh.get_surface_count() if mi.mesh else 0
 		for s in range(surf_count):
@@ -2668,6 +2840,17 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 				var mat_line = indent + "  [surf " + str(s) + "] " + mat.get_class()
 				if mat is ShaderMaterial:
 					mat_line += " shader=" + str(mat.shader.resource_path if mat.shader else "null")
+					if mat.shader:
+						for param in mat.shader.get_shader_uniform_list():
+							var pname: String = param["name"]
+							var ptype: int = param["type"]
+							var val = mat.get_shader_parameter(pname)
+							var val_str = str(val)
+							if val is Texture2D and val.resource_path != "":
+								val_str = val.resource_path
+							elif val is ViewportTexture:
+								val_str = "ViewportTexture:" + str(val.viewport_path)
+							mat_line += "\n" + indent + "    uniform " + pname + " type=" + str(ptype) + " val=" + val_str
 				if mat is BaseMaterial3D:
 					var bm = mat as BaseMaterial3D
 					mat_line += " transp=" + str(bm.transparency)
@@ -2679,11 +2862,21 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 					if bm.emission_enabled:
 						mat_line += " emission_col=" + str(bm.emission)
 						mat_line += " emission_energy=" + str(bm.emission_energy_multiplier)
+					if bm.albedo_texture:
+						mat_line += " albedo_tex=" + str(bm.albedo_texture.resource_path)
+						if bm.albedo_texture is ViewportTexture:
+							mat_line += " (ViewportTexture:" + str(bm.albedo_texture.viewport_path) + ")"
 				line += "\n" + mat_line
 			else:
 				line += "\n" + indent + "  [surf " + str(s) + "] null material"
 	if node is Skeleton3D:
 		line += " bones=" + str((node as Skeleton3D).get_bone_count())
+	if node is SubViewport:
+		var sv = node as SubViewport
+		line += " vp_size=" + str(sv.size) + " update=" + str(sv.render_target_update_mode)
+	if node is Camera3D:
+		var cam = node as Camera3D
+		line += " fov=" + str(cam.fov) + " near=" + str(cam.near) + " far=" + str(cam.far) + " current=" + str(cam.current)
 	f.store_line(line)
 	for child in node.get_children():
 		_dump_weapon_node(f, child, depth + 1, max_depth)
