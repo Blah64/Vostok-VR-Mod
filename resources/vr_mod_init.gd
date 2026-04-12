@@ -49,6 +49,15 @@ var _holster_zone_radius := 0.20
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
 var _right_in_zone := 0  # Which zone right controller is in (0 = none)
 
+# Per-slot grip offsets in aim-local space (up, forward from controller)
+# Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
+var _slot_grip_offsets := {
+	1: Vector3(0, 0.15, -0.20),   # Primary / long gun
+	2: Vector3(0, 0.10, -0.13),   # Sidearm / pistol
+	3: Vector3(0, 0.05, -0.10),   # Knife
+	4: Vector3(0, 0.08, -0.10),   # Grenade
+}
+
 
 func _get_weapon_hand() -> String:
 	if _holster_state != HolsterState.UNARMED and _weapon_hand != "":
@@ -1306,7 +1315,8 @@ func _hide_arms_in_subtree(node: Node) -> void:
 			_invis_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			_invis_mat.albedo_color = Color(0, 0, 0, 0)
 		var mesh := node as MeshInstance3D
-		for i in mesh.mesh.get_surface_count():
+		# Hide only surfaces 0 and 1 (left/right arm). Surface 2+ are hands — leave visible.
+		for i in min(2, mesh.mesh.get_surface_count()):
 			mesh.set_surface_override_material(i, _invis_mat)
 		return  # Arms found, no need to go deeper
 	for child in node.get_children():
@@ -1356,8 +1366,8 @@ func _sync_weapon_to_controller() -> void:
 		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180))
 
 	weapon_rig.global_basis = aim_basis
-	var grip_offset = aim_basis * Vector3(0, 0.15, -0.20)
-	weapon_rig.global_position = controller.global_position + grip_offset
+	var local_offset: Vector3 = _slot_grip_offsets.get(_weapon_slot, Vector3(0, 0.15, -0.20))
+	weapon_rig.global_position = controller.global_position + aim_basis * local_offset
 
 	# Hide all arm surfaces on every weapon type (guns, knives, grenades)
 	_hide_arms_in_subtree(weapon_rig)
@@ -1520,5 +1530,12 @@ func _load_config() -> void:
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.20)
+			if data.has("weapon_offsets"):
+				var wo = data["weapon_offsets"]
+				for slot in [1, 2, 3, 4]:
+					var key = str(slot)
+					if wo.has(key):
+						var o = wo[key]
+						_slot_grip_offsets[slot] = Vector3(o.get("x", 0), o.get("y", 0.15), o.get("z", -0.20))
 			print("[VR Mod] Config loaded successfully")
 	file.close()

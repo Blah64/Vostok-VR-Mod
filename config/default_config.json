@@ -47,6 +47,13 @@
         "zone_radius": 0.25
     },
 
+    "weapon_offsets": {
+        "1": { "x": 0.0, "y":  0.15, "z": -0.20 },
+        "2": { "x": 0.0, "y":  0.10, "z": -0.13 },
+        "3": { "x": 0.0, "y":  0.05, "z": -0.10 },
+        "4": { "x": 0.0, "y":  0.08, "z": -0.10 }
+    },
+
     "performance": {
         "perf_overlay_enabled": false,
         "async_spacewarp": true
