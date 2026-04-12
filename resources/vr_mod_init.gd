@@ -37,7 +37,8 @@ var hud_mesh: MeshInstance3D
 var _hud_installed := false
 var _interface_open := false
 var _prev_interface_open := false  # For detecting transitions
-var _laser_mesh: MeshInstance3D   # Visual laser pointer line
+var _laser_mesh: MeshInstance3D   # Visual laser pointer line (dual-purpose: grab range + UI pointer)
+var _menu_open := false           # True while inventory/menu is visible
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 
 # HUD sizing
@@ -421,8 +422,16 @@ func _on_interface_opened() -> void:
 	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
 	(hud_mesh.mesh as QuadMesh).size = Vector2(MENU_WIDTH, MENU_WIDTH * aspect)
 
-	# Show laser pointer
+	# Show laser pointer (restore to UI blue/full-length mode)
+	_menu_open = true
 	if _laser_mesh:
+		var mat := _laser_mesh.material_override as StandardMaterial3D
+		if mat:
+			mat.albedo_color = Color(0.2, 0.5, 1.0, 0.5)
+		var cyl := _laser_mesh.mesh as CylinderMesh
+		if cyl:
+			cyl.height = 5.0
+			_laser_mesh.position.z = -cyl.height / 2.0
 		_laser_mesh.visible = true
 
 	print("[VR Mod] Menu placed at ", menu_pos)
@@ -443,7 +452,8 @@ func _on_interface_closed() -> void:
 	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
 	(hud_mesh.mesh as QuadMesh).size = Vector2(HUD_WIDTH, HUD_WIDTH * aspect)
 
-	# Hide laser pointer
+	# Hide laser pointer and return to grab-range mode
+	_menu_open = false
 	if _laser_mesh:
 		_laser_mesh.visible = false
 
@@ -987,6 +997,19 @@ func _update_hand_visibility() -> void:
 	if left_hand:
 		left_hand.visible = not (_left_grip_held and has_weapon)
 
+	# Grab range: show laser in red at 1m when hand is empty and no menu is open
+	if _laser_mesh and not _menu_open:
+		var show_grab = not has_weapon and _grabbed_object == null
+		if show_grab:
+			var mat := _laser_mesh.material_override as StandardMaterial3D
+			if mat:
+				mat.albedo_color = Color(1.0, 0.2, 0.1, 0.6)
+			var cyl := _laser_mesh.mesh as CylinderMesh
+			if cyl:
+				cyl.height = 1.0
+				_laser_mesh.position.z = -0.5
+		_laser_mesh.visible = show_grab
+
 
 
 func _try_grab() -> void:
@@ -1021,18 +1044,20 @@ func _drop_grabbed() -> void:
 	if not _grabbed_object:
 		return
 
-	# Compute throw velocity from recent hand samples
+	# Compute throw velocity from the last 3 samples only (captures peak, not deceleration)
 	var throw_vel := Vector3.ZERO
 	if _throw_samples.size() >= 2:
-		var oldest = _throw_samples[0]
+		var start_idx = max(0, _throw_samples.size() - 3)
+		var oldest = _throw_samples[start_idx]
 		var newest = _throw_samples[-1]
 		var dt: float = newest[1] - oldest[1]
 		if dt > 0.001:
-			throw_vel = (newest[0] - oldest[0]) / dt
+			throw_vel = (newest[0] - oldest[0]) / dt * 1.5
 
 	if _grabbed_object is RigidBody3D:
 		var rb := _grabbed_object as RigidBody3D
 		rb.sleeping = false
+		rb.linear_damp = 0.0
 		rb.linear_velocity = throw_vel
 		rb.angular_velocity = Vector3.ZERO
 
