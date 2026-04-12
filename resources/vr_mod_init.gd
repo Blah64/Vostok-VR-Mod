@@ -231,11 +231,22 @@ var _laser_mesh: MeshInstance3D   # Visual laser pointer line (dual-purpose: gra
 var _menu_open := false           # True while inventory/menu is visible
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 
-# HUD sizing
-const HUD_WIDTH := 2.0            # Width in meters when head-locked (gameplay HUD)
-const HUD_DISTANCE := 1.5         # Distance from head when head-locked
-const MENU_WIDTH := 3.0           # Width when world-fixed (inventory/menu)
-const MENU_DISTANCE := 1.3        # Distance placed in front of player
+# HUD sizing (vars so config screen can change them at runtime)
+var _hud_width := 2.0
+var _hud_distance := 1.5
+var _hud_height_offset := -0.1
+var _menu_width := 3.0
+var _menu_distance := 1.3
+var _hud_lr_offset := 0.0
+var _menu_lr_offset := 0.0
+var _hud_smooth_follow := false
+var _hud_smooth_speed := 3.0
+
+# Config screen
+var _config_screen_open := false
+var _config_panel_vp: SubViewport = null
+var _config_panel_quad: MeshInstance3D = null
+var _config_laser_pos := Vector2.ZERO
 
 # Config
 var world_scale := 1.0
@@ -385,7 +396,11 @@ func _process(delta: float) -> void:
 				_update_hand_visibility()
 				_update_grabbed()
 
-				if _interface_open:
+				_update_smooth_hud(delta)
+
+				if _config_screen_open:
+					_update_config_laser()
+				elif _interface_open:
 					_update_laser_pointer()
 
 
@@ -552,7 +567,7 @@ func _setup_vr_hud() -> void:
 
 	var quad = QuadMesh.new()
 	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
-	quad.size = Vector2(HUD_WIDTH, HUD_WIDTH * aspect)
+	quad.size = Vector2(_hud_width, _hud_width * aspect)
 	hud_mesh.mesh = quad
 
 	var mat = StandardMaterial3D.new()
@@ -565,11 +580,11 @@ func _setup_vr_hud() -> void:
 	hud_mesh.material_override = mat
 
 	# Start head-locked
-	hud_mesh.position = Vector3(0, -0.1, -HUD_DISTANCE)
+	hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
 	xr_camera.add_child(hud_mesh)
 
 	_hud_installed = true
-	print("[VR Mod] VR HUD installed (head-locked, ", HUD_WIDTH, "m wide)")
+	print("[VR Mod] VR HUD installed (head-locked, ", _hud_width, "m wide)")
 	print("[VR Mod] === VR fully active ===")
 
 
@@ -610,8 +625,10 @@ func _on_interface_opened() -> void:
 	cam_forward.y = 0  # Keep it level
 	cam_forward = cam_forward.normalized()
 
-	var menu_pos = cam_pos + cam_forward * MENU_DISTANCE
-	menu_pos.y = cam_pos.y - 0.1  # Slightly below eye level
+	var menu_pos = cam_pos + cam_forward * _menu_distance
+	var cam_right = xr_camera.global_basis.x
+	menu_pos += cam_right * _menu_lr_offset
+	menu_pos.y = cam_pos.y + _hud_height_offset
 
 	# Add to scene root so it's world-fixed
 	get_tree().root.add_child(hud_mesh)
@@ -623,7 +640,7 @@ func _on_interface_opened() -> void:
 
 	# Scale up for menu
 	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
-	(hud_mesh.mesh as QuadMesh).size = Vector2(MENU_WIDTH, MENU_WIDTH * aspect)
+	(hud_mesh.mesh as QuadMesh).size = Vector2(_menu_width, _menu_width * aspect)
 
 	# Show laser pointer (restore to UI blue/full-length mode)
 	_menu_open = true
@@ -645,19 +662,28 @@ func _on_interface_closed() -> void:
 	if not hud_mesh:
 		return
 
-	# Reparent back to camera
-	hud_mesh.get_parent().remove_child(hud_mesh)
-	xr_camera.add_child(hud_mesh)
-	hud_mesh.position = Vector3(0, -0.1, -HUD_DISTANCE)
-	hud_mesh.rotation = Vector3.ZERO
+	if _hud_smooth_follow:
+		# Smooth follow: leave in world space, _update_smooth_hud will lerp it
+		if hud_mesh.get_parent() == xr_camera:
+			var gx = hud_mesh.global_transform
+			hud_mesh.get_parent().remove_child(hud_mesh)
+			get_tree().root.add_child(hud_mesh)
+			hud_mesh.global_transform = gx
+	else:
+		# Instant: reparent back to camera
+		if hud_mesh.get_parent():
+			hud_mesh.get_parent().remove_child(hud_mesh)
+		xr_camera.add_child(hud_mesh)
+		hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
+		hud_mesh.rotation = Vector3.ZERO
 
 	# Scale back down for HUD
 	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
-	(hud_mesh.mesh as QuadMesh).size = Vector2(HUD_WIDTH, HUD_WIDTH * aspect)
+	(hud_mesh.mesh as QuadMesh).size = Vector2(_hud_width, _hud_width * aspect)
 
 	# Hide laser pointer and return to grab-range mode
 	_menu_open = false
-	if _laser_mesh:
+	if _laser_mesh and not _config_screen_open:
 		_laser_mesh.visible = false
 
 
@@ -886,7 +912,9 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 
 	match button_name:
 		"trigger_click":
-			if _interface_open:
+			if _config_screen_open:
+				_inject_config_click(true)
+			elif _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				_inject_action("left_mouse", true)
 			else:
@@ -986,7 +1014,9 @@ func _on_button_released(button_name: String, hand: String) -> void:
 
 	match button_name:
 		"trigger_click":
-			if _interface_open:
+			if _config_screen_open:
+				_inject_config_click(false)
+			elif _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
 				_inject_action("left_mouse", false)
 			else:
@@ -1662,6 +1692,19 @@ func _load_config() -> void:
 						var o = wo[key]
 						_slot_grip_offsets[slot] = Vector3(o.get("x", 0), o.get("y", 0.15), o.get("z", -0.20))
 						_slot_grip_rotations[slot] = o.get("rot", 0.0)
+			if data.has("hud"):
+				var h = data["hud"]
+				_hud_width = h.get("width", 2.0)
+				_hud_distance = h.get("distance", 1.5)
+				_hud_height_offset = h.get("height_offset", -0.1)
+				_hud_lr_offset = h.get("lr_offset", 0.0)
+				_hud_smooth_follow = h.get("smooth_follow", false)
+				_hud_smooth_speed = h.get("smooth_speed", 3.0)
+			if data.has("menu"):
+				var m = data["menu"]
+				_menu_width = m.get("width", 3.0)
+				_menu_distance = m.get("distance", 1.3)
+				_menu_lr_offset = m.get("lr_offset", 0.0)
 			print("[VR Mod] Config loaded successfully")
 	file.close()
 
@@ -1705,3 +1748,33 @@ func _save_grip_config() -> void:
 		for slot in [1, 2, 3, 4]:
 			var o = _slot_grip_offsets[slot]
 			print("[VR Mod]   Slot ", slot, ": x=", snapped(o.x, 0.001), " y=", snapped(o.y, 0.001), " z=", snapped(o.z, 0.001), " rot=", snapped(_slot_grip_rotations[slot], 0.1), "°")
+
+
+# ── Smooth HUD follow ──────────────────────────────────────────────────────────
+
+func _update_smooth_hud(delta: float) -> void:
+	if not _hud_smooth_follow:
+		return
+	if not hud_mesh:
+		return
+	if _interface_open:
+		return
+	if hud_mesh.get_parent() == xr_camera:
+		return
+	var target_pos = xr_camera.global_position + xr_camera.global_basis * Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
+	hud_mesh.global_position = hud_mesh.global_position.lerp(target_pos, clampf(_hud_smooth_speed * delta, 0.0, 1.0))
+	var look_from = hud_mesh.global_position
+	var look_target = xr_camera.global_position
+	if look_from.distance_to(look_target) > 0.01:
+		hud_mesh.look_at(look_target, Vector3.UP)
+		hud_mesh.rotate_y(deg_to_rad(180))
+
+
+# ── Config screen stubs (replaced with full UI in next step) ────────────────
+
+func _update_config_laser() -> void:
+	pass
+
+
+func _inject_config_click(pressed: bool) -> void:
+	pass
