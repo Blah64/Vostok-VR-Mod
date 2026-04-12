@@ -242,6 +242,8 @@ var _menu_lr_offset := 0.0
 var _hud_smooth_follow := false
 var _hud_smooth_speed := 3.0
 var _hud_spread := 1.0      # HUD element spread (1.0 = default, <1 = closer together)
+var _menu_laser_uv_x := 0.02  # Horizontal laser offset for menu/inventory (UV units)
+var _menu_laser_uv_y := 0.06  # Vertical laser offset for menu/inventory (UV units)
 
 # Config screen
 var _config_screen_open := false
@@ -712,9 +714,9 @@ func _update_laser_pointer() -> void:
 		# QuadMesh goes from -size/2 to +size/2
 		var uv_x = (local_pos.x + quad_size.x / 2.0) / quad_size.x
 		var uv_y = (-local_pos.y + quad_size.y / 2.0) / quad_size.y
-		# Offset to compensate for controller alignment
-		uv_y += 0.06  # Shift cursor down ~6% of screen height
-		uv_x += 0.02  # Shift cursor right ~2% to fix horizontal offset
+		# Offset to compensate for controller alignment (tunable in config screen)
+		uv_y += _menu_laser_uv_y
+		uv_x += _menu_laser_uv_x
 
 		if uv_x >= 0 and uv_x <= 1 and uv_y >= 0 and uv_y <= 1:
 			# Map UV to screen coordinates
@@ -1714,6 +1716,8 @@ func _load_config() -> void:
 				_menu_width = m.get("width", 3.0)
 				_menu_distance = m.get("distance", 1.3)
 				_menu_lr_offset = m.get("lr_offset", 0.0)
+				_menu_laser_uv_x = m.get("laser_uv_x", 0.02)
+				_menu_laser_uv_y = m.get("laser_uv_y", 0.06)
 			print("[VR Mod] Config loaded successfully")
 	file.close()
 
@@ -1939,6 +1943,8 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_menu, "Distance", _menu_distance, 0.5, 3.0, 0.1, "_on_cfg_menu_dist")
 	_add_stepper_row(grid_menu, "Size", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
 	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
+	_add_stepper_row(grid_menu, "Laser X", _menu_laser_uv_x, -0.2, 0.2, 0.01, "_on_cfg_laser_x")
+	_add_stepper_row(grid_menu, "Laser Y", _menu_laser_uv_y, -0.2, 0.2, 0.01, "_on_cfg_laser_y")
 
 	_mk_sep(vbox)
 
@@ -2202,6 +2208,14 @@ func _on_cfg_menu_lr(val: float) -> void:
 	_menu_lr_offset = val
 
 
+func _on_cfg_laser_x(val: float) -> void:
+	_menu_laser_uv_x = val
+
+
+func _on_cfg_laser_y(val: float) -> void:
+	_menu_laser_uv_y = val
+
+
 func _on_cfg_hand(idx: int) -> void:
 	if idx == 0:
 		_config_dominant_hand = "right"
@@ -2368,7 +2382,9 @@ func _save_full_config() -> void:
 	data["menu"] = {
 		"width": _menu_width,
 		"distance": _menu_distance,
-		"lr_offset": _menu_lr_offset
+		"lr_offset": _menu_lr_offset,
+		"laser_uv_x": _menu_laser_uv_x,
+		"laser_uv_y": _menu_laser_uv_y
 	}
 
 	# Preserve existing holsters and weapon_offsets
