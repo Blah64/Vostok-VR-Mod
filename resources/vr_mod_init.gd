@@ -1681,25 +1681,55 @@ render_mode unshaded;
 uniform sampler2D scope_texture : source_color;
 uniform sampler2D reticle : source_color;
 uniform float intensity = 5.0;
-uniform float depth = 0.35;
-uniform float eye_distance = 0.3;
+uniform float scope_depth = 1.0;
+uniform float scope_inner_radius : hint_range(0.0, 1.0) = 0.7;
+uniform float scope_fade_size = 0.03;
+uniform float scope_parallax_factor : hint_range(0.0, 0.3) = 0.1;
+uniform float eyebox_position = 0.40;
+uniform float eyebox_tolerance = 0.08;
+uniform float eyebox_fade_distance = 0.15;
+uniform float shadow_inner_radius : hint_range(0.0, 1.0) = 1.0;
+uniform float shadow_fade_factor = 0.2;
+uniform float shadow_movement_factor : hint_range(0.5, 1.0) = 1.0;
+
+varying vec3 view;
+
+void vertex() {
+	view = (MODELVIEW_MATRIX * vec4(VERTEX, 1.0)).xyz - (MODELVIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+}
+
 void fragment() {
+	float eye_dist = length(NODE_POSITION_WORLD - CAMERA_POSITION_WORLD);
 	vec3 view_dir = normalize(normalize(-VERTEX + EYE_OFFSET) * mat3(TANGENT, -BINORMAL, NORMAL));
-	// Parallax shift
-	vec2 pip_uv = vec2(1.0 - UV.x, UV.y) - view_dir.xy * (depth * 10.0);
-	pip_uv = (pip_uv - vec2(0.5)) * 0.5 + vec2(0.5);
-	// Eye relief — visible radius shrinks as eye moves away
-	// At 0.3m (typical hold): vis~0.9. At 0.15m: full. At 1m+: ~0.5
-	float vis = clamp(0.3 / max(eye_distance, 0.1), 0.4, 1.0);
-	vec2 center = UV - vec2(0.5);
-	float dist = length(center) * 2.0;
-	// Soft scope shadow at edges only
-	float vignette = 1.0 - smoothstep(vis * 0.92, vis, dist);
-	float shadow = 1.0 - 0.15 * smoothstep(vis * 0.6, vis, dist);
-	vec3 bg = texture(scope_texture, pip_uv).rgb * shadow * vignette;
-	// Reticle overlay
+
+	// Depth UV — pushes the scope view deeper into the tube
+	vec2 depth_uv = vec2(1.0 - UV.x, UV.y) - view_dir.xy * (scope_depth * 2.0);
+	depth_uv = (depth_uv - vec2(0.5)) * 0.5 + vec2(0.5);
+
+	vec3 col = texture(scope_texture, depth_uv).rgb;
+
+	// Scope shadow — shifts with eye misalignment
+	float delta = eye_dist - eyebox_position;
+	vec2 eye_offset = view_dir.xy / -shadow_movement_factor;
+	vec2 shifted_uv = UV - eye_offset;
+	float shadow_dist = length((shifted_uv - vec2(0.5)) * 2.0);
+	float fade_near = smoothstep(-eyebox_tolerance, -eyebox_tolerance - eyebox_fade_distance, delta);
+	float fade_far = smoothstep(eyebox_tolerance, eyebox_tolerance + eyebox_fade_distance, delta);
+	float distance_fade = max(fade_near, fade_far);
+	float dynamic_radius = mix(0.0, shadow_inner_radius, 1.0 - distance_fade);
+	float shadow_inner = dynamic_radius - shadow_fade_factor;
+	float shadow = smoothstep(shadow_inner, dynamic_radius, shadow_dist);
+	col = mix(col, vec3(0.0), shadow);
+
+	// Scope edge fade — darkens at the very edge of the view circle
+	float edge_dist = length(depth_uv - vec2(0.5));
+	float fade_end = scope_inner_radius / 2.0;
+	float fade_start = fade_end - scope_fade_size;
+	col = mix(col, vec3(0.0), smoothstep(fade_start, fade_end, edge_dist));
+
+	// Reticle overlay — fixed on the glass, no parallax/depth shift
 	vec4 ret = texture(reticle, UV);
-	ALBEDO = mix(bg, ret.rgb * intensity, ret.a * vignette);
+	ALBEDO = mix(col, ret.rgb * intensity, ret.a);
 }
 """
 
@@ -1826,13 +1856,6 @@ func _update_scope_camera() -> void:
 	var barrel_up = weapon_rig.global_basis.y
 	_scope_camera.global_position = scope_pos
 	_scope_camera.look_at(scope_pos + barrel_forward * 100.0, barrel_up)
-	# Update eye distance for vignette effect
-	if xr_camera and is_instance_valid(xr_camera) and _scope_lens_mesh and is_instance_valid(_scope_lens_mesh):
-		var eye_dist = xr_camera.global_position.distance_to(scope_pos)
-		for entry in _scope_overridden_surfaces:
-			var mat = _scope_lens_mesh.get_surface_override_material(entry["surf"])
-			if mat is ShaderMaterial:
-				mat.set_shader_parameter("eye_distance", eye_dist)
 
 
 func _cleanup_scope() -> void:
