@@ -27,7 +27,7 @@ var _left_grip_held := false  # Left grip held = two-hand weapon grip
 var _grabbed_object: Node3D = null  # Currently grabbed loose item
 var _grab_offset := Vector3.ZERO  # Offset from controller to grabbed object
 var _grab_ray: RayCast3D  # Raycast on right controller for item detection
-var _grabbed_original_freeze := false  # Original freeze state of grabbed RigidBody
+var _throw_samples: Array = []  # Recent [position, time] pairs for throw velocity
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
 
@@ -1012,16 +1012,8 @@ func _try_grab() -> void:
 	var hand_model = controller.get_node_or_null(hand_model_name)
 
 	_grabbed_object = collider
-	_grabbed_original_freeze = collider.freeze
-	# Kinematic freeze lets us set global_transform each frame without confusing physics
-	collider.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
-	collider.freeze = true
-
-	# Snap item to hand model position immediately
-	if hand_model:
-		collider.global_position = hand_model.global_position
-		collider.global_basis = hand_model.global_basis
-
+	_throw_samples.clear()
+	# No freeze — override position each frame at process_priority=1000
 	print("[VR Mod] Grabbed: ", collider.name)
 
 
@@ -1029,17 +1021,25 @@ func _drop_grabbed() -> void:
 	if not _grabbed_object:
 		return
 
-	print("[VR Mod] DROPPED: ", _grabbed_object.name)
+	# Compute throw velocity from recent hand samples
+	var throw_vel := Vector3.ZERO
+	if _throw_samples.size() >= 2:
+		var oldest = _throw_samples[0]
+		var newest = _throw_samples[-1]
+		var dt: float = newest[1] - oldest[1]
+		if dt > 0.001:
+			throw_vel = (newest[0] - oldest[0]) / dt
 
-	# Restore physics - switch back to static mode then unfreeze so gravity takes over
 	if _grabbed_object is RigidBody3D:
-		_grabbed_object.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
-		_grabbed_object.freeze = _grabbed_original_freeze
-		_grabbed_object.linear_velocity = Vector3.ZERO
-		_grabbed_object.angular_velocity = Vector3.ZERO
+		var rb := _grabbed_object as RigidBody3D
+		rb.sleeping = false
+		rb.linear_velocity = throw_vel
+		rb.angular_velocity = Vector3.ZERO
 
+	print("[VR Mod] Dropped: ", _grabbed_object.name, " vel=", throw_vel)
 	_grabbed_object = null
 	_grab_offset = Vector3.ZERO
+	_throw_samples.clear()
 
 
 func _update_grabbed() -> void:
@@ -1053,11 +1053,26 @@ func _update_grabbed() -> void:
 
 	var hand_model_name = "RightHandModel" if dominant_hand == "right" else "LeftHandModel"
 	var hand_model = controller.get_node_or_null(hand_model_name)
+	var hand_pos: Vector3
 	if hand_model:
-		_grabbed_object.global_position = hand_model.global_position
+		hand_pos = hand_model.global_position
+		_grabbed_object.global_position = hand_pos
 		_grabbed_object.global_basis = hand_model.global_basis
 	else:
-		_grabbed_object.global_position = controller.global_position
+		hand_pos = controller.global_position
+		_grabbed_object.global_position = hand_pos
+
+	# Zero physics velocity each frame so gravity doesn't accumulate while held
+	if _grabbed_object is RigidBody3D:
+		var rb := _grabbed_object as RigidBody3D
+		rb.linear_velocity = Vector3.ZERO
+		rb.angular_velocity = Vector3.ZERO
+
+	# Track hand position over time for throw velocity
+	var now := Time.get_ticks_msec() / 1000.0
+	_throw_samples.append([hand_pos, now])
+	if _throw_samples.size() > 8:
+		_throw_samples.pop_front()
 
 
 func _sync_weapon_to_controller() -> void:
