@@ -1770,11 +1770,570 @@ func _update_smooth_hud(delta: float) -> void:
 		hud_mesh.rotate_y(deg_to_rad(180))
 
 
-# ── Config screen stubs (replaced with full UI in next step) ────────────────
+# ── Config Screen (F8) ──────────────────────────────────────────────────────
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F8:
+		_toggle_config_screen()
+
+
+func _toggle_config_screen() -> void:
+	if _config_screen_open:
+		_close_config_screen()
+	else:
+		_open_config_screen()
+
+
+func _open_config_screen() -> void:
+	if _config_screen_open:
+		return
+	_config_screen_open = true
+	_build_config_panel()
+	_populate_config_ui()
+	# Show laser in blue/UI mode
+	if _laser_mesh:
+		var mat := _laser_mesh.material_override as StandardMaterial3D
+		if mat:
+			mat.albedo_color = Color(0.2, 0.5, 1.0, 0.5)
+		var cyl := _laser_mesh.mesh as CylinderMesh
+		if cyl:
+			cyl.height = 5.0
+			_laser_mesh.position.z = -cyl.height / 2.0
+		_laser_mesh.visible = true
+	print("[VR Mod] Config screen opened")
+
+
+func _close_config_screen() -> void:
+	if not _config_screen_open:
+		return
+	_config_screen_open = false
+	if _config_panel_quad and is_instance_valid(_config_panel_quad):
+		_config_panel_quad.queue_free()
+		_config_panel_quad = null
+	if _config_panel_vp and is_instance_valid(_config_panel_vp):
+		_config_panel_vp.queue_free()
+		_config_panel_vp = null
+	if _laser_mesh and not _interface_open:
+		_laser_mesh.visible = false
+	print("[VR Mod] Config screen closed")
+
+
+func _build_config_panel() -> void:
+	# SubViewport for config UI
+	_config_panel_vp = SubViewport.new()
+	_config_panel_vp.name = "ConfigPanelVP"
+	_config_panel_vp.size = Vector2i(800, 900)
+	_config_panel_vp.transparent_bg = true
+	_config_panel_vp.disable_3d = true
+	_config_panel_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_config_panel_vp.gui_disable_input = false
+	add_child(_config_panel_vp)
+
+	# Place quad in world space in front of camera
+	_config_panel_quad = MeshInstance3D.new()
+	_config_panel_quad.name = "ConfigPanelQuad"
+	var quad = QuadMesh.new()
+	var aspect = 900.0 / 800.0
+	quad.size = Vector2(1.6, 1.6 * aspect)
+	_config_panel_quad.mesh = quad
+
+	var mat = StandardMaterial3D.new()
+	mat.albedo_texture = _config_panel_vp.get_texture()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.no_depth_test = true
+	mat.render_priority = 20
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_config_panel_quad.material_override = mat
+
+	var cam_pos = xr_camera.global_position
+	var cam_fwd = -xr_camera.global_basis.z
+	cam_fwd.y = 0
+	cam_fwd = cam_fwd.normalized()
+	var panel_pos = cam_pos + cam_fwd * 1.3
+	panel_pos.y = cam_pos.y
+
+	get_tree().root.add_child(_config_panel_quad)
+	_config_panel_quad.global_position = panel_pos
+	_config_panel_quad.look_at(cam_pos, Vector3.UP)
+	_config_panel_quad.rotate_y(deg_to_rad(180))
+
+
+func _populate_config_ui() -> void:
+	if not _config_panel_vp:
+		return
+
+	var root = PanelContainer.new()
+	root.name = "CfgRoot"
+	var bg = StyleBoxFlat.new()
+	bg.bg_color = Color(0.08, 0.08, 0.12, 0.92)
+	bg.corner_radius_top_left = 16
+	bg.corner_radius_top_right = 16
+	bg.corner_radius_bottom_left = 16
+	bg.corner_radius_bottom_right = 16
+	bg.content_margin_left = 20
+	bg.content_margin_right = 20
+	bg.content_margin_top = 16
+	bg.content_margin_bottom = 16
+	root.add_theme_stylebox_override("panel", bg)
+	root.anchor_right = 1.0
+	root.anchor_bottom = 1.0
+
+	var scroll = ScrollContainer.new()
+	scroll.name = "CfgScroll"
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(scroll)
+
+	var vbox = VBoxContainer.new()
+	vbox.name = "CfgVBox"
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(vbox)
+
+	# Title
+	var title = Label.new()
+	title.text = "VR Mod Settings"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", Color(0.9, 0.85, 0.6))
+	vbox.add_child(title)
+
+	_mk_sep(vbox)
+
+	# ── Turn Mode ──
+	_mk_header(vbox, "Comfort")
+	var grid_comfort = _mk_grid(vbox)
+	_add_toggle_row(grid_comfort, "Turn Mode", ["Snap", "Smooth"], 0 if use_snap_turn else 1, "_on_cfg_turn")
+	_add_stepper_row(grid_comfort, "Snap Degrees", snap_turn_degrees, 15.0, 90.0, 5.0, "_on_cfg_snap_deg")
+	_add_stepper_row(grid_comfort, "Smooth Speed", smooth_turn_speed, 30.0, 300.0, 10.0, "_on_cfg_smooth_spd")
+
+	_mk_sep(vbox)
+
+	# ── HUD ──
+	_mk_header(vbox, "HUD (Gameplay)")
+	var grid_hud = _mk_grid(vbox)
+	_add_stepper_row(grid_hud, "Distance", _hud_distance, 0.5, 3.0, 0.1, "_on_cfg_hud_dist")
+	_add_stepper_row(grid_hud, "Width", _hud_width, 0.5, 4.0, 0.1, "_on_cfg_hud_wid")
+	_add_stepper_row(grid_hud, "Height", _hud_height_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_hgt")
+	_add_stepper_row(grid_hud, "Left/Right", _hud_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_lr")
+	_add_toggle_row(grid_hud, "Follow Mode", ["Instant", "Smooth"], 1 if _hud_smooth_follow else 0, "_on_cfg_hud_follow")
+	_add_stepper_row(grid_hud, "Smooth Speed", _hud_smooth_speed, 0.5, 10.0, 0.5, "_on_cfg_hud_smooth_spd")
+
+	_mk_sep(vbox)
+
+	# ── Menu ──
+	_mk_header(vbox, "Menu / Inventory")
+	var grid_menu = _mk_grid(vbox)
+	_add_stepper_row(grid_menu, "Distance", _menu_distance, 0.5, 3.0, 0.1, "_on_cfg_menu_dist")
+	_add_stepper_row(grid_menu, "Width", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
+	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
+
+	_mk_sep(vbox)
+
+	# ── Controls ──
+	_mk_header(vbox, "Controls")
+	var grid_ctrl = _mk_grid(vbox)
+	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
+
+	_mk_sep(vbox)
+
+	# ── Save & Close ──
+	var btn_row = HBoxContainer.new()
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(btn_row)
+
+	var save_btn = _mk_btn("Save & Close", Color(0.2, 0.7, 0.3))
+	save_btn.pressed.connect(Callable(self, "_on_cfg_save_close"))
+	btn_row.add_child(save_btn)
+
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(20, 0)
+	btn_row.add_child(spacer)
+
+	var cancel_btn = _mk_btn("Cancel", Color(0.7, 0.3, 0.3))
+	cancel_btn.pressed.connect(Callable(self, "_close_config_screen"))
+	btn_row.add_child(cancel_btn)
+
+	_config_panel_vp.add_child(root)
+
+
+# ── UI builder helpers ──────────────────────────────────────────────────────
+
+func _mk_sep(parent: Control) -> void:
+	var sep = HSeparator.new()
+	sep.add_theme_constant_override("separation", 12)
+	parent.add_child(sep)
+
+
+func _mk_header(parent: Control, text: String) -> void:
+	var lbl = Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", 22)
+	lbl.add_theme_color_override("font_color", Color(0.7, 0.8, 1.0))
+	parent.add_child(lbl)
+
+
+func _mk_grid(parent: Control) -> GridContainer:
+	var g = GridContainer.new()
+	g.columns = 2
+	g.add_theme_constant_override("h_separation", 16)
+	g.add_theme_constant_override("v_separation", 8)
+	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(g)
+	return g
+
+
+func _mk_label(text: String) -> Label:
+	var lbl = Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", 18)
+	lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
+	return lbl
+
+
+func _mk_btn(text: String, color: Color) -> Button:
+	var btn = Button.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(100, 40)
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = color
+	sb.corner_radius_top_left = 8
+	sb.corner_radius_top_right = 8
+	sb.corner_radius_bottom_left = 8
+	sb.corner_radius_bottom_right = 8
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	btn.add_theme_stylebox_override("normal", sb)
+	var hover = sb.duplicate()
+	hover.bg_color = color.lightened(0.2)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_font_size_override("font_size", 18)
+	return btn
+
+
+func _mk_style(color: Color) -> StyleBoxFlat:
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = color
+	sb.corner_radius_top_left = 6
+	sb.corner_radius_top_right = 6
+	sb.corner_radius_bottom_left = 6
+	sb.corner_radius_bottom_right = 6
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 4
+	sb.content_margin_bottom = 4
+	return sb
+
+
+# ── Row builders ────────────────────────────────────────────────────────────
+
+func _add_toggle_row(grid: GridContainer, label: String, options: Array, active: int, callback_name: String) -> void:
+	grid.add_child(_mk_label(label))
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 6)
+	var buttons := []
+	for i in range(options.size()):
+		var btn = Button.new()
+		btn.text = options[i]
+		btn.custom_minimum_size = Vector2(90, 36)
+		btn.add_theme_font_size_override("font_size", 16)
+		buttons.append(btn)
+		hbox.add_child(btn)
+	_highlight_toggle(buttons, active)
+	for i in range(buttons.size()):
+		var idx = i
+		var b_arr = buttons
+		var cb = callback_name
+		buttons[i].pressed.connect(Callable(self, "_on_toggle_pressed").bind(b_arr, idx, cb))
+	grid.add_child(hbox)
+
+
+func _on_toggle_pressed(buttons: Array, idx: int, callback_name: String) -> void:
+	_highlight_toggle(buttons, idx)
+	call(callback_name, idx)
+
+
+func _highlight_toggle(buttons: Array, active: int) -> void:
+	for i in range(buttons.size()):
+		var btn = buttons[i] as Button
+		if i == active:
+			btn.add_theme_stylebox_override("normal", _mk_style(Color(0.2, 0.5, 0.8)))
+			btn.add_theme_stylebox_override("hover", _mk_style(Color(0.3, 0.6, 0.9)))
+		else:
+			btn.add_theme_stylebox_override("normal", _mk_style(Color(0.25, 0.25, 0.3)))
+			btn.add_theme_stylebox_override("hover", _mk_style(Color(0.35, 0.35, 0.4)))
+
+
+func _add_stepper_row(grid: GridContainer, label: String, value: float, min_val: float, max_val: float, step: float, callback_name: String) -> void:
+	grid.add_child(_mk_label(label))
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 8)
+
+	var dec_btn = _mk_btn("-", Color(0.35, 0.35, 0.4))
+	dec_btn.custom_minimum_size = Vector2(40, 36)
+	hbox.add_child(dec_btn)
+
+	var val_lbl = Label.new()
+	val_lbl.text = _fmt_val(value)
+	val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	val_lbl.custom_minimum_size = Vector2(70, 0)
+	val_lbl.add_theme_font_size_override("font_size", 18)
+	val_lbl.add_theme_color_override("font_color", Color(1, 1, 1))
+	hbox.add_child(val_lbl)
+
+	var inc_btn = _mk_btn("+", Color(0.35, 0.35, 0.4))
+	inc_btn.custom_minimum_size = Vector2(40, 36)
+	hbox.add_child(inc_btn)
+
+	dec_btn.pressed.connect(Callable(self, "_on_stepper_dec").bind(val_lbl, value, min_val, max_val, step, callback_name))
+	inc_btn.pressed.connect(Callable(self, "_on_stepper_inc").bind(val_lbl, value, min_val, max_val, step, callback_name))
+
+	grid.add_child(hbox)
+
+
+func _on_stepper_dec(val_lbl: Label, current: float, min_val: float, max_val: float, step: float, callback_name: String) -> void:
+	var new_val = clampf(snapped(current - step, step), min_val, max_val)
+	val_lbl.text = _fmt_val(new_val)
+	# Update the bound args for next press by reconnecting
+	_reconnect_stepper(val_lbl, new_val, min_val, max_val, step, callback_name)
+	call(callback_name, new_val)
+
+
+func _on_stepper_inc(val_lbl: Label, current: float, min_val: float, max_val: float, step: float, callback_name: String) -> void:
+	var new_val = clampf(snapped(current + step, step), min_val, max_val)
+	val_lbl.text = _fmt_val(new_val)
+	_reconnect_stepper(val_lbl, new_val, min_val, max_val, step, callback_name)
+	call(callback_name, new_val)
+
+
+func _reconnect_stepper(val_lbl: Label, new_val: float, min_val: float, max_val: float, step: float, callback_name: String) -> void:
+	var hbox = val_lbl.get_parent()
+	var dec_btn = hbox.get_child(0) as Button
+	var inc_btn = hbox.get_child(2) as Button
+	# Disconnect all existing connections
+	var dec_conns = dec_btn.pressed.get_connections()
+	for c in dec_conns:
+		dec_btn.pressed.disconnect(c["callable"])
+	var inc_conns = inc_btn.pressed.get_connections()
+	for c in inc_conns:
+		inc_btn.pressed.disconnect(c["callable"])
+	# Reconnect with updated value
+	dec_btn.pressed.connect(Callable(self, "_on_stepper_dec").bind(val_lbl, new_val, min_val, max_val, step, callback_name))
+	inc_btn.pressed.connect(Callable(self, "_on_stepper_inc").bind(val_lbl, new_val, min_val, max_val, step, callback_name))
+
+
+func _fmt_val(v: float) -> String:
+	if absf(v - roundf(v)) < 0.001:
+		return str(int(v))
+	return str(snapped(v, 0.01))
+
+
+# ── Config callbacks ────────────────────────────────────────────────────────
+
+func _on_cfg_turn(idx: int) -> void:
+	use_snap_turn = (idx == 0)
+
+
+func _on_cfg_snap_deg(val: float) -> void:
+	snap_turn_degrees = val
+
+
+func _on_cfg_smooth_spd(val: float) -> void:
+	smooth_turn_speed = val
+
+
+func _on_cfg_hud_dist(val: float) -> void:
+	_hud_distance = val
+	_apply_hud_settings()
+
+
+func _on_cfg_hud_wid(val: float) -> void:
+	_hud_width = val
+	_apply_hud_settings()
+
+
+func _on_cfg_hud_hgt(val: float) -> void:
+	_hud_height_offset = val
+	_apply_hud_settings()
+
+
+func _on_cfg_hud_lr(val: float) -> void:
+	_hud_lr_offset = val
+	_apply_hud_settings()
+
+
+func _on_cfg_hud_follow(idx: int) -> void:
+	_hud_smooth_follow = (idx == 1)
+	_apply_hud_follow_mode()
+
+
+func _on_cfg_hud_smooth_spd(val: float) -> void:
+	_hud_smooth_speed = val
+
+
+func _on_cfg_menu_dist(val: float) -> void:
+	_menu_distance = val
+
+
+func _on_cfg_menu_wid(val: float) -> void:
+	_menu_width = val
+
+
+func _on_cfg_menu_lr(val: float) -> void:
+	_menu_lr_offset = val
+
+
+func _on_cfg_hand(idx: int) -> void:
+	if idx == 0:
+		_config_dominant_hand = "right"
+	else:
+		_config_dominant_hand = "left"
+
+
+func _on_cfg_save_close() -> void:
+	_save_full_config()
+	_close_config_screen()
+
+
+# ── Apply helpers ───────────────────────────────────────────────────────────
+
+func _apply_hud_settings() -> void:
+	if not hud_mesh:
+		return
+	if _interface_open:
+		return
+	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
+	(hud_mesh.mesh as QuadMesh).size = Vector2(_hud_width, _hud_width * aspect)
+	if not _hud_smooth_follow:
+		hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
+
+
+func _apply_hud_follow_mode() -> void:
+	if not hud_mesh:
+		return
+	if _interface_open:
+		return
+	if _hud_smooth_follow:
+		# Switch to world-space
+		if hud_mesh.get_parent() == xr_camera:
+			var gx = hud_mesh.global_transform
+			xr_camera.remove_child(hud_mesh)
+			get_tree().root.add_child(hud_mesh)
+			hud_mesh.global_transform = gx
+	else:
+		# Switch to head-locked
+		if hud_mesh.get_parent() != xr_camera:
+			if hud_mesh.get_parent():
+				hud_mesh.get_parent().remove_child(hud_mesh)
+			xr_camera.add_child(hud_mesh)
+			hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
+			hud_mesh.rotation = Vector3.ZERO
+
+
+# ── Config laser & click ────────────────────────────────────────────────────
 
 func _update_config_laser() -> void:
-	pass
+	if not _config_panel_quad or not _config_panel_vp or not _laser_mesh:
+		return
+	var controller = _get_controller(_config_dominant_hand)
+	if not controller or not controller.get_is_active():
+		return
+	var ray_origin = controller.global_position
+	var ray_dir = -controller.global_basis.z
+	var hit_pos = _ray_quad_intersection(ray_origin, ray_dir, _config_panel_quad)
+	if hit_pos == Vector3.INF:
+		return
+	var local_pos = _config_panel_quad.global_transform.affine_inverse() * hit_pos
+	var quad_size = (_config_panel_quad.mesh as QuadMesh).size
+	var uv_x = (local_pos.x + quad_size.x / 2.0) / quad_size.x
+	var uv_y = (-local_pos.y + quad_size.y / 2.0) / quad_size.y
+	uv_y += 0.06
+	uv_x += 0.02
+	if uv_x >= 0 and uv_x <= 1 and uv_y >= 0 and uv_y <= 1:
+		_config_laser_pos = Vector2(uv_x * _config_panel_vp.size.x, uv_y * _config_panel_vp.size.y)
+		# Send mouse motion to config viewport
+		var motion = InputEventMouseMotion.new()
+		motion.position = _config_laser_pos
+		motion.global_position = _config_laser_pos
+		_config_panel_vp.push_input(motion)
+		# Update laser visual
+		var dist = ray_origin.distance_to(hit_pos) - 0.15
+		if dist > 0.1:
+			(_laser_mesh.mesh as CylinderMesh).height = dist
+			_laser_mesh.position.z = -dist / 2.0
+			_laser_mesh.visible = true
 
 
 func _inject_config_click(pressed: bool) -> void:
-	pass
+	if not _config_panel_vp:
+		return
+	var ev = InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = pressed
+	ev.position = _config_laser_pos
+	ev.global_position = _config_laser_pos
+	_config_panel_vp.push_input(ev)
+
+
+# ── Save full config ────────────────────────────────────────────────────────
+
+func _save_full_config() -> void:
+	var config_path = OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
+	var data := {}
+
+	# Read existing config first
+	if FileAccess.file_exists(config_path):
+		var file = FileAccess.open(config_path, FileAccess.READ)
+		if file:
+			var json = JSON.new()
+			if json.parse(file.get_as_text()) == OK:
+				if json.data is Dictionary:
+					data = json.data
+			file.close()
+
+	# XR
+	data["xr"] = {"world_scale": world_scale}
+
+	# Comfort
+	var turn_type = "snap"
+	if not use_snap_turn:
+		turn_type = "smooth"
+	data["comfort"] = {
+		"turn_type": turn_type,
+		"snap_turn_degrees": snap_turn_degrees,
+		"smooth_turn_speed": smooth_turn_speed
+	}
+
+	# Controls
+	data["controls"] = {
+		"thumbstick_deadzone": thumbstick_deadzone,
+		"dominant_hand": _config_dominant_hand
+	}
+
+	# HUD
+	data["hud"] = {
+		"width": _hud_width,
+		"distance": _hud_distance,
+		"height_offset": _hud_height_offset,
+		"lr_offset": _hud_lr_offset,
+		"smooth_follow": _hud_smooth_follow,
+		"smooth_speed": _hud_smooth_speed
+	}
+
+	# Menu
+	data["menu"] = {
+		"width": _menu_width,
+		"distance": _menu_distance,
+		"lr_offset": _menu_lr_offset
+	}
+
+	# Preserve existing holsters and weapon_offsets
+	# (already in data from the read above)
+
+	var out = FileAccess.open(config_path, FileAccess.WRITE)
+	if out:
+		out.store_string(JSON.stringify(data, "\t"))
+		out.close()
+		print("[VR Mod] Full config saved to: ", config_path)
