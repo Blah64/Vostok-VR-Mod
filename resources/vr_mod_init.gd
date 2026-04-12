@@ -57,6 +57,15 @@ var _slot_grip_offsets := {
 	3: Vector3(0, 0.05, -0.10),   # Knife
 	4: Vector3(0, 0.08, -0.10),   # Grenade
 }
+# Per-slot Y rotation offset in degrees (added to the 180° flip)
+var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
+
+# Grip adjust mode — tune offsets live with thumbsticks
+var _adjust_mode := false
+var _adjust_saved_offset := Vector3.ZERO  # Backup to discard changes
+var _adjust_saved_rotation := 0.0
+const ADJUST_SPEED := 0.15  # Meters per second for position
+const ADJUST_ROT_SPEED := 45.0  # Degrees per second for rotation
 
 
 func _get_weapon_hand() -> String:
@@ -129,6 +138,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 
 func _lower_weapon() -> void:
 	print("[VR Mod] LOWER weapon (slot ", _weapon_slot, ")")
+	_adjust_mode = false
 	_holster_state = HolsterState.LOWERED
 	_support_grip_held = false
 	# Set weapon_low to lower the weapon visually
@@ -154,6 +164,7 @@ func _raise_weapon() -> void:
 
 func _holster_weapon() -> void:
 	print("[VR Mod] HOLSTER weapon (slot ", _weapon_slot, ")")
+	_adjust_mode = false
 	# Release aim
 	_inject_action("aim", false)
 	_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
@@ -766,6 +777,34 @@ func _process_input(delta: float) -> void:
 		_inject_key(KEY_D, false)
 		return
 
+	# --- Grip adjust mode: thumbsticks control offsets ---
+	if _adjust_mode and _weapon_slot > 0:
+		var changed := false
+		var offset: Vector3 = _slot_grip_offsets[_weapon_slot]
+		var rot: float = _slot_grip_rotations[_weapon_slot]
+		if left_controller and left_controller.get_is_active():
+			var left = left_controller.get_vector2("primary")
+			if left.length() > thumbstick_deadzone:
+				offset.x += left.x * ADJUST_SPEED * delta
+				offset.y += left.y * ADJUST_SPEED * delta
+				changed = true
+		if right_controller and right_controller.get_is_active():
+			var right = right_controller.get_vector2("primary")
+			if right.length() > thumbstick_deadzone:
+				offset.z += right.y * ADJUST_SPEED * delta
+				rot += right.x * ADJUST_ROT_SPEED * delta
+				changed = true
+		if changed:
+			_slot_grip_offsets[_weapon_slot] = offset
+			_slot_grip_rotations[_weapon_slot] = rot
+			print("[VR Mod] ADJUST slot ", _weapon_slot, ": x=", snapped(offset.x, 0.001), " y=", snapped(offset.y, 0.001), " z=", snapped(offset.z, 0.001), " rot=", snapped(rot, 0.1), "°")
+		# Release movement keys and skip normal input
+		_inject_key(KEY_W, false)
+		_inject_key(KEY_S, false)
+		_inject_key(KEY_A, false)
+		_inject_key(KEY_D, false)
+		return
+
 	# --- Left thumbstick: Movement ---
 	if left_controller and left_controller.get_is_active():
 		var move_input = left_controller.get_vector2("primary")
@@ -869,12 +908,31 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if hand == "left":
 				_inject_action("jump", true)
 			else:
-				_inject_action("reload", true)
+				if _adjust_mode:
+					_save_grip_config()
+					_adjust_mode = false
+					print("[VR Mod] === ADJUST MODE OFF (saved) ===")
+				else:
+					_inject_action("reload", true)
 		"by_button":  # B on right, Y on left (physical mapping)
 			if hand == "left":
 				_inject_action("interface", true)  # Y = toggle inventory
 			else:
-				_inject_action("interact", true)   # B = interact with objects
+				if _holster_state == HolsterState.DRAWN and not _adjust_mode:
+					_adjust_mode = true
+					_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
+					_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
+					print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+					print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
+					print("[VR Mod] A=Save, B=Discard")
+				elif _adjust_mode:
+					# B again = discard changes and exit
+					_slot_grip_offsets[_weapon_slot] = _adjust_saved_offset
+					_slot_grip_rotations[_weapon_slot] = _adjust_saved_rotation
+					_adjust_mode = false
+					print("[VR Mod] === ADJUST MODE OFF (discarded) ===")
+				else:
+					_inject_action("interact", true)
 		"menu_button":
 			_inject_action("escape", true)
 		"primary_click":
@@ -1363,7 +1421,8 @@ func _sync_weapon_to_controller() -> void:
 			aim_basis = aim_basis * Basis(Vector3.UP, deg_to_rad(180))
 
 	if not use_two_hand:
-		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180))
+		var rot_offset: float = _slot_grip_rotations.get(_weapon_slot, 0.0)
+		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + rot_offset))
 
 	weapon_rig.global_basis = aim_basis
 	var local_offset: Vector3 = _slot_grip_offsets.get(_weapon_slot, Vector3(0, 0.15, -0.20))
@@ -1537,5 +1596,47 @@ func _load_config() -> void:
 					if wo.has(key):
 						var o = wo[key]
 						_slot_grip_offsets[slot] = Vector3(o.get("x", 0), o.get("y", 0.15), o.get("z", -0.20))
+						_slot_grip_rotations[slot] = o.get("rot", 0.0)
 			print("[VR Mod] Config loaded successfully")
 	file.close()
+
+
+func _save_grip_config() -> void:
+	var config_path = OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
+	if not FileAccess.file_exists(config_path):
+		print("[VR Mod] Config not found, cannot save: ", config_path)
+		return
+
+	var file = FileAccess.open(config_path, FileAccess.READ)
+	if not file:
+		return
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) != OK:
+		file.close()
+		return
+	var data = json.data
+	file.close()
+
+	if not data is Dictionary:
+		return
+
+	# Update weapon_offsets section with current values
+	var wo := {}
+	for slot in [1, 2, 3, 4]:
+		var o := _slot_grip_offsets[slot] as Vector3
+		wo[str(slot)] = {
+			"x": snapped(o.x, 0.001),
+			"y": snapped(o.y, 0.001),
+			"z": snapped(o.z, 0.001),
+			"rot": snapped(_slot_grip_rotations[slot], 0.1)
+		}
+	data["weapon_offsets"] = wo
+
+	var out = FileAccess.open(config_path, FileAccess.WRITE)
+	if out:
+		out.store_string(JSON.stringify(data, "\t"))
+		out.close()
+		print("[VR Mod] Grip config saved to: ", config_path)
+		for slot in [1, 2, 3, 4]:
+			var o = _slot_grip_offsets[slot]
+			print("[VR Mod]   Slot ", slot, ": x=", snapped(o.x, 0.001), " y=", snapped(o.y, 0.001), " z=", snapped(o.z, 0.001), " rot=", snapped(_slot_grip_rotations[slot], 0.1), "°")
