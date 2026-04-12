@@ -871,6 +871,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", true)
+			else:
+				_inject_action("crouch", true)
 
 
 func _on_button_released(button_name: String, hand: String) -> void:
@@ -928,6 +930,8 @@ func _on_button_released(button_name: String, hand: String) -> void:
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", false)
+			else:
+				_inject_action("crouch", false)
 
 
 var _key_states := {}
@@ -1157,8 +1161,9 @@ func _update_hand_visibility() -> void:
 		if mgr and mgr.get_child_count() > 0:
 			game_has_weapon = true
 
-	# Weapon visible (drawn, lowered, or game still showing model) = hide weapon hand
-	var weapon_visible = _holster_state != HolsterState.UNARMED or game_has_weapon
+	# Hide weapon hand only when the game actually has a weapon model present.
+	# This prevents hands vanishing during the draw-pending window on empty slots.
+	var weapon_visible = game_has_weapon
 
 	if not weapon_visible:
 		# Truly unarmed — both hands visible
