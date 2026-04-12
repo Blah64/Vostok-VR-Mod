@@ -11,7 +11,7 @@
 
     "comfort": {
         "movement_type": "smooth",
-        "turn_type": "snap",
+        "turn_type": "smooth",
         "snap_turn_degrees": 45,
         "smooth_turn_speed": 120.0,
         "vignette_on_move": true,
