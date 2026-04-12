@@ -85,7 +85,8 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 | Input | Action |
 |-------|--------|
 | Either hand grip (unarmed, near item) | Grab item |
-| Release grip | Drop / throw item |
+| Release grip near bag zone (behind right shoulder) | Add item to inventory |
+| Release grip elsewhere | Drop / throw item |
 
 Point the **red laser** from your dominant hand at a loose item to target it. The laser
 turns **green** when a grabbable item is in range. Release the grip with arm motion
@@ -98,84 +99,25 @@ Point and pull the trigger to click. Grip acts as right-click.
 
 ---
 
-## Configuration
+## In-Game Config Screen
 
-Edit `VR Mod\config\default_config.json` in the game root. Changes take effect on
-the next game launch (except grip offsets which can be tuned live — see below).
+Press **F8** at any time during gameplay to open the VR settings panel. It floats in
+world space in front of you. Point your dominant-hand controller at it and pull the
+trigger to interact. **Right stick up/down** scrolls the panel.
 
-### Turning
+Press **Save & Close** to write all settings to `default_config.json`. Press **Cancel**
+to discard changes for this session.
 
-```json
-"comfort": {
-    "turn_type": "smooth",
-    "snap_turn_degrees": 45,
-    "smooth_turn_speed": 120.0
-}
-```
+### Settings available in the config screen
 
-| Setting | Values | Description |
-|---------|--------|-------------|
-| `turn_type` | `"snap"` or `"smooth"` | Snap jumps by a fixed angle; smooth turns continuously |
-| `snap_turn_degrees` | Number (default `45`) | Degrees per snap step |
-| `smooth_turn_speed` | Number (default `120`) | Degrees per second for smooth turn |
-
-### Controls
-
-```json
-"controls": {
-    "dominant_hand": "right",
-    "thumbstick_deadzone": 0.15
-}
-```
-
-| Setting | Values | Description |
-|---------|--------|-------------|
-| `dominant_hand` | `"right"` or `"left"` | Default weapon hand when unarmed |
-| `thumbstick_deadzone` | `0.0`–`1.0` | Stick dead zone; increase if drift is a problem |
-
-### Holster Zones
-
-```json
-"holsters": {
-    "zone_radius": 0.25
-}
-```
-
-`zone_radius` (metres) controls how close your hand must be to a body location to
-activate a holster zone. Increase if zones are hard to hit; decrease to avoid
-accidental draws.
-
-### Weapon Grip Offsets
-
-Each weapon slot has its own grip position and rotation, tunable in config or live
-in-game (see Grip Adjust Mode below).
-
-```json
-"weapon_offsets": {
-    "1": { "x": 0.0, "y": 0.15, "z": -0.20, "rot": 0.0 },
-    "2": { "x": 0.0, "y": 0.10, "z": -0.13, "rot": 0.0 },
-    "3": { "x": 0.0, "y": 0.05, "z": -0.10, "rot": 0.0 },
-    "4": { "x": 0.0, "y": 0.08, "z": -0.10, "rot": 0.0 }
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `x` | Left / right offset from controller (metres) |
-| `y` | Up / down offset from controller (metres) |
-| `z` | Forward / back offset — negative = back toward body |
-| `rot` | Y-axis rotation in degrees |
-
-### World Scale
-
-```json
-"xr": {
-    "world_scale": 1.0
-}
-```
-
-Adjust if the world feels too large or too small. Values above `1.0` make you feel
-taller; below `1.0` makes the world feel bigger.
+| Section | Settings |
+|---------|---------|
+| **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed |
+| **HUD (Gameplay)** | Distance, size, height, left/right offset, follow mode (Instant / Smooth), smooth speed, element spread |
+| **Menu / Inventory** | Distance, size, left/right offset, laser X/Y calibration |
+| **Controls** | Dominant hand |
+| **Holster Zones** | Zone radius, per-slot X/Y/Z position for all 4 holsters |
+| **Bag Zone** | Inventory pickup zone radius and X/Y/Z position |
 
 ---
 
@@ -202,6 +144,56 @@ automatically if you lower or holster the weapon.
 
 ---
 
+## Configuration File
+
+All settings are stored in `VR Mod\config\default_config.json`. The F8 config screen
+writes this file automatically. You can also edit it manually — changes take effect on
+the next game launch.
+
+### Holster Zones
+
+```json
+"holsters": {
+    "zone_radius": 0.20,
+    "offsets": {
+        "1": { "x": 0.25, "y": -0.15, "z": 0.20 },
+        "2": { "x": 0.25, "y": -0.55, "z": 0.0  },
+        "3": { "x": -0.25, "y": -0.55, "z": 0.0 },
+        "4": { "x": 0.0,  "y": -0.15, "z": 0.10 }
+    },
+    "bag": { "x": 0.15, "y": -0.10, "z": 0.35, "radius": 0.35 }
+}
+```
+
+### Weapon Grip Offsets
+
+```json
+"weapon_offsets": {
+    "1": { "x": 0.0, "y": 0.15, "z": -0.20, "rot": 0.0 },
+    "2": { "x": 0.0, "y": 0.10, "z": -0.13, "rot": 0.0 },
+    "3": { "x": 0.0, "y": 0.05, "z": -0.10, "rot": 0.0 },
+    "4": { "x": 0.0, "y": 0.08, "z": -0.10, "rot": 0.0 }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `x` | Left / right offset from controller (metres) |
+| `y` | Up / down offset from controller (metres) |
+| `z` | Forward / back offset — negative = back toward body |
+| `rot` | Y-axis rotation in degrees |
+
+### World Scale
+
+```json
+"xr": { "world_scale": 1.0 }
+```
+
+Adjust if the world feels too large or too small. Values above `1.0` make you feel
+taller; below `1.0` makes the world feel bigger.
+
+---
+
 ## Known Issues
 
 - **Melee / unarmed** is not yet mapped to a VR gesture.
@@ -224,8 +216,8 @@ Confirm `override.cfg` and `vr_mod_init.gd` are in the game root (same folder as
 `Road to Vostok.exe`), not inside a sub-folder.
 
 **Config changes not taking effect**
-The config is read once at startup. Fully quit and relaunch the game after editing.
-Exception: grip offsets saved via Grip Adjust Mode are written immediately.
+Most settings apply immediately via the F8 config screen. If editing the JSON file
+manually, fully quit and relaunch the game.
 
 **Weapon floats at wrong position**
 Use Grip Adjust Mode (B button while weapon drawn) to tune the grip offset live.
