@@ -892,19 +892,25 @@ func _process_input(delta: float) -> void:
 			_inject_key(KEY_A, false)
 			_inject_key(KEY_D, false)
 
-	# --- Right thumbstick: Turn ---
+	# --- Right thumbstick: Turn / Config scroll ---
 	if right_controller and right_controller.get_is_active():
 		var turn_input = right_controller.get_vector2("primary")
-		if abs(turn_input.x) > thumbstick_deadzone:
-			if use_snap_turn:
-				if not _snap_turn_cooldown and abs(turn_input.x) > 0.6:
-					var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
-					xr_origin.rotate_y(deg_to_rad(angle))
-					_snap_turn_cooldown = true
-			else:
-				xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
-		else:
+		if _config_screen_open:
+			# Y axis scrolls the config panel
+			if abs(turn_input.y) > thumbstick_deadzone:
+				_scroll_config_panel(-turn_input.y * 600.0 * delta)
 			_snap_turn_cooldown = false
+		else:
+			if abs(turn_input.x) > thumbstick_deadzone:
+				if use_snap_turn:
+					if not _snap_turn_cooldown and abs(turn_input.x) > 0.6:
+						var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
+						xr_origin.rotate_y(deg_to_rad(angle))
+						_snap_turn_cooldown = true
+				else:
+					xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
+			else:
+				_snap_turn_cooldown = false
 
 
 func _on_button_pressed(button_name: String, hand: String) -> void:
@@ -2302,6 +2308,14 @@ func _inject_config_click(pressed: bool) -> void:
 	ev.position = _config_laser_pos
 	ev.global_position = _config_laser_pos
 	_config_panel_vp.push_input(ev)
+
+
+func _scroll_config_panel(amount: float) -> void:
+	if not _config_panel_vp:
+		return
+	var scroll = _config_panel_vp.get_node_or_null("CfgRoot/CfgScroll")
+	if scroll and scroll is ScrollContainer:
+		scroll.scroll_vertical += int(amount)
 
 
 # ── Save full config ────────────────────────────────────────────────────────
