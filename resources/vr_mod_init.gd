@@ -812,15 +812,12 @@ func _sync_origin_to_game() -> void:
 
 
 func _steer_game_camera_via_mouse() -> void:
-	# Steer game camera to match the weapon visual's aim direction
-	# Must account for rot_offset and two-hand aiming so bullets hit where the red dot points
+	# Steer game camera to match weapon barrel aim direction.
 	var aim_controller = _get_controller(_get_weapon_hand())
 	if not aim_controller or not aim_controller.get_is_active():
 		return
 
 	# Compute barrel direction: must match the aim_basis used in _sync_weapon_to_controller
-	# Weapon model's barrel is +Z in model space. After aim_basis = controller * Rot_Y(180+rot),
-	# barrel world direction = aim_basis.z. For rot=0 this equals -controller.basis.z (controller fwd).
 	var aim_forward: Vector3
 	var off_controller = _get_controller(_get_support_hand())
 	if _support_grip_held and off_controller and off_controller.get_is_active():
@@ -957,8 +954,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_inject_action("fire", true)
 					_inject_action("left_mouse", true)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
-				elif is_support_hand and _holster_state == HolsterState.DRAWN:
-					# Support hand trigger = reload or flashlight (only when drawn)
+				elif is_support_hand and _holster_state in [HolsterState.DRAWN, HolsterState.LOWERED]:
+					# Support hand trigger = reload or flashlight (drawn or lowered)
 					if _support_grip_held:
 						_inject_action("flashlight", true)
 						print("[VR Mod] FLASHLIGHT toggled (support trigger + grip)")
@@ -1004,7 +1001,20 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							_support_grip_held = true
 		"ax_button":  # A on right, X on left (physical mapping)
 			if hand == "left":
-				_inject_action("reload", true)
+				# X button: adjust mode when weapon drawn
+				if _adjust_mode:
+					# X again = discard changes and exit
+					_slot_grip_offsets[_weapon_slot] = _adjust_saved_offset
+					_slot_grip_rotations[_weapon_slot] = _adjust_saved_rotation
+					_adjust_mode = false
+					print("[VR Mod] === ADJUST MODE OFF (discarded) ===")
+				elif _holster_state == HolsterState.DRAWN:
+					_adjust_mode = true
+					_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
+					_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
+					print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+					print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
+					print("[VR Mod] A=Save, X=Discard")
 			else:
 				if _adjust_mode:
 					_save_grip_config()
@@ -1016,21 +1026,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if hand == "left":
 				_inject_action("interface", true)  # Y = toggle inventory
 			else:
-				if _holster_state == HolsterState.DRAWN and not _adjust_mode:
-					_adjust_mode = true
-					_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
-					_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
-					print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
-					print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
-					print("[VR Mod] A=Save, B=Discard")
-				elif _adjust_mode:
-					# B again = discard changes and exit
-					_slot_grip_offsets[_weapon_slot] = _adjust_saved_offset
-					_slot_grip_rotations[_weapon_slot] = _adjust_saved_rotation
-					_adjust_mode = false
-					print("[VR Mod] === ADJUST MODE OFF (discarded) ===")
-				else:
-					_inject_action("interact", true)
+				_inject_action("interact", true)
 		"menu_button":
 			_inject_action("escape", true)
 		"primary_click":
@@ -1087,9 +1083,7 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				if _grab_hand == hand:
 					_drop_grabbed()
 		"ax_button":
-			if hand == "left":
-				_inject_action("reload", false)
-			else:
+			if hand == "right":
 				_inject_action("jump", false)
 		"by_button":
 			if hand == "left":
@@ -1339,12 +1333,29 @@ func _update_hand_visibility() -> void:
 	if left_hand: left_hand.visible = true
 	if right_hand: right_hand.visible = true
 
-	# Grab range laser: show when unarmed and no menu is open
-	if _laser_mesh and not _menu_open:
-		var show_grab = _holster_state == HolsterState.UNARMED and _grabbed_object == null
-		if show_grab:
+	# Laser pointer: grab range when UNARMED, interact range when LOWERED (weapon hand)
+	if _laser_mesh and not _menu_open and not _config_screen_open:
+		var show_laser := false
+		var laser_hand := _config_dominant_hand
+
+		if _holster_state == HolsterState.UNARMED and _grabbed_object == null:
+			show_laser = true
+			laser_hand = _config_dominant_hand
+		elif _holster_state == HolsterState.LOWERED:
+			show_laser = true
+			laser_hand = _weapon_hand
+
+		if show_laser:
+			# Reparent laser to correct controller if needed
+			var target_ctrl = _get_controller(laser_hand)
+			if target_ctrl and _laser_mesh.get_parent() != target_ctrl:
+				_laser_mesh.get_parent().remove_child(_laser_mesh)
+				target_ctrl.add_child(_laser_mesh)
+				_laser_mesh.rotation.x = deg_to_rad(90)
+
+			# Check what the ray is pointing at (loose item on layer 4)
+			var grab_ray := _grab_ray_right if laser_hand == "right" else _grab_ray_left
 			var pointing_at_grabbable := false
-			var grab_ray = _grab_ray_right if _config_dominant_hand == "right" else _grab_ray_left
 			if grab_ray and grab_ray.is_colliding():
 				var c = grab_ray.get_collider()
 				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
@@ -1355,7 +1366,7 @@ func _update_hand_visibility() -> void:
 			if cyl:
 				cyl.height = 1.0
 				_laser_mesh.position.z = -0.5
-		_laser_mesh.visible = show_grab
+		_laser_mesh.visible = show_laser
 
 
 

@@ -36,7 +36,7 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 |-------|--------|
 | Left stick | Move (forward / strafe) |
 | Right stick left / right | Turn |
-| A (right) or X (left) | Jump |
+| A (right) | Jump |
 | Y (left) | Open / close inventory |
 | Left stick click | Sprint |
 | Right stick click | Crouch |
@@ -73,12 +73,18 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 | Support hand trigger | Reload |
 | Support hand trigger (while gripping) | Toggle flashlight |
 | Support hand grip | Two-hand grip (stabilised aim) |
-| B (right, while weapon drawn) | Enter grip adjust mode |
-| A (right) | Reload (alternative) |
-| B (right, interact) | Interact with objects |
+| B (right) | Interact with objects |
+| X (left, while weapon drawn) | Enter grip adjust mode |
 
 > **Note:** All weapon inputs follow the weapon hand dynamically. If you draw with your
 > left hand, left trigger fires and right trigger reloads.
+
+### Lowered Weapon
+
+Release the weapon hand grip (away from a holster zone) to **lower** the weapon — it stays
+in your hand but you no longer grip it. A **red/green laser** appears on the weapon hand to
+help aim interactions. Press **B** to interact with whatever you're pointing at (loot pools,
+doors, etc.). Re-grip with the weapon hand to raise the weapon again.
 
 ### Grabbing Items
 
@@ -126,7 +132,7 @@ to discard changes for this session.
 Dial in weapon grip position and rotation **while in-game** without editing files manually.
 
 1. Draw a weapon (grip near a holster zone)
-2. Press **B** → controller prints "ADJUST MODE ON" to the debug log
+2. Press **X (left)** → controller prints "ADJUST MODE ON" to the debug log
 3. Use the sticks to tune:
 
 | Input | Adjusts |
@@ -136,8 +142,8 @@ Dial in weapon grip position and rotation **while in-game** without editing file
 | Right stick X | Weapon rotation (Y axis) |
 | Right stick Y | Grip forward / back (Z) |
 
-4. Press **A** to save the current slot's values to `default_config.json` and exit
-5. Press **B** to discard changes and exit
+4. Press **A (right)** to save the current slot's values to `default_config.json` and exit
+5. Press **X (left)** again to discard changes and exit
 
 Movement and turning are disabled while adjust mode is active. The mode exits
 automatically if you lower or holster the weapon.
@@ -220,7 +226,7 @@ Most settings apply immediately via the F8 config screen. If editing the JSON fi
 manually, fully quit and relaunch the game.
 
 **Weapon floats at wrong position**
-Use Grip Adjust Mode (B button while weapon drawn) to tune the grip offset live.
+Use Grip Adjust Mode (X button while weapon drawn) to tune the grip offset live.
 If the issue persists across sessions, check `vr_mod_debug.log` in the game root.
 
 **Stuttering or low framerate**
