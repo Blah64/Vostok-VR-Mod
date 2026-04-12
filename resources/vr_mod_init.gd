@@ -32,6 +32,7 @@ var _grab_ray_right: RayCast3D  # Grab raycast on right controller
 var _throw_samples: Array = []  # Recent [position, time] pairs for throw velocity
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
+var _pending_holster_key: int = -1  # KEY_N pending delayed injection on holster; -1 = none
 
 # Holster system
 enum HolsterState { UNARMED, DRAWN, LOWERED }
@@ -125,6 +126,10 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_weapon_hand = hand
 	_weapon_slot = slot
 
+	# Cancel any pending holster KEY injection — prevents double-toggle when
+	# holster and draw happen within 0.15 s of each other.
+	_pending_holster_key = -1
+
 	# Inject the key to equip this weapon slot
 	var key: int = HOLSTER_ZONES[slot]["key"]
 	_inject_key(key, true)
@@ -132,7 +137,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 
 	# Start weapon load detection + auto-raise sequence
 	_weapon_loaded = false
-	_weapon_raise_timer = 1.5
+	_weapon_raise_timer = 3.0
 	_scroll_cooldown = 1.0
 
 
@@ -170,11 +175,18 @@ func _holster_weapon() -> void:
 	_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
 	_inject_action("weapon_high", false)
 
-	# Unequip: inject the same key to toggle off
+	# Unequip: inject the same key to toggle off, but delay by 0.15 s so that a
+	# _draw_weapon() call in the same frame (or within that window) can cancel it
+	# via _pending_holster_key, avoiding a double-toggle that leaves the weapon stuck.
 	if _weapon_slot > 0 and HOLSTER_ZONES.has(_weapon_slot):
 		var key: int = HOLSTER_ZONES[_weapon_slot]["key"]
-		_inject_key(key, true)
-		get_tree().create_timer(0.1).timeout.connect(func(): _inject_key(key, false))
+		_pending_holster_key = key
+		get_tree().create_timer(0.15).timeout.connect(func():
+			if _pending_holster_key == key:
+				_pending_holster_key = -1
+				_inject_key(key, true)
+				get_tree().create_timer(0.1).timeout.connect(func(): _inject_key(key, false))
+		)
 
 	_holster_state = HolsterState.UNARMED
 	_weapon_hand = ""
