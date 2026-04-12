@@ -241,6 +241,7 @@ var _hud_lr_offset := 0.0
 var _menu_lr_offset := 0.0
 var _hud_smooth_follow := false
 var _hud_smooth_speed := 3.0
+var _hud_spread := 1.0      # HUD element spread (1.0 = default, <1 = closer together)
 
 # Config screen
 var _config_screen_open := false
@@ -584,6 +585,7 @@ func _setup_vr_hud() -> void:
 	xr_camera.add_child(hud_mesh)
 
 	_hud_installed = true
+	_apply_hud_spread()
 	print("[VR Mod] VR HUD installed (head-locked, ", _hud_width, "m wide)")
 	print("[VR Mod] === VR fully active ===")
 
@@ -1700,6 +1702,7 @@ func _load_config() -> void:
 				_hud_lr_offset = h.get("lr_offset", 0.0)
 				_hud_smooth_follow = h.get("smooth_follow", false)
 				_hud_smooth_speed = h.get("smooth_speed", 3.0)
+				_hud_spread = h.get("spread", 1.0)
 			if data.has("menu"):
 				var m = data["menu"]
 				_menu_width = m.get("width", 3.0)
@@ -1775,6 +1778,8 @@ func _update_smooth_hud(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == KEY_F8:
 		_toggle_config_screen()
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F9:
+		_dump_hud_tree()
 
 
 func _toggle_config_screen() -> void:
@@ -1913,11 +1918,12 @@ func _populate_config_ui() -> void:
 	_mk_header(vbox, "HUD (Gameplay)")
 	var grid_hud = _mk_grid(vbox)
 	_add_stepper_row(grid_hud, "Distance", _hud_distance, 0.5, 3.0, 0.1, "_on_cfg_hud_dist")
-	_add_stepper_row(grid_hud, "Width", _hud_width, 0.5, 4.0, 0.1, "_on_cfg_hud_wid")
+	_add_stepper_row(grid_hud, "Size", _hud_width, 0.5, 4.0, 0.1, "_on_cfg_hud_wid")
 	_add_stepper_row(grid_hud, "Height", _hud_height_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_hgt")
 	_add_stepper_row(grid_hud, "Left/Right", _hud_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_lr")
 	_add_toggle_row(grid_hud, "Follow Mode", ["Instant", "Smooth"], 1 if _hud_smooth_follow else 0, "_on_cfg_hud_follow")
 	_add_stepper_row(grid_hud, "Smooth Speed", _hud_smooth_speed, 0.5, 10.0, 0.5, "_on_cfg_hud_smooth_spd")
+	_add_stepper_row(grid_hud, "Spread", _hud_spread, 0.1, 2.0, 0.1, "_on_cfg_hud_spread")
 
 	_mk_sep(vbox)
 
@@ -1925,7 +1931,7 @@ func _populate_config_ui() -> void:
 	_mk_header(vbox, "Menu / Inventory")
 	var grid_menu = _mk_grid(vbox)
 	_add_stepper_row(grid_menu, "Distance", _menu_distance, 0.5, 3.0, 0.1, "_on_cfg_menu_dist")
-	_add_stepper_row(grid_menu, "Width", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
+	_add_stepper_row(grid_menu, "Size", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
 	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
 
 	_mk_sep(vbox)
@@ -2173,6 +2179,11 @@ func _on_cfg_hud_smooth_spd(val: float) -> void:
 	_hud_smooth_speed = val
 
 
+func _on_cfg_hud_spread(val: float) -> void:
+	_hud_spread = val
+	_apply_hud_spread()
+
+
 func _on_cfg_menu_dist(val: float) -> void:
 	_menu_distance = val
 
@@ -2202,18 +2213,14 @@ func _on_cfg_save_close() -> void:
 func _apply_hud_settings() -> void:
 	if not hud_mesh:
 		return
-	if _interface_open:
-		return
 	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
 	(hud_mesh.mesh as QuadMesh).size = Vector2(_hud_width, _hud_width * aspect)
-	if not _hud_smooth_follow:
+	if hud_mesh.get_parent() == xr_camera:
 		hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
 
 
 func _apply_hud_follow_mode() -> void:
 	if not hud_mesh:
-		return
-	if _interface_open:
 		return
 	if _hud_smooth_follow:
 		# Switch to world-space
@@ -2230,6 +2237,28 @@ func _apply_hud_follow_mode() -> void:
 			xr_camera.add_child(hud_mesh)
 			hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
 			hud_mesh.rotation = Vector3.ZERO
+
+
+func _apply_hud_spread() -> void:
+	var hud_node = get_tree().root.get_node_or_null("Map/Core/UI/HUD")
+	if not hud_node:
+		return
+	# Bottom stats: Vitals (left) and Medical (right)
+	var stats = hud_node.get_node_or_null("Stats")
+	if stats:
+		var vitals = stats.get_node_or_null("Vitals")
+		if vitals and vitals is Control:
+			vitals.position.x = -960.0 * _hud_spread
+		var medical = stats.get_node_or_null("Medical")
+		if medical and medical is Control:
+			medical.position.x = 960.0 * _hud_spread
+	# Top-left info (Map/FPS) — anchored top-left, default pos=(32, 32)
+	var info = hud_node.get_node_or_null("Info")
+	if info and info is Control:
+		# Move inward from left edge: at spread=1.0 → x=32, at spread=0.5 → x=~928 (toward center)
+		var half_w = 1920.0  # half of 3840 HUD width
+		var default_x = 32.0
+		info.position.x = half_w - (half_w - default_x) * _hud_spread
 
 
 # ── Config laser & click ────────────────────────────────────────────────────
@@ -2249,8 +2278,6 @@ func _update_config_laser() -> void:
 	var quad_size = (_config_panel_quad.mesh as QuadMesh).size
 	var uv_x = (local_pos.x + quad_size.x / 2.0) / quad_size.x
 	var uv_y = (-local_pos.y + quad_size.y / 2.0) / quad_size.y
-	uv_y += 0.06
-	uv_x += 0.02
 	if uv_x >= 0 and uv_x <= 1 and uv_y >= 0 and uv_y <= 1:
 		_config_laser_pos = Vector2(uv_x * _config_panel_vp.size.x, uv_y * _config_panel_vp.size.y)
 		# Send mouse motion to config viewport
@@ -2319,7 +2346,8 @@ func _save_full_config() -> void:
 		"height_offset": _hud_height_offset,
 		"lr_offset": _hud_lr_offset,
 		"smooth_follow": _hud_smooth_follow,
-		"smooth_speed": _hud_smooth_speed
+		"smooth_speed": _hud_smooth_speed,
+		"spread": _hud_spread
 	}
 
 	# Menu
@@ -2337,3 +2365,57 @@ func _save_full_config() -> void:
 		out.store_string(JSON.stringify(data, "\t"))
 		out.close()
 		print("[VR Mod] Full config saved to: ", config_path)
+
+
+# ── HUD tree debug dump (F9) ───────────────────────────────────────────────
+
+func _dump_hud_tree() -> void:
+	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
+	if not f:
+		f = FileAccess.open(log_path, FileAccess.WRITE)
+	if not f:
+		print("[VR Mod] Cannot open debug log for HUD dump")
+		return
+	f.seek_end(0)
+	f.store_line("")
+	f.store_line("=== HUD TREE DUMP (" + str(Time.get_datetime_string_from_system()) + ") ===")
+
+	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
+	if not ui_node:
+		f.store_line("  Map/Core/UI not found!")
+		f.close()
+		return
+
+	var hud_node = ui_node.get_node_or_null("HUD")
+	if not hud_node:
+		f.store_line("  Map/Core/UI/HUD not found! Children of UI:")
+		for c in ui_node.get_children():
+			f.store_line("    " + c.name + " (" + c.get_class() + ")")
+		f.close()
+		return
+
+	_dump_node_recursive(f, hud_node, 0)
+	f.store_line("=== END HUD TREE DUMP ===")
+	f.close()
+	print("[VR Mod] HUD tree dumped to vr_mod_debug.log")
+
+
+func _dump_node_recursive(f: FileAccess, node: Node, depth: int) -> void:
+	var indent = ""
+	for i in range(depth):
+		indent += "  "
+	var line = indent + node.name + " (" + node.get_class() + ")"
+	if node is Control:
+		var ctrl = node as Control
+		line += " pos=" + str(ctrl.position)
+		line += " size=" + str(ctrl.size)
+		line += " anchors=(" + str(ctrl.anchor_left) + "," + str(ctrl.anchor_top) + "," + str(ctrl.anchor_right) + "," + str(ctrl.anchor_bottom) + ")"
+		line += " vis=" + str(ctrl.visible)
+		if ctrl.layout_direction != Control.LAYOUT_DIRECTION_INHERITED:
+			line += " layout_dir=" + str(ctrl.layout_direction)
+	elif node is CanvasItem:
+		line += " vis=" + str((node as CanvasItem).visible)
+	f.store_line(line)
+	for child in node.get_children():
+		_dump_node_recursive(f, child, depth + 1)
