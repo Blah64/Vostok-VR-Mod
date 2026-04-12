@@ -1,69 +1,84 @@
 {
-    "version": 1,
-
-    "xr": {
-        "render_scale": 1.0,
-        "refresh_rate": 90,
-        "foveation_level": 0,
-        "world_scale": 1.0,
-        "height_offset_meters": 0.0
-    },
-
-    "comfort": {
-        "movement_type": "smooth",
-        "turn_type": "smooth",
-        "snap_turn_degrees": 45,
-        "smooth_turn_speed": 120.0,
-        "vignette_on_move": true,
-        "vignette_intensity": 0.6
-    },
-
-    "controls": {
-        "dominant_hand": "right",
-        "thumbstick_deadzone": 0.15,
-        "trigger_threshold": 0.8,
-        "grip_threshold": 0.7,
-        "action_map_file": "config/action_map.json"
-    },
-
-    "weapons": {
-        "two_hand_enabled": true,
-        "two_hand_activation_distance": 0.15,
-        "grip_offset": { "x": 0.0, "y": -0.05, "z": 0.1 },
-        "recoil_haptic_intensity": 0.8,
-        "recoil_haptic_duration_ms": 50
-    },
-
-    "ui": {
-        "anchor_mode": "head_locked",
-        "distance_meters": 1.5,
-        "scale": 1.0,
-        "curvature_radius": 0.0,
-        "opacity": 0.95,
-        "laser_pointer_visible": true
-    },
-
-    "holsters": {
-        "zone_radius": 0.25
-    },
-
-    "weapon_offsets": {
-        "1": { "x": 0.0, "y":  0.15, "z": -0.20, "rot": 0.0 },
-        "2": { "x": 0.0, "y":  0.10, "z": -0.13, "rot": 0.0 },
-        "3": { "x": 0.0, "y":  0.05, "z": -0.10, "rot": 0.0 },
-        "4": { "x": 0.0, "y":  0.08, "z": -0.10, "rot": 0.0 }
-    },
-
-    "performance": {
-        "perf_overlay_enabled": false,
-        "async_spacewarp": true
-    },
-
-    "logging": {
-        "level": "info",
-        "file": "VR Mod/logs/rtv_vr.log",
-        "console": true,
-        "max_file_size_mb": 10,
-        "max_files": 3
-    }
+	"comfort": {
+		"movement_type": "smooth",
+		"smooth_turn_speed": 120.0,
+		"snap_turn_degrees": 45.0,
+		"turn_type": "smooth",
+		"vignette_intensity": 0.6,
+		"vignette_on_move": true
+	},
+	"controls": {
+		"action_map_file": "config/action_map.json",
+		"dominant_hand": "right",
+		"grip_threshold": 0.7,
+		"thumbstick_deadzone": 0.15,
+		"trigger_threshold": 0.8
+	},
+	"holsters": {
+		"zone_radius": 0.25
+	},
+	"logging": {
+		"console": true,
+		"file": "VR Mod/logs/rtv_vr.log",
+		"level": "info",
+		"max_file_size_mb": 10.0,
+		"max_files": 3.0
+	},
+	"performance": {
+		"async_spacewarp": true,
+		"perf_overlay_enabled": false
+	},
+	"ui": {
+		"anchor_mode": "head_locked",
+		"curvature_radius": 0.0,
+		"distance_meters": 1.5,
+		"laser_pointer_visible": true,
+		"opacity": 0.95,
+		"scale": 1.0
+	},
+	"version": 1.0,
+	"weapon_offsets": {
+		"1": {
+			"rot": 0.7,
+			"x": 0.046,
+			"y": 0.119,
+			"z": -0.237
+		},
+		"2": {
+			"rot": -4.3,
+			"x": 0.01,
+			"y": 0.076,
+			"z": -0.369
+		},
+		"3": {
+			"rot": -94.7,
+			"x": 0.105,
+			"y": 0.087,
+			"z": -0.327
+		},
+		"4": {
+			"rot": -29.4,
+			"x": 0.079,
+			"y": 0.061,
+			"z": -0.343
+		}
+	},
+	"weapons": {
+		"grip_offset": {
+			"x": 0.0,
+			"y": -0.05,
+			"z": 0.1
+		},
+		"recoil_haptic_duration_ms": 50.0,
+		"recoil_haptic_intensity": 0.8,
+		"two_hand_activation_distance": 0.15,
+		"two_hand_enabled": true
+	},
+	"xr": {
+		"foveation_level": 0.0,
+		"height_offset_meters": 0.0,
+		"refresh_rate": 90.0,
+		"render_scale": 1.0,
+		"world_scale": 1.0
+	}
 }
