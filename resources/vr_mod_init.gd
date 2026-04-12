@@ -1004,14 +1004,14 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							_support_grip_held = true
 		"ax_button":  # A on right, X on left (physical mapping)
 			if hand == "left":
-				_inject_action("jump", true)
+				_inject_action("reload", true)
 			else:
 				if _adjust_mode:
 					_save_grip_config()
 					_adjust_mode = false
 					print("[VR Mod] === ADJUST MODE OFF (saved) ===")
 				else:
-					_inject_action("reload", true)
+					_inject_action("jump", true)
 		"by_button":  # B on right, Y on left (physical mapping)
 			if hand == "left":
 				_inject_action("interface", true)  # Y = toggle inventory
@@ -1088,9 +1088,9 @@ func _on_button_released(button_name: String, hand: String) -> void:
 					_drop_grabbed()
 		"ax_button":
 			if hand == "left":
-				_inject_action("jump", false)
-			else:
 				_inject_action("reload", false)
+			else:
+				_inject_action("jump", false)
 		"by_button":
 			if hand == "left":
 				_inject_action("interface", false)
