@@ -1,0 +1,19 @@
+{
+    "name": "Meta Quest / Oculus Touch Controllers",
+    "interaction_profile": "/interaction_profiles/oculus/touch_controller",
+    "bindings": {
+        "trigger_right": "/user/hand/right/input/trigger/value",
+        "trigger_left": "/user/hand/left/input/trigger/value",
+        "grip_right": "/user/hand/right/input/squeeze/value",
+        "grip_left": "/user/hand/left/input/squeeze/value",
+        "thumbstick_left": "/user/hand/left/input/thumbstick",
+        "thumbstick_right": "/user/hand/right/input/thumbstick",
+        "thumbstick_left_click": "/user/hand/left/input/thumbstick/click",
+        "thumbstick_right_click": "/user/hand/right/input/thumbstick/click",
+        "button_ax_left": "/user/hand/left/input/x/click",
+        "button_by_left": "/user/hand/left/input/y/click",
+        "button_ax_right": "/user/hand/right/input/a/click",
+        "button_by_right": "/user/hand/right/input/b/click",
+        "menu_left": "/user/hand/left/input/menu/click"
+    }
+}

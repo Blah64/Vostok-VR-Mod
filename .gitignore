@@ -1,0 +1,10 @@
+build/
+bin/
+external/
+logs/
+*.dll
+*.exe
+*.lib
+*.pdb
+*.obj
+*.vcxproj.user

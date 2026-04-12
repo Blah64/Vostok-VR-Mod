@@ -1,0 +1,1289 @@
+extends Node
+
+# Road to Vostok VR Mod - Autoload Initialization Script
+# HUD Strategy: Share main viewport's World2D with a secondary SubViewport
+# (disable_3d=true). No node reparenting — all game references stay intact.
+#
+# When inventory is CLOSED: HUD quad follows head (head-locked)
+# When inventory is OPEN: quad detaches, scales up, stays in world space
+# Controller pointing + trigger click for inventory interaction.
+
+var xr_interface: XRInterface
+var xr_origin: XROrigin3D
+var xr_camera: XRCamera3D
+var left_controller: XRController3D
+var right_controller: XRController3D
+var game_camera: Camera3D
+var _phase := 0  # 0=waiting_for_camera, 1=xr_activating, 2=running
+var _frames_waited := 0
+var _xr_ready := false
+var _weapons_reparented := false
+
+# Weapon debug
+var _weapon_debug_timer := 0.0
+var _last_cam_child_snapshot := []  # Track changes to camera children
+var _scroll_cooldown := 0.0  # Prevent rapid-fire scroll
+var _left_grip_held := false  # Left grip held = two-hand weapon grip
+var _grabbed_object: Node3D = null  # Currently grabbed loose item
+var _grab_offset := Vector3.ZERO  # Offset from controller to grabbed object
+var _grab_ray: RayCast3D  # Raycast on right controller for item detection
+var _grabbed_original_freeze := false  # Original freeze state of grabbed RigidBody
+var _weapon_loaded := false  # Track if weapon appeared
+var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
+
+# HUD
+var hud_viewport: SubViewport
+var hud_mesh: MeshInstance3D
+var _hud_installed := false
+var _interface_open := false
+var _prev_interface_open := false  # For detecting transitions
+var _laser_mesh: MeshInstance3D   # Visual laser pointer line
+var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
+
+# HUD sizing
+const HUD_WIDTH := 2.0            # Width in meters when head-locked (gameplay HUD)
+const HUD_DISTANCE := 1.5         # Distance from head when head-locked
+const MENU_WIDTH := 3.0           # Width when world-fixed (inventory/menu)
+const MENU_DISTANCE := 1.3        # Distance placed in front of player
+
+# Config
+var world_scale := 1.0
+var snap_turn_degrees := 45.0
+var smooth_turn_speed := 120.0
+var use_snap_turn := true
+var thumbstick_deadzone := 0.15
+var dominant_hand := "right"
+var _snap_turn_cooldown := false
+var _last_game_cam_pos := Vector3.ZERO
+
+# Timing
+const CAMERA_POLL_INTERVAL := 30
+const XR_SETTLE_FRAMES := 10
+const HUD_SETUP_DELAY := 30
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_ENTER_TREE:
+		get_viewport().use_xr = false
+		print("[VR Mod] Viewport use_xr = FALSE (waiting for gameplay)")
+
+
+func _ready() -> void:
+	# Run AFTER game scripts so our weapon transform override sticks
+	process_priority = 1000
+	process_physics_priority = 1000
+	print("[VR Mod] === VR Mod initializing (priority=1000) ===")
+
+	xr_interface = XRServer.find_interface("OpenXR")
+	if xr_interface:
+		print("[VR Mod] Found OpenXR interface")
+		if not xr_interface.is_initialized():
+			if xr_interface.initialize():
+				print("[VR Mod] OpenXR interface initialized")
+			else:
+				printerr("[VR Mod] ERROR: Failed to initialize OpenXR interface")
+				return
+		else:
+			print("[VR Mod] OpenXR interface already initialized")
+		XRServer.primary_interface = xr_interface
+		_xr_ready = true
+		print("[VR Mod] OpenXR ready (view count: ", xr_interface.get_view_count(), ")")
+	else:
+		printerr("[VR Mod] ERROR: OpenXR interface not found!")
+		return
+
+	_load_config()
+	print("[VR Mod] Waiting for 3D camera (gameplay start)...")
+
+
+func _process(delta: float) -> void:
+	if not _xr_ready:
+		return
+
+	_frames_waited += 1
+
+	match _phase:
+		0:
+			if _frames_waited % CAMERA_POLL_INTERVAL == 0:
+				game_camera = _find_game_camera(get_tree().root)
+				if game_camera:
+					print("[VR Mod] === Game camera detected! ===")
+					print("[VR Mod] Camera: ", game_camera.get_path())
+					get_viewport().use_xr = true
+					_phase = 1
+					_frames_waited = 0
+
+		1:
+			if _frames_waited >= XR_SETTLE_FRAMES:
+				_install_xr_rig()
+				_phase = 2
+				_frames_waited = 0
+
+		2:
+			if xr_origin and is_instance_valid(xr_origin):
+				if game_camera and not is_instance_valid(game_camera):
+					game_camera = _find_game_camera(get_tree().root)
+					if game_camera:
+						_attach_rig_to_camera()
+
+				if not _hud_installed and _frames_waited >= HUD_SETUP_DELAY:
+					_setup_vr_hud()
+
+				# Retry weapon reparenting until it succeeds (nodes may load late)
+				if not _weapons_reparented and _frames_waited % 60 == 0:
+					_reparent_camera_children()
+
+				# Scroll cooldown tick
+				if _scroll_cooldown > 0:
+					_scroll_cooldown -= delta
+
+				# Post-scroll delayed debug dump
+				if _post_scroll_timer > 0:
+					_post_scroll_timer -= delta
+					if _post_scroll_timer <= 0:
+						_post_scroll_timer = -1.0
+						_force_debug_dump("AFTER_SCROLL_3SEC")
+						print("[VR Mod] Post-scroll debug dumped!")
+
+				# Check if weapon just loaded
+				if not _weapon_loaded and game_camera and is_instance_valid(game_camera):
+					var mgr = game_camera.get_node_or_null("Manager")
+					if mgr and mgr.get_child_count() > 0:
+						_weapon_loaded = true
+						var wep = mgr.get_child(0)
+						print("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
+						# Auto-raise weapon after short delay
+						_weapon_raise_timer = 0.5
+						print("[VR Mod] Will auto-raise weapon in 0.5s")
+
+				# Auto-raise weapon timer
+				if _weapon_raise_timer > 0:
+					_weapon_raise_timer -= delta
+					if _weapon_raise_timer <= 0:
+						_weapon_raise_timer = -1.0
+						print("[VR Mod] Auto-raising weapon (weapon_high)")
+						_inject_action("weapon_high", true)
+						# Release after a frame via deferred
+						get_tree().create_timer(0.1).timeout.connect(
+							func(): _inject_action("weapon_high", false)
+						)
+
+				# Continuous weapon debug: detect any changes to camera subtree
+				_weapon_debug_timer += delta
+				if _weapon_debug_timer >= 3.0:
+					_weapon_debug_timer = 0.0
+					_deep_camera_debug()
+
+				# Sync weapon rig to controller + hand visibility + grabbed objects
+				_sync_weapon_to_controller()
+				_update_hand_visibility()
+				_update_grabbed()
+
+				_update_interface_state()
+				_sync_origin_to_game()
+				_process_input(delta)
+
+				if _interface_open:
+					_update_laser_pointer()
+
+
+func _install_xr_rig() -> void:
+	print("[VR Mod] Installing XR rig...")
+
+	xr_origin = XROrigin3D.new()
+	xr_origin.name = "VRModOrigin"
+	xr_origin.world_scale = world_scale
+
+	xr_camera = XRCamera3D.new()
+	xr_camera.name = "VRModCamera"
+	xr_origin.add_child(xr_camera)
+
+	left_controller = XRController3D.new()
+	left_controller.name = "LeftHand"
+	left_controller.tracker = "left_hand"
+	xr_origin.add_child(left_controller)
+
+	right_controller = XRController3D.new()
+	right_controller.name = "RightHand"
+	right_controller.tracker = "right_hand"
+	xr_origin.add_child(right_controller)
+
+	left_controller.button_pressed.connect(_on_button_pressed.bind("left"))
+	left_controller.button_released.connect(_on_button_released.bind("left"))
+	right_controller.button_pressed.connect(_on_button_pressed.bind("right"))
+	right_controller.button_released.connect(_on_button_released.bind("right"))
+
+	# Create simple controller hand models (visible when no weapon equipped)
+	print("[VR Mod] Creating hand models...")
+	_create_hand_model(left_controller, "LeftHandModel")
+	_create_hand_model(right_controller, "RightHandModel")
+
+	# Grab raycast on dominant hand controller - short range for picking up items
+	_grab_ray = RayCast3D.new()
+	_grab_ray.name = "GrabRay"
+	_grab_ray.target_position = Vector3(0, 0, -1.0)  # 1m forward from controller
+	_grab_ray.enabled = true
+	_grab_ray.collide_with_areas = true  # Detect Area3D (interactive items)
+	_grab_ray.collide_with_bodies = true  # Also detect physics bodies
+	_grab_ray.collision_mask = 0xFFFFF  # All 20 layers
+	var dom_ctrl = right_controller if dominant_hand == "right" else left_controller
+	dom_ctrl.add_child(_grab_ray)
+	print("[VR Mod] Grab raycast added to ", dominant_hand, " controller")
+
+
+	if game_camera and is_instance_valid(game_camera):
+		var parent = game_camera.get_parent()
+		if parent:
+			parent.add_child(xr_origin)
+		else:
+			get_tree().root.add_child(xr_origin)
+
+		var approx_head_height := 1.6
+		var cam_pos = game_camera.global_position
+		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - approx_head_height, cam_pos.z)
+		xr_origin.global_rotation = Vector3.ZERO
+		_last_game_cam_pos = cam_pos
+
+		# Copy game camera's cull mask to XR camera so we can see
+		# weapon viewmodels rendered on special visual layers
+		xr_camera.cull_mask = game_camera.cull_mask
+		print("[VR Mod] XR rig placed: origin=", xr_origin.global_position)
+		print("[VR Mod] Copied cull_mask from game_camera: ", game_camera.cull_mask)
+	else:
+		get_tree().root.add_child(xr_origin)
+		xr_origin.global_position = Vector3.ZERO
+		_last_game_cam_pos = Vector3(0, 1.7, 0)
+
+	xr_camera.current = true
+	get_viewport().use_xr = true
+
+	var loader = get_tree().root.get_node_or_null("Loader")
+	if loader:
+		loader.visible = false
+		print("[VR Mod] Hid Loader CanvasLayer")
+
+	_reparent_camera_children()
+
+	# Ensure mouse is captured so fire input works
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+	# Clear debug log and dump fire-related InputMap bindings
+	var dump_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var f = FileAccess.open(dump_path, FileAccess.WRITE)
+	if f:
+		f.store_line("=== VR Mod Debug Log ===")
+		f.store_line("Session start: " + str(Time.get_ticks_msec()) + "ms")
+		f.store_line("")
+		f.store_line("=== InputMap Bindings for Fire-Related Actions ===")
+		var fire_actions = ["fire", "left_mouse", "aim", "interact", "primary", "secondary"]
+		for action_name in fire_actions:
+			if InputMap.has_action(action_name):
+				var events = InputMap.action_get_events(action_name)
+				f.store_line(action_name + " (" + str(events.size()) + " bindings):")
+				for ev in events:
+					var ev_info = "  " + ev.get_class()
+					if ev is InputEventKey:
+						ev_info += " keycode=" + str(ev.keycode) + " phys=" + str(ev.physical_keycode)
+					elif ev is InputEventMouseButton:
+						ev_info += " button=" + str(ev.button_index)
+					elif ev is InputEventJoypadButton:
+						ev_info += " joy_button=" + str(ev.button_index)
+					elif ev is InputEventJoypadMotion:
+						ev_info += " joy_axis=" + str(ev.axis)
+					f.store_line(ev_info)
+			else:
+				f.store_line(action_name + " (NOT FOUND)")
+		f.close()
+		print("[VR Mod] Debug log with InputMap bindings: ", dump_path)
+
+	# Create laser pointer mesh (hidden by default)
+	_laser_mesh = MeshInstance3D.new()
+	_laser_mesh.name = "LaserPointer"
+	var cylinder = CylinderMesh.new()
+	cylinder.top_radius = 0.002
+	cylinder.bottom_radius = 0.002
+	cylinder.height = 5.0
+	_laser_mesh.mesh = cylinder
+	var laser_mat = StandardMaterial3D.new()
+	laser_mat.albedo_color = Color(0.2, 0.5, 1.0, 0.5)
+	laser_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	laser_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	laser_mat.no_depth_test = true
+	laser_mat.render_priority = 20  # Render on top of HUD quad (priority 10)
+	_laser_mesh.material_override = laser_mat
+	_laser_mesh.visible = false
+	# Cylinder is centered at origin along Y axis. We need it along -Z.
+	# Rotate 90 degrees on X, offset half height on Z.
+	_laser_mesh.rotation.x = deg_to_rad(90)
+	_laser_mesh.position.z = -cylinder.height / 2.0
+
+	var pointer_controller = right_controller if dominant_hand == "right" else left_controller
+	pointer_controller.add_child(_laser_mesh)
+
+	print("[VR Mod] === VR rig active ===")
+
+
+func _setup_vr_hud() -> void:
+	print("[VR Mod] Setting up VR HUD (World2D sharing)...")
+
+	var main_vp = get_viewport()
+	var vp_size = main_vp.get_visible_rect().size
+
+	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
+	if ui_node:
+		print("[VR Mod] UI node: ", ui_node.get_path(), " vis=", ui_node.visible)
+
+	hud_viewport = SubViewport.new()
+	hud_viewport.name = "VRHudViewport"
+	hud_viewport.size = Vector2i(int(vp_size.x), int(vp_size.y))
+	hud_viewport.transparent_bg = true
+	hud_viewport.disable_3d = true
+	hud_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	hud_viewport.world_2d = main_vp.world_2d
+	hud_viewport.gui_disable_input = true
+	add_child(hud_viewport)
+
+	hud_mesh = MeshInstance3D.new()
+	hud_mesh.name = "VRHudPanel"
+
+	var quad = QuadMesh.new()
+	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
+	quad.size = Vector2(HUD_WIDTH, HUD_WIDTH * aspect)
+	hud_mesh.mesh = quad
+
+	var mat = StandardMaterial3D.new()
+	mat.albedo_texture = hud_viewport.get_texture()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.no_depth_test = true
+	mat.render_priority = 10
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	hud_mesh.material_override = mat
+
+	# Start head-locked
+	hud_mesh.position = Vector3(0, -0.1, -HUD_DISTANCE)
+	xr_camera.add_child(hud_mesh)
+
+	_hud_installed = true
+	print("[VR Mod] VR HUD installed (head-locked, ", HUD_WIDTH, "m wide)")
+	print("[VR Mod] === VR fully active ===")
+
+
+func _update_interface_state() -> void:
+	# Check if any UI panel that's normally hidden is now visible
+	# (inventory, settings, loot pool, etc.)
+	_interface_open = false
+	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
+	if ui_node:
+		for child in ui_node.get_children():
+			# Skip always-visible HUD elements
+			if child.name in ["HUD", "Effects", "NVG"]:
+				continue
+			if child is CanvasItem and child.visible:
+				_interface_open = true
+				break
+
+	# Detect transitions
+	if _interface_open and not _prev_interface_open:
+		_on_interface_opened()
+	elif not _interface_open and _prev_interface_open:
+		_on_interface_closed()
+	_prev_interface_open = _interface_open
+
+
+func _on_interface_opened() -> void:
+	print("[VR Mod] Interface OPENED - switching to world-fixed mode")
+	if not hud_mesh:
+		return
+
+	# Detach from camera and place in world space in front of player
+	var global_xform = hud_mesh.global_transform
+	hud_mesh.get_parent().remove_child(hud_mesh)
+
+	# Place in front of camera at current look direction
+	var cam_pos = xr_camera.global_position
+	var cam_forward = -xr_camera.global_basis.z
+	cam_forward.y = 0  # Keep it level
+	cam_forward = cam_forward.normalized()
+
+	var menu_pos = cam_pos + cam_forward * MENU_DISTANCE
+	menu_pos.y = cam_pos.y - 0.1  # Slightly below eye level
+
+	# Add to scene root so it's world-fixed
+	get_tree().root.add_child(hud_mesh)
+	hud_mesh.global_position = menu_pos
+	hud_mesh.look_at(cam_pos, Vector3.UP)
+	# look_at makes it face camera, but quad's front might be wrong direction
+	# QuadMesh faces +Z by default, look_at makes -Z face target, so flip 180
+	hud_mesh.rotate_y(deg_to_rad(180))
+
+	# Scale up for menu
+	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
+	(hud_mesh.mesh as QuadMesh).size = Vector2(MENU_WIDTH, MENU_WIDTH * aspect)
+
+	# Show laser pointer
+	if _laser_mesh:
+		_laser_mesh.visible = true
+
+	print("[VR Mod] Menu placed at ", menu_pos)
+
+
+func _on_interface_closed() -> void:
+	print("[VR Mod] Interface CLOSED - switching to head-locked mode")
+	if not hud_mesh:
+		return
+
+	# Reparent back to camera
+	hud_mesh.get_parent().remove_child(hud_mesh)
+	xr_camera.add_child(hud_mesh)
+	hud_mesh.position = Vector3(0, -0.1, -HUD_DISTANCE)
+	hud_mesh.rotation = Vector3.ZERO
+
+	# Scale back down for HUD
+	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
+	(hud_mesh.mesh as QuadMesh).size = Vector2(HUD_WIDTH, HUD_WIDTH * aspect)
+
+	# Hide laser pointer
+	if _laser_mesh:
+		_laser_mesh.visible = false
+
+
+func _update_laser_pointer() -> void:
+	if not hud_mesh or not _laser_mesh:
+		return
+
+	# Get the dominant controller
+	var controller = right_controller if dominant_hand == "right" else left_controller
+	if not controller or not controller.get_is_active():
+		return
+
+	# Raycast from controller forward direction
+	var ray_origin = controller.global_position
+	var ray_dir = -controller.global_basis.z  # Controller forward = -Z
+
+	# Intersect with the HUD quad plane
+	var hit_pos = _ray_quad_intersection(ray_origin, ray_dir, hud_mesh)
+	if hit_pos != Vector3.INF:
+		# Convert 3D hit point to 2D viewport coordinates
+		var local_pos = hud_mesh.global_transform.affine_inverse() * hit_pos
+		var quad_size = (hud_mesh.mesh as QuadMesh).size
+
+		# QuadMesh goes from -size/2 to +size/2
+		var uv_x = (local_pos.x + quad_size.x / 2.0) / quad_size.x
+		var uv_y = (-local_pos.y + quad_size.y / 2.0) / quad_size.y
+		# Offset to compensate for controller alignment
+		uv_y += 0.06  # Shift cursor down ~6% of screen height
+		uv_x += 0.02  # Shift cursor right ~2% to fix horizontal offset
+
+		if uv_x >= 0 and uv_x <= 1 and uv_y >= 0 and uv_y <= 1:
+			# Map UV to screen coordinates
+			var screen_pos = Vector2(
+				uv_x * hud_viewport.size.x,
+				uv_y * hud_viewport.size.y
+			)
+			_laser_screen_pos = screen_pos
+
+			# Actually move the OS mouse cursor to the laser position.
+			# This triggers hover effects in the game's UI system, which checks
+			# Input.get_mouse_position() / Viewport.get_mouse_position().
+			Input.warp_mouse(screen_pos)
+
+			# Also inject mouse motion event for drag support
+			var motion = InputEventMouseMotion.new()
+			motion.position = screen_pos
+			motion.global_position = screen_pos
+			motion.relative = Vector2.ZERO
+			var mask := 0
+			if _mouse_states.get(MOUSE_BUTTON_LEFT, false):
+				mask |= 1
+			if _mouse_states.get(MOUSE_BUTTON_RIGHT, false):
+				mask |= 2
+			motion.button_mask = mask
+			Input.parse_input_event(motion)
+
+			# Update laser length - stop 15cm before the quad to avoid clipping
+			var dist = ray_origin.distance_to(hit_pos) - 0.15
+			if dist > 0.1:
+				(_laser_mesh.mesh as CylinderMesh).height = dist
+				_laser_mesh.position.z = -dist / 2.0
+				_laser_mesh.visible = true
+			else:
+				_laser_mesh.visible = false  # Too close, hide entirely
+		else:
+			_laser_screen_pos = Vector2(-1, -1)
+
+
+func _ray_quad_intersection(ray_origin: Vector3, ray_dir: Vector3, quad: MeshInstance3D) -> Vector3:
+	# Get the quad's plane (normal = quad's local Z axis in world space)
+	var quad_normal = quad.global_basis.z.normalized()
+	var quad_center = quad.global_position
+
+	# Ray-plane intersection
+	var denom = quad_normal.dot(ray_dir)
+	if abs(denom) < 0.0001:
+		return Vector3.INF  # Ray parallel to plane
+
+	var t = quad_normal.dot(quad_center - ray_origin) / denom
+	if t < 0:
+		return Vector3.INF  # Hit behind ray origin
+
+	return ray_origin + ray_dir * t
+
+
+func _attach_rig_to_camera() -> void:
+	if not game_camera or not xr_origin:
+		return
+	var parent = game_camera.get_parent()
+	if parent:
+		if xr_origin.get_parent():
+			xr_origin.get_parent().remove_child(xr_origin)
+		parent.add_child(xr_origin)
+		var approx_head_height := 1.6
+		var cam_pos = game_camera.global_position
+		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - approx_head_height, cam_pos.z)
+		_last_game_cam_pos = cam_pos
+
+
+func _sync_origin_to_game() -> void:
+	if game_camera and is_instance_valid(game_camera) and xr_origin:
+		var current_pos = game_camera.global_position
+		var delta_pos = current_pos - _last_game_cam_pos
+		if delta_pos.length() > 0.001:
+			xr_origin.global_position += delta_pos
+			_last_game_cam_pos = current_pos
+
+		# Steer game camera toward controller aim via mouse injection
+		if not _interface_open:
+			_steer_game_camera_via_mouse()
+
+
+
+func _steer_game_camera_via_mouse() -> void:
+	# Steer game camera to match dominant hand controller direction
+	# This makes weapon firing/aiming follow the controller, not the head
+	var aim_controller = right_controller if dominant_hand == "right" else left_controller
+	if not aim_controller or not aim_controller.get_is_active():
+		return
+
+	var target_basis = aim_controller.global_basis
+	# Controller forward is -Z
+	var aim_forward = -target_basis.z
+	# Convert to yaw/pitch
+	var target_yaw = atan2(-aim_forward.x, -aim_forward.z)
+	var target_pitch = asin(aim_forward.y)
+
+	var game_yaw = game_camera.global_rotation.y
+	var game_pitch = game_camera.global_rotation.x
+
+	var yaw_error = fmod(target_yaw - game_yaw + PI, TAU) - PI
+	var pitch_error = target_pitch - game_pitch
+
+	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
+		return
+
+	var mouse_sensitivity_estimate := 0.003
+	var correction_strength := 0.8  # More aggressive for responsive aiming
+
+	var mouse_dx = -(yaw_error * correction_strength) / mouse_sensitivity_estimate
+	var mouse_dy = -(pitch_error * correction_strength) / mouse_sensitivity_estimate
+
+	var event = InputEventMouseMotion.new()
+	event.relative = Vector2(mouse_dx, mouse_dy)
+	event.position = get_viewport().get_visible_rect().size / 2
+	Input.parse_input_event(event)
+
+
+func _process_input(delta: float) -> void:
+	if _interface_open:
+		# Release movement keys when in inventory
+		_inject_key(KEY_W, false)
+		_inject_key(KEY_S, false)
+		_inject_key(KEY_A, false)
+		_inject_key(KEY_D, false)
+		return
+
+	# --- Left thumbstick: Movement ---
+	if left_controller and left_controller.get_is_active():
+		var move_input = left_controller.get_vector2("primary")
+		if move_input.length() > thumbstick_deadzone:
+			var strength = (move_input.length() - thumbstick_deadzone) / (1.0 - thumbstick_deadzone)
+			move_input = move_input.normalized() * strength
+
+			if game_camera and is_instance_valid(game_camera) and xr_camera:
+				var yaw_diff = xr_camera.global_rotation.y - game_camera.global_rotation.y
+				move_input = move_input.rotated(yaw_diff)
+
+			_inject_key(KEY_W, move_input.y > 0.3)
+			_inject_key(KEY_S, move_input.y < -0.3)
+			_inject_key(KEY_A, move_input.x < -0.3)
+			_inject_key(KEY_D, move_input.x > 0.3)
+		else:
+			_inject_key(KEY_W, false)
+			_inject_key(KEY_S, false)
+			_inject_key(KEY_A, false)
+			_inject_key(KEY_D, false)
+
+	# --- Right thumbstick: Turn ---
+	if right_controller and right_controller.get_is_active():
+		var turn_input = right_controller.get_vector2("primary")
+		if abs(turn_input.x) > thumbstick_deadzone:
+			if use_snap_turn:
+				if not _snap_turn_cooldown and abs(turn_input.x) > 0.6:
+					var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
+					xr_origin.rotate_y(deg_to_rad(angle))
+					_snap_turn_cooldown = true
+			else:
+				xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
+		else:
+			_snap_turn_cooldown = false
+
+
+func _on_button_pressed(button_name: String, hand: String) -> void:
+	match button_name:
+		"trigger_click":
+			if _interface_open:
+				_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+				_inject_action("left_mouse", true)
+			else:
+				if hand == dominant_hand:
+					# Fire weapon
+					Input.action_press("fire", 1.0)
+					Input.action_press("left_mouse", 1.0)
+					_inject_action("fire", true)
+					_inject_action("left_mouse", true)
+					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+				else:
+					if _left_grip_held:
+						# Left trigger while gripping = toggle flashlight
+						_inject_action("flashlight", true)
+						print("[VR Mod] FLASHLIGHT toggled (left trigger + grip)")
+					else:
+						# Left trigger without grip = reload
+						_inject_action("reload", true)
+						print("[VR Mod] RELOAD pressed (left trigger)")
+		"grip_click":
+			if _interface_open:
+				_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
+				_inject_action("context", true)
+			else:
+				if hand == dominant_hand:
+					# Right grip: aim if weapon equipped, grab item if not
+					var mgr = game_camera.get_node_or_null("Manager") if game_camera else null
+					var has_wep = mgr and mgr.get_child_count() > 0 if mgr else false
+					if has_wep:
+						_inject_action("aim", true)
+						_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
+					else:
+						_try_grab()
+				else:
+					# Left grip = grab front of weapon (two-hand aim)
+					_left_grip_held = true
+					print("[VR Mod] Left grip: two-hand aim ON")
+		"ax_button":  # A on right, X on left
+			if hand == "left":
+				_inject_action("jump", true)
+			else:
+				_inject_action("reload", true)
+		"by_button":  # B on right, Y on left
+			if hand == "left":
+				_inject_action("interface", true)  # Y = toggle inventory
+			else:
+				_inject_action("interact", true)   # B = interact with objects
+		"menu_button":
+			_inject_action("escape", true)
+		"primary_click":
+			if hand == "left":
+				_inject_action("sprint", true)
+			else:
+				# Right stick click = equip primary weapon + auto-raise
+				if _scroll_cooldown <= 0:
+					_scroll_cooldown = 1.0
+					print("[VR Mod] EQUIP WEAPON (KEY_1)")
+					_inject_key(KEY_1, true)
+					_weapon_loaded = false
+					_weapon_raise_timer = 1.5  # Raise after equip animation
+				else:
+					print("[VR Mod] EQUIP blocked (cooldown: ", snapped(_scroll_cooldown, 0.1), "s)")
+
+
+func _on_button_released(button_name: String, hand: String) -> void:
+	match button_name:
+		"trigger_click":
+			if _interface_open:
+				_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
+				_inject_action("left_mouse", false)
+			else:
+				if hand == dominant_hand:
+					Input.action_release("fire")
+					Input.action_release("left_mouse")
+					_inject_action("fire", false)
+					_inject_action("left_mouse", false)
+					_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
+				else:
+					_inject_action("flashlight", false)
+					_inject_action("reload", false)
+		"grip_click":
+			if _interface_open:
+				_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
+				_inject_action("context", false)
+			else:
+				if hand == dominant_hand:
+					_inject_action("aim", false)
+					_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
+					_drop_grabbed()
+				else:
+					_left_grip_held = false
+					print("[VR Mod] Left grip: two-hand aim OFF")
+		"ax_button":
+			if hand == "left":
+				_inject_action("jump", false)
+			else:
+				_inject_action("reload", false)
+		"by_button":
+			if hand == "left":
+				_inject_action("interface", false)
+			else:
+				_inject_action("interact", false)
+		"menu_button":
+			_inject_action("escape", false)
+		"primary_click":
+			if hand == "left":
+				_inject_action("sprint", false)
+			else:
+				_inject_key(KEY_1, false)
+
+
+var _key_states := {}
+var _mouse_states := {}
+
+func _inject_key(keycode: int, pressed: bool) -> void:
+	var current = _key_states.get(keycode, false)
+	if current == pressed:
+		return
+	_key_states[keycode] = pressed
+	var event = InputEventKey.new()
+	event.keycode = keycode
+	event.physical_keycode = keycode
+	event.pressed = pressed
+	Input.parse_input_event(event)
+
+
+func _inject_mouse_button(button: int, pressed: bool) -> void:
+	var current = _mouse_states.get(button, false)
+	if current == pressed:
+		return
+	_mouse_states[button] = pressed
+	var event = InputEventMouseButton.new()
+	event.button_index = button
+	event.pressed = pressed
+	# Use laser pointer position when in inventory, center of screen otherwise
+	if _interface_open and _laser_screen_pos.x >= 0:
+		event.position = _laser_screen_pos
+	else:
+		event.position = get_viewport().get_visible_rect().size / 2
+	# Set button_mask - required for proper mouse event processing
+	var mask := 0
+	for btn in _mouse_states:
+		if _mouse_states[btn]:
+			match btn:
+				MOUSE_BUTTON_LEFT: mask |= MOUSE_BUTTON_MASK_LEFT
+				MOUSE_BUTTON_RIGHT: mask |= MOUSE_BUTTON_MASK_RIGHT
+				MOUSE_BUTTON_MIDDLE: mask |= MOUSE_BUTTON_MASK_MIDDLE
+	event.button_mask = mask
+	# Send through BOTH paths to maximize chances of game receiving it
+	Input.parse_input_event(event)
+	get_viewport().push_input(event, false)
+
+
+func _inject_scroll(direction: int) -> void:
+	# direction: 1 = scroll up (next weapon), -1 = scroll down (prev weapon)
+	var event = InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_WHEEL_UP if direction > 0 else MOUSE_BUTTON_WHEEL_DOWN
+	event.pressed = true
+	event.position = get_viewport().get_visible_rect().size / 2
+	Input.parse_input_event(event)
+	# Scroll events need immediate release
+	var release = InputEventMouseButton.new()
+	release.button_index = event.button_index
+	release.pressed = false
+	release.position = event.position
+	Input.parse_input_event(release)
+
+
+func _inject_action(action_name: String, pressed: bool, strength: float = 1.0) -> void:
+	if not InputMap.has_action(action_name):
+		if pressed:
+			print("[VR Mod] Action not found: ", action_name)
+		return
+	var event = InputEventAction.new()
+	event.action = action_name
+	event.pressed = pressed
+	event.strength = strength if pressed else 0.0
+	Input.parse_input_event(event)
+
+
+func _deep_camera_debug() -> void:
+	# Deep scan of game_camera subtree to find where weapon nodes appear
+	if not game_camera or not is_instance_valid(game_camera):
+		return
+
+	var snapshot = []
+	var log_lines = []
+	_snapshot_tree(game_camera, 0, 12, snapshot, log_lines)
+
+	# Compare with previous snapshot to detect changes
+	if snapshot != _last_cam_child_snapshot:
+		# Something changed! Log it to file (append mode)
+		var dump_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+		var f = FileAccess.open(dump_path, FileAccess.READ_WRITE)
+		if not f:
+			f = FileAccess.open(dump_path, FileAccess.WRITE)
+		if f:
+			f.seek_end(0)
+			f.store_line("")
+			f.store_line("=== Camera Subtree Snapshot (changed!) ===")
+			f.store_line("Time: " + str(Time.get_ticks_msec()) + "ms")
+			f.store_line("game_camera.current: " + str(game_camera.current))
+			f.store_line("game_camera.global_pos: " + str(game_camera.global_position))
+			f.store_line("Total nodes in subtree: " + str(snapshot.size()))
+			f.store_line("")
+			for line in log_lines:
+				f.store_line(line)
+			f.store_line("")
+			f.store_line("=== MeshInstance3D within 5m of camera ===")
+			var near_meshes = []
+			_find_meshes_near_to_list(get_tree().root, game_camera.global_position, 5.0, 0, 15, near_meshes)
+			for entry in near_meshes:
+				f.store_line(entry)
+			if near_meshes.is_empty():
+				f.store_line("(none found)")
+			f.close()
+
+		print("[VR Mod] CAMERA TREE CHANGED! Nodes: ", snapshot.size(), " (logged to vr_mod_debug.log)")
+		_last_cam_child_snapshot = snapshot
+	else:
+		# No change, just print summary
+		var mgr = game_camera.get_node_or_null("Manager")
+		var mgr_count = mgr.get_child_count() if mgr else -1
+		print("[VR Mod] cam_tree: ", snapshot.size(), " nodes, mgr_children=", mgr_count, " cam.current=", game_camera.current)
+
+
+func _snapshot_tree(node: Node, depth: int, max_depth: int, snapshot: Array, log_lines: Array) -> void:
+	var indent = "  ".repeat(depth)
+	var info = node.name + " (" + node.get_class() + ")"
+	if node is Node3D:
+		info += " pos=" + str(node.position)
+		info += " gpos=" + str(node.global_position)
+		info += " vis=" + str(node.visible)
+	if node is MeshInstance3D:
+		info += " mesh=" + str(node.mesh.get_class() if node.mesh else "null")
+		info += " layers=" + str(node.layers)
+		if node.mesh:
+			info += " surf_count=" + str(node.mesh.get_surface_count())
+	if node is Skeleton3D:
+		info += " bones=" + str((node as Skeleton3D).get_bone_count())
+	snapshot.append(node.name + ":" + node.get_class() + ":" + str(node.get_child_count()))
+	log_lines.append(indent + info + " [" + str(node.get_child_count()) + " children]")
+
+	if depth < max_depth:
+		for child in node.get_children():
+			_snapshot_tree(child, depth + 1, max_depth, snapshot, log_lines)
+
+
+func _find_all_typed_under(node: Node, type_name: String, depth: int, max_depth: int, result: Array) -> void:
+	if node.get_class() == type_name or node.is_class(type_name):
+		var info = str(node.get_path()) + " (" + node.get_class() + ")"
+		if node is Node3D:
+			info += " vis=" + str(node.visible) + " gpos=" + str(node.global_position)
+		if node is MeshInstance3D:
+			info += " layers=" + str(node.layers)
+			if node.mesh:
+				info += " mesh=" + node.mesh.get_class() + " surfs=" + str(node.mesh.get_surface_count())
+			else:
+				info += " mesh=null"
+		result.append(info)
+	if depth < max_depth:
+		for child in node.get_children():
+			_find_all_typed_under(child, type_name, depth + 1, max_depth, result)
+
+
+func _find_meshes_near_to_list(node: Node, pos: Vector3, radius: float, depth: int, max_depth: int, result: Array) -> void:
+	if node == xr_origin:
+		return
+	if node is MeshInstance3D:
+		var dist = node.global_position.distance_to(pos)
+		if dist < radius:
+			var info = str(node.get_path()) + " dist=" + str(snapped(dist, 0.01))
+			info += " vis=" + str(node.visible) + " mesh=" + str(node.mesh.get_class() if node.mesh else "null")
+			info += " layers=" + str(node.layers)
+			result.append(info)
+	if depth < max_depth:
+		for child in node.get_children():
+			_find_meshes_near_to_list(child, pos, radius, depth + 1, max_depth, result)
+
+
+var _post_scroll_timer := -1.0
+
+func _create_hand_model(controller: XRController3D, model_name: String) -> void:
+	var hand = Node3D.new()
+	hand.name = model_name
+
+	# Palm - flat box
+	var palm_mesh = MeshInstance3D.new()
+	palm_mesh.name = "Palm"
+	var palm = BoxMesh.new()
+	palm.size = Vector3(0.08, 0.03, 0.10)
+	palm_mesh.mesh = palm
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(0.7, 0.55, 0.4)  # Skin tone
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	palm_mesh.material_override = mat
+	palm_mesh.position = Vector3(0, 0, -0.05)
+	hand.add_child(palm_mesh)
+
+	# Fingers - smaller box extending forward
+	var fingers_mesh = MeshInstance3D.new()
+	fingers_mesh.name = "Fingers"
+	var fingers = BoxMesh.new()
+	fingers.size = Vector3(0.07, 0.02, 0.07)
+	fingers_mesh.mesh = fingers
+	fingers_mesh.material_override = mat
+	fingers_mesh.position = Vector3(0, 0, -0.13)
+	hand.add_child(fingers_mesh)
+
+	# Thumb - small box to the side
+	var thumb_mesh = MeshInstance3D.new()
+	thumb_mesh.name = "Thumb"
+	var thumb = BoxMesh.new()
+	thumb.size = Vector3(0.025, 0.025, 0.05)
+	thumb_mesh.mesh = thumb
+	thumb_mesh.material_override = mat
+	var side = 1.0 if "Left" in model_name else -1.0
+	thumb_mesh.position = Vector3(side * 0.045, 0, -0.06)
+	hand.add_child(thumb_mesh)
+
+	# Roll 90° and move back toward controller position
+	hand.rotation.z = deg_to_rad(90)
+	hand.position = Vector3(0, 0, 0.20)
+	controller.add_child(hand)
+	print("[VR Mod] Created hand model: ", model_name)
+
+
+func _update_hand_visibility() -> void:
+	# Show hand models when no weapon is equipped, hide when weapon is held
+	var has_weapon = false
+	if game_camera and is_instance_valid(game_camera):
+		var mgr = game_camera.get_node_or_null("Manager")
+		if mgr and mgr.get_child_count() > 0:
+			has_weapon = true
+
+	# Right hand: hide when holding weapon (weapon model replaces it)
+	var right_hand = right_controller.get_node_or_null("RightHandModel")
+	if right_hand:
+		right_hand.visible = not has_weapon
+
+	# Left hand: hide when gripping weapon front (two-hand mode)
+	var left_hand = left_controller.get_node_or_null("LeftHandModel")
+	if left_hand:
+		left_hand.visible = not (_left_grip_held and has_weapon)
+
+
+
+func _try_grab() -> void:
+	if _grabbed_object:
+		return  # Already holding something
+
+	if not _grab_ray or not _grab_ray.is_colliding():
+		return
+
+	var collider = _grab_ray.get_collider()
+	if not collider:
+		return
+
+	# Only grab loose items: RigidBody3D with collision layer 4 (bit 2)
+	if not (collider is RigidBody3D and (collider.collision_layer & 4) != 0):
+		return
+
+	var controller = right_controller if dominant_hand == "right" else left_controller
+	if not controller:
+		return
+
+	var hand_model_name = "RightHandModel" if dominant_hand == "right" else "LeftHandModel"
+	var hand_model = controller.get_node_or_null(hand_model_name)
+
+	_grabbed_object = collider
+	_grabbed_original_freeze = collider.freeze
+	# Kinematic freeze lets us set global_transform each frame without confusing physics
+	collider.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+	collider.freeze = true
+
+	# Snap item to hand model position immediately
+	if hand_model:
+		collider.global_position = hand_model.global_position
+		collider.global_basis = hand_model.global_basis
+
+	print("[VR Mod] Grabbed: ", collider.name)
+
+
+func _drop_grabbed() -> void:
+	if not _grabbed_object:
+		return
+
+	print("[VR Mod] DROPPED: ", _grabbed_object.name)
+
+	# Restore physics - switch back to static mode then unfreeze so gravity takes over
+	if _grabbed_object is RigidBody3D:
+		_grabbed_object.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+		_grabbed_object.freeze = _grabbed_original_freeze
+		_grabbed_object.linear_velocity = Vector3.ZERO
+		_grabbed_object.angular_velocity = Vector3.ZERO
+
+	_grabbed_object = null
+	_grab_offset = Vector3.ZERO
+
+
+func _update_grabbed() -> void:
+	if not _grabbed_object or not is_instance_valid(_grabbed_object):
+		_grabbed_object = null
+		return
+
+	var controller = right_controller if dominant_hand == "right" else left_controller
+	if not controller or not controller.get_is_active():
+		return
+
+	var hand_model_name = "RightHandModel" if dominant_hand == "right" else "LeftHandModel"
+	var hand_model = controller.get_node_or_null(hand_model_name)
+	if hand_model:
+		_grabbed_object.global_position = hand_model.global_position
+		_grabbed_object.global_basis = hand_model.global_basis
+	else:
+		_grabbed_object.global_position = controller.global_position
+
+
+func _sync_weapon_to_controller() -> void:
+	if not game_camera or not is_instance_valid(game_camera):
+		return
+	if _interface_open:
+		return
+
+	var mgr = game_camera.get_node_or_null("Manager")
+	if not mgr or mgr.get_child_count() == 0:
+		return
+
+	var weapon_rig = mgr.get_child(0)
+	if not weapon_rig or not weapon_rig is Node3D:
+		return
+
+	var controller = right_controller if dominant_hand == "right" else left_controller
+	if not controller or not controller.get_is_active():
+		return
+
+	# Two-hand aiming: only when left grip is held
+	var off_controller = left_controller if dominant_hand == "right" else right_controller
+	var use_two_hand = false
+	var aim_basis: Basis
+
+	if _left_grip_held and off_controller and off_controller.get_is_active():
+		var hand_dist = controller.global_position.distance_to(off_controller.global_position)
+		if hand_dist > 0.1:
+			use_two_hand = true
+			# Forward = from dominant hand toward off-hand
+			var forward = (off_controller.global_position - controller.global_position).normalized()
+			var up = controller.global_basis.y
+			var right_vec = up.cross(forward).normalized()
+			var corrected_up = forward.cross(right_vec).normalized()
+			aim_basis = Basis(right_vec, corrected_up, -forward)
+			aim_basis = aim_basis * Basis(Vector3.UP, deg_to_rad(180))
+
+	if not use_two_hand:
+		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180))
+
+	weapon_rig.global_basis = aim_basis
+	var grip_offset = aim_basis * Vector3(0, 0.05, -0.05)
+	weapon_rig.global_position = controller.global_position + grip_offset
+
+	# Hide left arm only (keep right arm visible for grip hand)
+	# Arms mesh has 2 surfaces - try hiding surface 0 (left arm)
+	var handling = weapon_rig.get_node_or_null("Handling")
+	if handling:
+		var node = handling
+		# Walk down: Handling → Sway → Noise → Tilt → Impulse → Recoil → Holder → [Weapon]
+		for _i in 7:
+			if node.get_child_count() > 0:
+				var next = node.get_child(0)
+				if next is Node3D:
+					node = next
+				else:
+					break
+			else:
+				break
+		var armature = node.get_node_or_null("Armature")
+		if armature:
+			var skeleton = armature.get_node_or_null("Skeleton3D")
+			if skeleton:
+				var arms = skeleton.get_node_or_null("Arms")
+				if arms and arms is MeshInstance3D:
+					var invis_mat = StandardMaterial3D.new()
+					invis_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+					invis_mat.albedo_color = Color(0, 0, 0, 0)
+					arms.set_surface_override_material(0, invis_mat)
+					print("[VR Mod] Hidden left arm (surface 0)")
+
+
+func _force_debug_dump(label: String) -> void:
+	if not game_camera or not is_instance_valid(game_camera):
+		return
+	var dump_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var f = FileAccess.open(dump_path, FileAccess.READ_WRITE)
+	if not f:
+		f = FileAccess.open(dump_path, FileAccess.WRITE)
+	if f:
+		f.seek_end(0)
+		f.store_line("")
+		f.store_line("=== " + label + " ===")
+		f.store_line("Time: " + str(Time.get_ticks_msec()) + "ms")
+		f.store_line("game_camera.current: " + str(game_camera.current))
+		f.store_line("")
+		var log_lines = []
+		var snapshot = []
+		_snapshot_tree(game_camera, 0, 20, snapshot, log_lines)
+		for line in log_lines:
+			f.store_line(line)
+		f.store_line("")
+		# Scan for meshes starting from camera (not root) to reach deep weapon meshes
+		f.store_line("=== All MeshInstance3D under Camera ===")
+		var cam_meshes = []
+		_find_all_typed_under(game_camera, "MeshInstance3D", 0, 20, cam_meshes)
+		for entry in cam_meshes:
+			f.store_line(entry)
+		if cam_meshes.is_empty():
+			f.store_line("(none)")
+		f.close()
+	print("[VR Mod] Debug dump: ", label)
+
+
+func _schedule_post_scroll_debug() -> void:
+	_post_scroll_timer = 3.0  # Check 3 seconds after scroll (weapon takes time to load)
+
+
+func _reparent_camera_children() -> void:
+	# We no longer reparent. Instead we sync game_camera transform
+	# to the controller each frame in _sync_origin_to_game().
+	# This preserves game's internal node paths so weapon system still works.
+	# Only activate once camera has children (weapon nodes loaded).
+	if _weapons_reparented:
+		return
+	if not game_camera:
+		return
+
+	if game_camera.get_child_count() == 0:
+		return  # Wait for weapon nodes to be populated
+
+	print("[VR Mod] Weapon strategy: sync game_camera to controller (no reparent)")
+	print("[VR Mod] Game camera children: ", game_camera.get_child_count())
+	for i in game_camera.get_child_count():
+		var c = game_camera.get_child(i)
+		var info = "  " + c.name + " (" + c.get_class() + ")"
+		if c is Node3D:
+			info += " vis=" + str(c.visible)
+		if c.get_child_count() > 0:
+			info += " [" + str(c.get_child_count()) + " children]"
+		print("[VR Mod] ", info)
+	_weapons_reparented = true
+	print("[VR Mod] Controller-aim sync ACTIVE")
+
+
+func _dump_weapon_state() -> void:
+	if not game_camera or not is_instance_valid(game_camera):
+		return
+	# Count all MeshInstance3D in entire scene and find ones near camera
+	var cam_pos = game_camera.global_position
+	var all_meshes = _find_all_meshes(get_tree().root, 0)
+	var near_meshes = []
+	for m in all_meshes:
+		if is_instance_valid(m) and m.visible:
+			var dist = m.global_position.distance_to(cam_pos)
+			if dist < 3.0:
+				near_meshes.append([m, dist])
+	print("[VR Mod] WEAPON: total meshes=", all_meshes.size(), " near cam(<3m)=", near_meshes.size())
+	for entry in near_meshes:
+		var m = entry[0]
+		var d = entry[1]
+		print("[VR Mod] WEAPON NEAR: ", m.get_path(), " d=", snapped(d, 0.01), " mesh_type=", m.mesh.get_class() if m.mesh else "null")
+
+
+func _find_all_meshes(node: Node, depth: int) -> Array:
+	var result = []
+	if node == xr_origin:
+		return result
+	if node is MeshInstance3D:
+		result.append(node)
+	if depth < 10:
+		for child in node.get_children():
+			result.append_array(_find_all_meshes(child, depth + 1))
+	return result
+
+
+func _restore_xr_camera() -> void:
+	if xr_camera and is_instance_valid(xr_camera):
+		xr_camera.current = true
+		print("[VR Mod] XR camera restored as current")
+
+
+func _find_meshes_near(node: Node, pos: Vector3, radius: float, depth: int, max_depth: int) -> void:
+	if node == xr_origin:
+		return
+	if node is MeshInstance3D and node.visible:
+		var dist = node.global_position.distance_to(pos)
+		if dist < radius:
+			print("[VR Mod] MESH NEAR CAM: ", node.get_path(), " dist=", snapped(dist, 0.01), " mesh=", node.mesh)
+	if depth < max_depth:
+		for child in node.get_children():
+			_find_meshes_near(child, pos, radius, depth + 1, max_depth)
+
+
+func _dump_tree(node: Node, depth: int, max_depth: int) -> void:
+	var indent = "  ".repeat(depth)
+	var info = indent + node.name + " (" + node.get_class() + ")"
+	if node is Node3D:
+		info += " pos=" + str(node.position)
+	print("[VR Mod] ", info)
+	if depth < max_depth:
+		for child in node.get_children():
+			_dump_tree(child, depth + 1, max_depth)
+
+
+func _find_game_camera(node: Node) -> Camera3D:
+	# Only detect the gameplay camera at /root/Map/Core/Camera
+	# Skip intro/loading cameras to avoid activating VR too early
+	var core_cam = get_tree().root.get_node_or_null("Map/Core/Camera")
+	if core_cam and core_cam is Camera3D:
+		return core_cam
+	return null
+
+
+func _load_config() -> void:
+	var config_path = OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
+	if not FileAccess.file_exists(config_path):
+		print("[VR Mod] Config not found at: ", config_path, ", using defaults")
+		return
+
+	var file = FileAccess.open(config_path, FileAccess.READ)
+	if not file:
+		return
+
+	var json = JSON.new()
+	if json.parse(file.get_as_text()) == OK:
+		var data = json.data
+		if data is Dictionary:
+			if data.has("xr"):
+				world_scale = data["xr"].get("world_scale", 1.0)
+			if data.has("comfort"):
+				use_snap_turn = data["comfort"].get("turn_type", "snap") == "snap"
+				snap_turn_degrees = data["comfort"].get("snap_turn_degrees", 45.0)
+				smooth_turn_speed = data["comfort"].get("smooth_turn_speed", 120.0)
+			if data.has("controls"):
+				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
+				dominant_hand = data["controls"].get("dominant_hand", "right")
+			print("[VR Mod] Config loaded successfully")
+	file.close()

@@ -1,0 +1,70 @@
+{
+    "version": 1,
+    "action_sets": [
+        {
+            "name": "gameplay",
+            "bindings": {
+                "trigger_right": {
+                    "godot_action": "shoot",
+                    "type": "bool",
+                    "threshold": 0.8
+                },
+                "grip_right": {
+                    "godot_action": "aim",
+                    "type": "bool",
+                    "threshold": 0.7
+                },
+                "trigger_left": {
+                    "godot_action": "grenade",
+                    "type": "bool",
+                    "threshold": 0.8
+                },
+                "grip_left": {
+                    "godot_action": "grab",
+                    "type": "bool",
+                    "threshold": 0.7
+                },
+                "thumbstick_left": {
+                    "godot_action_x": "move_right",
+                    "godot_action_y": "move_forward",
+                    "type": "vector2",
+                    "deadzone": 0.15
+                },
+                "thumbstick_right": {
+                    "godot_action_x": "look_right",
+                    "type": "vector2",
+                    "snap_turn": true,
+                    "snap_angle_degrees": 45
+                },
+                "button_ax_left": {
+                    "godot_action": "jump",
+                    "type": "bool"
+                },
+                "button_by_left": {
+                    "godot_action": "crouch",
+                    "type": "bool"
+                },
+                "button_ax_right": {
+                    "godot_action": "reload",
+                    "type": "bool"
+                },
+                "button_by_right": {
+                    "godot_action": "interact",
+                    "type": "bool"
+                },
+                "menu_left": {
+                    "godot_action": "pause_menu",
+                    "type": "bool"
+                },
+                "thumbstick_left_click": {
+                    "godot_action": "sprint",
+                    "type": "bool"
+                },
+                "thumbstick_right_click": {
+                    "godot_action": "melee",
+                    "type": "bool"
+                }
+            }
+        }
+    ]
+}
