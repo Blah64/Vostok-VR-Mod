@@ -41,18 +41,25 @@ var _weapon_hand := ""  # "left" or "right" — which hand currently holds weapo
 var _weapon_slot := 0   # 1-4 mapped to KEY_1..KEY_4, 0 = none
 
 const HOLSTER_ZONES := {
-	1: {"name": "right_shoulder", "offset": Vector3(0.25, -0.15, 0.20), "key": KEY_1},
-	2: {"name": "right_hip",     "offset": Vector3(0.25, -0.55, 0.0),   "key": KEY_2},
-	3: {"name": "left_hip",      "offset": Vector3(-0.25, -0.55, 0.0),  "key": KEY_3},
-	4: {"name": "chest",         "offset": Vector3(0.0, -0.15, 0.10),   "key": KEY_4},
+	1: {"name": "right_shoulder", "key": KEY_1},
+	2: {"name": "right_hip",      "key": KEY_2},
+	3: {"name": "left_hip",       "key": KEY_3},
+	4: {"name": "chest",          "key": KEY_4},
+}
+# Per-slot offsets (runtime-tunable, loaded from config)
+var _holster_offsets := {
+	1: Vector3(0.25, -0.15,  0.20),
+	2: Vector3(0.25, -0.55,  0.0),
+	3: Vector3(-0.25, -0.55, 0.0),
+	4: Vector3(0.0,  -0.15,  0.10),
 }
 var _holster_zone_radius := 0.20
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
 var _right_in_zone := 0  # Which zone right controller is in (0 = none)
 
 # Bag zone: reach behind the right shoulder to add a held item to inventory
-const BAG_ZONE_OFFSET := Vector3(0.15, -0.10, 0.35)  # Right-back, upper body (yaw-relative)
-const BAG_ZONE_RADIUS := 0.35
+var _bag_zone_offset := Vector3(0.15, -0.10, 0.35)  # Right-back, upper body (yaw-relative)
+var _bag_zone_radius := 0.35
 var _grab_in_bag_zone := false  # For haptic edge-detection while holding item
 
 # Per-slot grip offsets in aim-local space (up, forward from controller)
@@ -97,8 +104,7 @@ func _get_nearby_holster_zone(controller_pos: Vector3) -> int:
 	var closest_zone := 0
 	var closest_dist := _holster_zone_radius
 	for slot in HOLSTER_ZONES:
-		var zone = HOLSTER_ZONES[slot]
-		var zone_world_pos = head_pos + yaw_basis * zone["offset"]
+		var zone_world_pos = head_pos + yaw_basis * _holster_offsets[slot]
 		var dist = controller_pos.distance_to(zone_world_pos)
 		if dist < closest_dist:
 			closest_dist = dist
@@ -112,7 +118,7 @@ func _is_in_bag_zone(world_pos: Vector3) -> bool:
 	var yaw := xr_camera.global_rotation.y
 	var yaw_basis := Basis(Vector3.UP, yaw)
 	var local := yaw_basis.inverse() * (world_pos - xr_camera.global_position)
-	return local.distance_to(BAG_ZONE_OFFSET) < BAG_ZONE_RADIUS
+	return local.distance_to(_bag_zone_offset) < _bag_zone_radius
 
 
 func _update_holster_zone_haptics() -> void:
@@ -1694,6 +1700,17 @@ func _load_config() -> void:
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.20)
+				for slot in [1, 2, 3, 4]:
+					var key = str(slot)
+					var def = _holster_offsets[slot]
+					var ho = data["holsters"].get("offsets", {})
+					if ho.has(key):
+						var o = ho[key]
+						_holster_offsets[slot] = Vector3(o.get("x", def.x), o.get("y", def.y), o.get("z", def.z))
+				if data["holsters"].has("bag"):
+					var b = data["holsters"]["bag"]
+					_bag_zone_offset = Vector3(b.get("x", 0.15), b.get("y", -0.10), b.get("z", 0.35))
+					_bag_zone_radius = b.get("radius", 0.35)
 			if data.has("weapon_offsets"):
 				var wo = data["weapon_offsets"]
 				for slot in [1, 2, 3, 4]:
@@ -1952,6 +1969,32 @@ func _populate_config_ui() -> void:
 	_mk_header(vbox, "Controls")
 	var grid_ctrl = _mk_grid(vbox)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
+
+	_mk_sep(vbox)
+
+	# ── Holster Zones ──
+	_mk_header(vbox, "Holster Zones")
+	var grid_holsters = _mk_grid(vbox)
+	_add_stepper_row(grid_holsters, "Zone Radius", _holster_zone_radius, 0.05, 0.5, 0.01, "_on_cfg_hz_radius")
+	var zone_names := ["1: R.Shoulder", "2: R.Hip", "3: L.Hip", "4: Chest"]
+	for zi in range(4):
+		var slot = zi + 1
+		var o: Vector3 = _holster_offsets[slot]
+		_mk_header(vbox, zone_names[zi])
+		var grid_z = _mk_grid(vbox)
+		_add_stepper_row(grid_z, "X (L/R)", o.x, -0.6, 0.6, 0.01, "_on_cfg_hz_x_" + str(slot))
+		_add_stepper_row(grid_z, "Y (U/D)", o.y, -1.0, 0.2, 0.01, "_on_cfg_hz_y_" + str(slot))
+		_add_stepper_row(grid_z, "Z (F/B)", o.z, -0.5, 0.5, 0.01, "_on_cfg_hz_z_" + str(slot))
+
+	_mk_sep(vbox)
+
+	# ── Bag Zone (Inventory) ──
+	_mk_header(vbox, "Bag Zone (Inventory)")
+	var grid_bag = _mk_grid(vbox)
+	_add_stepper_row(grid_bag, "Radius", _bag_zone_radius, 0.05, 0.8, 0.01, "_on_cfg_bag_radius")
+	_add_stepper_row(grid_bag, "X (L/R)", _bag_zone_offset.x, -0.5, 0.5, 0.01, "_on_cfg_bag_x")
+	_add_stepper_row(grid_bag, "Y (U/D)", _bag_zone_offset.y, -0.5, 0.5, 0.01, "_on_cfg_bag_y")
+	_add_stepper_row(grid_bag, "Z (F/B)", _bag_zone_offset.z, 0.0, 0.8, 0.01, "_on_cfg_bag_z")
 
 	_mk_sep(vbox)
 
@@ -2223,6 +2266,47 @@ func _on_cfg_hand(idx: int) -> void:
 		_config_dominant_hand = "left"
 
 
+func _on_cfg_hz_radius(val: float) -> void:
+	_holster_zone_radius = val
+
+func _on_cfg_hz_x_1(val: float) -> void:
+	_holster_offsets[1].x = val
+func _on_cfg_hz_y_1(val: float) -> void:
+	_holster_offsets[1].y = val
+func _on_cfg_hz_z_1(val: float) -> void:
+	_holster_offsets[1].z = val
+
+func _on_cfg_hz_x_2(val: float) -> void:
+	_holster_offsets[2].x = val
+func _on_cfg_hz_y_2(val: float) -> void:
+	_holster_offsets[2].y = val
+func _on_cfg_hz_z_2(val: float) -> void:
+	_holster_offsets[2].z = val
+
+func _on_cfg_hz_x_3(val: float) -> void:
+	_holster_offsets[3].x = val
+func _on_cfg_hz_y_3(val: float) -> void:
+	_holster_offsets[3].y = val
+func _on_cfg_hz_z_3(val: float) -> void:
+	_holster_offsets[3].z = val
+
+func _on_cfg_hz_x_4(val: float) -> void:
+	_holster_offsets[4].x = val
+func _on_cfg_hz_y_4(val: float) -> void:
+	_holster_offsets[4].y = val
+func _on_cfg_hz_z_4(val: float) -> void:
+	_holster_offsets[4].z = val
+
+func _on_cfg_bag_radius(val: float) -> void:
+	_bag_zone_radius = val
+func _on_cfg_bag_x(val: float) -> void:
+	_bag_zone_offset.x = val
+func _on_cfg_bag_y(val: float) -> void:
+	_bag_zone_offset.y = val
+func _on_cfg_bag_z(val: float) -> void:
+	_bag_zone_offset.z = val
+
+
 func _on_cfg_save_close() -> void:
 	_save_full_config()
 	_close_config_screen()
@@ -2387,8 +2471,23 @@ func _save_full_config() -> void:
 		"laser_uv_y": _menu_laser_uv_y
 	}
 
-	# Preserve existing holsters and weapon_offsets
-	# (already in data from the read above)
+	# Holsters (zone offsets + bag zone)
+	var holster_offsets_data := {}
+	for slot in [1, 2, 3, 4]:
+		var o: Vector3 = _holster_offsets[slot]
+		holster_offsets_data[str(slot)] = {"x": snapped(o.x, 0.001), "y": snapped(o.y, 0.001), "z": snapped(o.z, 0.001)}
+	data["holsters"] = {
+		"zone_radius": _holster_zone_radius,
+		"offsets": holster_offsets_data,
+		"bag": {
+			"x": snapped(_bag_zone_offset.x, 0.001),
+			"y": snapped(_bag_zone_offset.y, 0.001),
+			"z": snapped(_bag_zone_offset.z, 0.001),
+			"radius": _bag_zone_radius
+		}
+	}
+
+	# Preserve existing weapon_offsets (already in data from the read above)
 
 	var out = FileAccess.open(config_path, FileAccess.WRITE)
 	if out:
