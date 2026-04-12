@@ -9,6 +9,34 @@
 		"thumbstick_deadzone": 0.15
 	},
 	"holsters": {
+		"bag": {
+			"radius": 0.35,
+			"x": 0.15,
+			"y": -0.1,
+			"z": 0.35
+		},
+		"offsets": {
+			"1": {
+				"x": 0.25,
+				"y": -0.15,
+				"z": 0.2
+			},
+			"2": {
+				"x": 0.25,
+				"y": -0.55,
+				"z": 0.0
+			},
+			"3": {
+				"x": -0.25,
+				"y": -0.55,
+				"z": 0.0
+			},
+			"4": {
+				"x": 0.0,
+				"y": -0.15,
+				"z": 0.1
+			}
+		},
 		"zone_radius": 0.25
 	},
 	"hud": {
@@ -16,7 +44,7 @@
 		"height_offset": -0.05,
 		"lr_offset": 0.0,
 		"smooth_follow": true,
-		"smooth_speed": 1.5,
+		"smooth_speed": 2.0,
 		"spread": 0.5,
 		"width": 2.3
 	},

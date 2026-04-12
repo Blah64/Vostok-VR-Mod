@@ -73,6 +73,9 @@ var _slot_grip_offsets := {
 # Per-slot Y rotation offset in degrees (added to the 180° flip)
 var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
 
+# Reticle parallax fix — patch fragment shader with VR-compatible ray-plane intersection
+var _fixed_reticle_instances := {}  # MeshInstance3D instance_id → true
+
 # Grip adjust mode — tune offsets live with thumbsticks
 var _adjust_mode := false
 var _adjust_saved_offset := Vector3.ZERO  # Backup to discard changes
@@ -171,6 +174,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_weapon_loaded = false
 	_weapon_raise_timer = 3.0
 	_scroll_cooldown = 1.0
+	_fixed_reticle_instances.clear()  # Re-scan for reticle on new weapon
 
 
 func _lower_weapon() -> void:
@@ -808,15 +812,27 @@ func _sync_origin_to_game() -> void:
 
 
 func _steer_game_camera_via_mouse() -> void:
-	# Steer game camera to match dominant hand controller direction
-	# This makes weapon firing/aiming follow the controller, not the head
+	# Steer game camera to match the weapon visual's aim direction
+	# Must account for rot_offset and two-hand aiming so bullets hit where the red dot points
 	var aim_controller = _get_controller(_get_weapon_hand())
 	if not aim_controller or not aim_controller.get_is_active():
 		return
 
-	var target_basis = aim_controller.global_basis
-	# Controller forward is -Z
-	var aim_forward = -target_basis.z
+	# Compute barrel direction: must match the aim_basis used in _sync_weapon_to_controller
+	# Weapon model's barrel is +Z in model space. After aim_basis = controller * Rot_Y(180+rot),
+	# barrel world direction = aim_basis.z. For rot=0 this equals -controller.basis.z (controller fwd).
+	var aim_forward: Vector3
+	var off_controller = _get_controller(_get_support_hand())
+	if _support_grip_held and off_controller and off_controller.get_is_active():
+		var hand_dist = aim_controller.global_position.distance_to(off_controller.global_position)
+		if hand_dist > 0.1:
+			aim_forward = (off_controller.global_position - aim_controller.global_position).normalized()
+		else:
+			aim_forward = -aim_controller.global_basis.z
+	else:
+		var rot_offset: float = _slot_grip_rotations.get(_weapon_slot, 0.0)
+		var aim_basis = aim_controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + rot_offset))
+		aim_forward = aim_basis.z
 	# Convert to yaw/pitch
 	var target_yaw = atan2(-aim_forward.x, -aim_forward.z)
 	var target_pitch = asin(aim_forward.y)
@@ -1542,6 +1558,95 @@ func _sync_weapon_to_controller() -> void:
 	# Hide all arm surfaces on every weapon type (guns, knives, grenades)
 	_hide_arms_in_subtree(weapon_rig)
 
+	# Fix reticle parallax for VR (once per sight mesh)
+	_fix_reticle_parallax(weapon_rig)
+
+
+
+
+func _log(msg: String) -> void:
+	var path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var f = FileAccess.open(path, FileAccess.READ_WRITE)
+	if not f:
+		f = FileAccess.open(path, FileAccess.WRITE)
+	if f:
+		f.seek_end(0)
+		f.store_line(msg)
+		f.close()
+
+
+func _fix_reticle_parallax(weapon_rig: Node3D) -> void:
+	# VR parallax fix: the game's Reticle shader uses normalize(reticlePosition)+NORMAL
+	# for UV, which is an approximation that breaks in stereo VR. Replace with a proper
+	# ray-plane intersection (Addmix collimator method) that uses only rotation matrices
+	# (same for both eyes) and the per-eye VIEW direction for correct collimation.
+	var skel = _find_node_by_class(weapon_rig, "Skeleton3D")
+	if not skel:
+		return
+	var attachments = skel.get_node_or_null("Attachments")
+	if not attachments:
+		return
+	for child in attachments.get_children():
+		if not child is Node3D or not child.visible:
+			continue
+		_patch_reticle_shader(child)
+
+
+func _patch_reticle_shader(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi = node as MeshInstance3D
+		var inst_id = mi.get_instance_id()
+		if _fixed_reticle_instances.has(inst_id):
+			return
+		if not mi.mesh:
+			return
+		var found_reticle := false
+		for s in range(mi.mesh.get_surface_count()):
+			var mat = mi.get_active_material(s)
+			if not (mat is ShaderMaterial and mat.shader and "Reticle" in mat.shader.resource_path):
+				continue
+			found_reticle = true
+			var code: String = mat.shader.code
+			if "vr_reticle_fix" in code:
+				continue
+			# Replace the reticle UV computation in the fragment shader with a
+			# VR-compatible ray-plane intersection. Uses mat3() (rotation only) of
+			# VIEW_MATRIX and MODEL_MATRIX — identical for both eyes. The per-eye
+			# VIEW direction provides correct collimated dot shift per eye.
+			var old_frag = "vec3 reticleOffset = normalize(reticlePosition) + NORMAL;\n\tvec2 reticleUV = (reticleOffset.xy / size) * vec2(1.0, -1.0);"
+			var new_frag = "// vr_reticle_fix: ray-plane intersection for VR collimation\n\tmat3 _mvr = mat3(VIEW_MATRIX[0].xyz, VIEW_MATRIX[1].xyz, VIEW_MATRIX[2].xyz) * mat3(MODEL_MATRIX[0].xyz, MODEL_MATRIX[1].xyz, MODEL_MATRIX[2].xyz);\n\tvec3 _sn = _mvr * vec3(0.0, 0.0, -1.0);\n\tvec3 _su = _mvr * vec3(1.0, 0.0, 0.0);\n\tvec3 _sv = _mvr * vec3(0.0, 1.0, 0.0);\n\tvec3 _vp = VIEW / dot(VIEW, _sn);\n\tvec2 reticleUV = vec2(-dot(_vp, _su), dot(_vp, _sv)) / (-size);"
+			var patched = code.replace(old_frag, new_frag)
+			if patched == code:
+				_log("reticle: WARNING — fragment target not found")
+				var idx = code.find("reticleOffset")
+				if idx >= 0:
+					_log("reticle: actual code: " + code.substr(idx, 120))
+				continue
+			var new_shader = Shader.new()
+			new_shader.code = patched
+			var new_mat = ShaderMaterial.new()
+			new_mat.shader = new_shader
+			for param in mat.shader.get_shader_uniform_list():
+				var val = mat.get_shader_parameter(param["name"])
+				if val != null:
+					new_mat.set_shader_parameter(param["name"], val)
+			mi.set_surface_override_material(s, new_mat)
+			_log("reticle: patched fragment surf=" + str(s) + " on " + mi.name)
+		if found_reticle:
+			_fixed_reticle_instances[inst_id] = true
+	for child in node.get_children():
+		_patch_reticle_shader(child)
+
+
+func _find_node_by_class(root: Node, class_name_str: String) -> Node:
+	if root.get_class() == class_name_str or root.is_class(class_name_str):
+		return root
+	for child in root.get_children():
+		var found = _find_node_by_class(child, class_name_str)
+		if found:
+			return found
+	return null
+
 
 func _force_debug_dump(label: String) -> void:
 	if not game_camera or not is_instance_valid(game_camera):
@@ -1807,6 +1912,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_toggle_config_screen()
 	if event is InputEventKey and event.pressed and event.keycode == KEY_F9:
 		_dump_hud_tree()
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F10:
+		_dump_weapon_tree()
 
 
 func _toggle_config_screen() -> void:
@@ -2494,6 +2601,81 @@ func _save_full_config() -> void:
 		out.store_string(JSON.stringify(data, "\t"))
 		out.close()
 		print("[VR Mod] Full config saved to: ", config_path)
+
+
+# ── Weapon tree debug dump (F10) ──────────────────────────────────────────
+
+func _dump_weapon_tree() -> void:
+	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
+	if not f:
+		f = FileAccess.open(log_path, FileAccess.WRITE)
+	if not f:
+		print("[VR Mod] Cannot open debug log for weapon dump")
+		return
+	f.seek_end(0)
+	f.store_line("")
+	f.store_line("=== WEAPON TREE DUMP (" + str(Time.get_datetime_string_from_system()) + ") ===")
+
+	if not game_camera or not is_instance_valid(game_camera):
+		f.store_line("  No game camera!")
+		f.close()
+		return
+
+	var mgr = game_camera.get_node_or_null("Manager")
+	if not mgr or mgr.get_child_count() == 0:
+		f.store_line("  No weapon rig (Manager empty)")
+		f.close()
+		return
+
+	var weapon_rig = mgr.get_child(0)
+	f.store_line("Weapon rig: " + weapon_rig.name)
+	_dump_weapon_node(f, weapon_rig, 0, 30)
+	f.store_line("")
+	f.close()
+	print("[VR Mod] Weapon tree dumped to vr_mod_debug.log")
+
+
+func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) -> void:
+	if depth > max_depth:
+		return
+	var indent = "  ".repeat(depth)
+	var line = indent + node.name + " (" + node.get_class() + ")"
+	if node is Node3D:
+		line += " pos=" + str(node.position) + " vis=" + str(node.visible)
+	if node is MeshInstance3D:
+		var mi = node as MeshInstance3D
+		line += " layers=" + str(mi.layers)
+		if mi.mesh:
+			line += " mesh=" + mi.mesh.get_class()
+			line += " surfs=" + str(mi.mesh.get_surface_count())
+		# Log material info for each surface
+		var surf_count = mi.mesh.get_surface_count() if mi.mesh else 0
+		for s in range(surf_count):
+			var mat = mi.get_active_material(s)
+			if mat:
+				var mat_line = indent + "  [surf " + str(s) + "] " + mat.get_class()
+				if mat is ShaderMaterial:
+					mat_line += " shader=" + str(mat.shader.resource_path if mat.shader else "null")
+				if mat is BaseMaterial3D:
+					var bm = mat as BaseMaterial3D
+					mat_line += " transp=" + str(bm.transparency)
+					mat_line += " blend=" + str(bm.blend_mode)
+					mat_line += " shading=" + str(bm.shading_mode)
+					mat_line += " no_depth=" + str(bm.no_depth_test)
+					mat_line += " albedo=" + str(bm.albedo_color)
+					mat_line += " emission=" + str(bm.emission_enabled)
+					if bm.emission_enabled:
+						mat_line += " emission_col=" + str(bm.emission)
+						mat_line += " emission_energy=" + str(bm.emission_energy_multiplier)
+				line += "\n" + mat_line
+			else:
+				line += "\n" + indent + "  [surf " + str(s) + "] null material"
+	if node is Skeleton3D:
+		line += " bones=" + str((node as Skeleton3D).get_bone_count())
+	f.store_line(line)
+	for child in node.get_children():
+		_dump_weapon_node(f, child, depth + 1, max_depth)
 
 
 # ── HUD tree debug dump (F9) ───────────────────────────────────────────────
