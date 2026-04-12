@@ -997,13 +997,18 @@ func _update_hand_visibility() -> void:
 	if left_hand:
 		left_hand.visible = not (_left_grip_held and has_weapon)
 
-	# Grab range: show laser in red at 1m when hand is empty and no menu is open
+	# Grab range: show laser when hand is empty and no menu is open
+	# Green = grabbable item in range, red = nothing grabbable
 	if _laser_mesh and not _menu_open:
 		var show_grab = not has_weapon and _grabbed_object == null
 		if show_grab:
+			var pointing_at_grabbable := false
+			if _grab_ray and _grab_ray.is_colliding():
+				var c = _grab_ray.get_collider()
+				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
-				mat.albedo_color = Color(1.0, 0.2, 0.1, 0.6)
+				mat.albedo_color = Color(0.1, 1.0, 0.2, 0.7) if pointing_at_grabbable else Color(1.0, 0.2, 0.1, 0.6)
 			var cyl := _laser_mesh.mesh as CylinderMesh
 			if cyl:
 				cyl.height = 1.0
@@ -1139,7 +1144,7 @@ func _sync_weapon_to_controller() -> void:
 		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180))
 
 	weapon_rig.global_basis = aim_basis
-	var grip_offset = aim_basis * Vector3(0, 0.05, -0.05)
+	var grip_offset = aim_basis * Vector3(0, 0.15, -0.20)
 	weapon_rig.global_position = controller.global_position + grip_offset
 
 	# Hide left arm only (keep right arm visible for grip hand)
