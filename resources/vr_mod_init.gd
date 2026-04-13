@@ -68,6 +68,15 @@ var _nvg_zone_offset := Vector3(0.0, 0.30, 0.0)   # Head-relative, above head
 var _nvg_zone_radius := 0.25
 var _hand_in_nvg_zone := {"left": false, "right": false}  # Edge-detection for haptic
 
+# NVG overlay system
+var _nvg_active := false                # tracks game's NVG Overlay.visible
+var _nvg_overlay_mesh: MeshInstance3D   # fullscreen quad parented to xr_camera
+var _nvg_mono := false                  # config: mono vision (same image both eyes)
+var _nvg_mono_viewport: SubViewport     # mono render SubViewport (created on demand)
+var _nvg_mono_camera: Camera3D          # mono render camera (centered between eyes)
+var _nvg_brightness := 2.0             # config: brightness multiplier
+var _nvg_overlay_installed := false
+
 # Per-slot grip offsets in aim-local space (up, forward from controller)
 # Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
 var _slot_grip_offsets := {
@@ -192,6 +201,54 @@ func _update_holster_zone_haptics() -> void:
 			ctrl.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.15, 0.0)
 			print("[VR Mod] ", hand, " hand entered NVG zone")
 		_hand_in_nvg_zone[hand] = in_zone
+
+
+func _update_nvg_overlay(_delta: float) -> void:
+	if not _nvg_overlay_installed:
+		return
+
+	# Poll game's NVG overlay visibility as the true NVG state.
+	# We use modulate.a=0 to hide it visually (not visible=false), so the game's
+	# NVG.gd script can still toggle overlay.visible freely and we can read it.
+	var overlay = get_tree().root.get_node_or_null("Map/Core/UI/NVG/Overlay")
+	if not overlay:
+		return
+	var game_nvg_on: bool = overlay.visible
+
+	# State transition: NVG just turned on
+	if game_nvg_on and not _nvg_active:
+		_nvg_active = true
+		overlay.modulate.a = 0.0  # hide game's 2D overlay from HUD quad (keep visible=true)
+		_nvg_overlay_mesh.visible = true
+		var mat = _nvg_overlay_mesh.material_override as ShaderMaterial
+		mat.set_shader_parameter("brightness", _nvg_brightness)
+		if _nvg_mono:
+			_create_nvg_mono_viewport()
+			_nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+			mat.set_shader_parameter("mono_tex", _nvg_mono_viewport.get_texture())
+			mat.set_shader_parameter("use_mono", true)
+		else:
+			mat.set_shader_parameter("use_mono", false)
+		print("[VR Mod] NVG overlay activated (mono=", _nvg_mono, ")")
+
+	# State transition: NVG just turned off
+	elif not game_nvg_on and _nvg_active:
+		_nvg_active = false
+		overlay.modulate.a = 1.0  # restore game overlay opacity for next activation
+		_nvg_overlay_mesh.visible = false
+		if _nvg_mono_viewport:
+			_nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		print("[VR Mod] NVG overlay deactivated")
+
+	# While NVG active: update shader time + sync mono camera
+	if _nvg_active:
+		# Keep game overlay hidden
+		if overlay:
+			overlay.modulate.a = 0.0
+		var mat = _nvg_overlay_mesh.material_override as ShaderMaterial
+		mat.set_shader_parameter("time_val", Time.get_ticks_msec() / 1000.0)
+		if _nvg_mono and _nvg_mono_camera and xr_camera:
+			_nvg_mono_camera.global_transform = xr_camera.global_transform
 
 
 func _draw_weapon(hand: String, slot: int) -> void:
@@ -446,6 +503,7 @@ func _process(delta: float) -> void:
 
 				# Holster zone haptic feedback
 				_update_holster_zone_haptics()
+				_update_nvg_overlay(delta)
 
 				_update_interface_state()
 				_sync_origin_to_game()
@@ -646,7 +704,54 @@ func _setup_vr_hud() -> void:
 	_hud_installed = true
 	_apply_hud_spread()
 	print("[VR Mod] VR HUD installed (head-locked, ", _hud_width, "m wide)")
+
+	_setup_nvg_overlay()
 	print("[VR Mod] === VR fully active ===")
+
+
+func _setup_nvg_overlay() -> void:
+	_nvg_overlay_mesh = MeshInstance3D.new()
+	_nvg_overlay_mesh.name = "NVGOverlay"
+	var quad = QuadMesh.new()
+	quad.size = Vector2(4.0, 4.0)
+	_nvg_overlay_mesh.mesh = quad
+
+	var shader = Shader.new()
+	shader.code = NVG_OVERLAY_SHADER
+	var mat = ShaderMaterial.new()
+	mat.shader = shader
+	mat.render_priority = 127
+	mat.set_shader_parameter("tint", Color(0.47, 0.67, 0.51, 1.0))
+	mat.set_shader_parameter("brightness", _nvg_brightness)
+	mat.set_shader_parameter("use_mono", _nvg_mono)
+	_nvg_overlay_mesh.material_override = mat
+
+	_nvg_overlay_mesh.position = Vector3(0.0, 0.0, -0.15)
+	_nvg_overlay_mesh.visible = false
+	xr_camera.add_child(_nvg_overlay_mesh)
+	_nvg_overlay_installed = true
+	print("[VR Mod] NVG overlay installed (mono=", _nvg_mono, " brightness=", _nvg_brightness, ")")
+
+
+func _create_nvg_mono_viewport() -> void:
+	if _nvg_mono_viewport:
+		return
+	_nvg_mono_viewport = SubViewport.new()
+	_nvg_mono_viewport.name = "NVGMonoVP"
+	_nvg_mono_viewport.size = Vector2i(1024, 1024)
+	_nvg_mono_viewport.transparent_bg = false
+	_nvg_mono_viewport.disable_3d = false
+	_nvg_mono_viewport.world_3d = get_viewport().world_3d
+	_nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(_nvg_mono_viewport)
+
+	_nvg_mono_camera = Camera3D.new()
+	_nvg_mono_camera.name = "NVGMonoCamera"
+	_nvg_mono_camera.fov = 90.0
+	_nvg_mono_camera.near = 0.05
+	_nvg_mono_camera.far = 4000.0
+	_nvg_mono_viewport.add_child(_nvg_mono_camera)
+	print("[VR Mod] NVG mono viewport created (1024x1024)")
 
 
 func _update_interface_state() -> void:
@@ -1727,6 +1832,48 @@ func _find_node_by_class(root: Node, class_name_str: String) -> Node:
 	return null
 
 
+# ── NVG overlay shader ─────────────────────────────────────────────────────
+
+const NVG_OVERLAY_SHADER := """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_test_disabled;
+
+uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
+uniform sampler2D mono_tex : filter_linear;
+uniform bool use_mono = false;
+uniform vec4 tint : source_color = vec4(0.47, 0.67, 0.51, 1.0);
+uniform float brightness = 2.0;
+uniform float noise_intensity = 0.15;
+uniform float vignette_strength = 0.8;
+uniform float vignette_radius = 0.9;
+uniform float time_val = 0.0;
+
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void fragment() {
+	vec2 uv = SCREEN_UV;
+	vec3 col;
+	if (use_mono) {
+		col = texture(mono_tex, uv).rgb;
+	} else {
+		col = texture(screen_tex, uv).rgb;
+	}
+	col *= brightness;
+	float lum = dot(col, vec3(0.299, 0.587, 0.114));
+	col = vec3(lum) * tint.rgb;
+	float n = hash(uv * 500.0 + vec2(time_val * 10.0, 0.0));
+	col += (n - 0.5) * noise_intensity;
+	float dist = length(uv - 0.5) * 2.0;
+	float vig = smoothstep(vignette_radius, vignette_radius - vignette_strength, dist);
+	col *= vig;
+	ALBEDO = col;
+	ALPHA = 1.0;
+}
+"""
+
+
 # ── Scope PIP system — hijack game's SubViewport + Camera for VR ─────────
 
 const SCOPE_PIP_SHADER := """
@@ -2169,6 +2316,8 @@ func _load_config() -> void:
 				var nz = data["nvg_zone"]
 				_nvg_zone_offset.y = nz.get("y", 0.30)
 				_nvg_zone_radius = nz.get("radius", 0.25)
+				_nvg_brightness = nz.get("brightness", 2.0)
+				_nvg_mono = nz.get("mono", false)
 			if data.has("weapon_offsets"):
 				var wo = data["weapon_offsets"]
 				for slot in [1, 2, 3, 4]:
@@ -2473,6 +2622,8 @@ func _populate_config_ui() -> void:
 	var grid_nvg = _mk_grid(vbox)
 	_add_stepper_row(grid_nvg, "Radius", _nvg_zone_radius, 0.05, 0.5, 0.01, "_on_cfg_nvg_radius")
 	_add_stepper_row(grid_nvg, "Y (Height)", _nvg_zone_offset.y, 0.0, 0.6, 0.01, "_on_cfg_nvg_y")
+	_add_stepper_row(grid_nvg, "Brightness", _nvg_brightness, 1.0, 5.0, 0.25, "_on_cfg_nvg_brightness")
+	_add_toggle_row(grid_nvg, "Mono Vision", ["Off", "On"], 1 if _nvg_mono else 0, "_on_cfg_nvg_mono")
 
 	_mk_sep(vbox)
 
@@ -2788,6 +2939,22 @@ func _on_cfg_nvg_radius(val: float) -> void:
 	_nvg_zone_radius = val
 func _on_cfg_nvg_y(val: float) -> void:
 	_nvg_zone_offset.y = val
+func _on_cfg_nvg_brightness(val: float) -> void:
+	_nvg_brightness = val
+	if _nvg_overlay_installed and _nvg_overlay_mesh and _nvg_overlay_mesh.material_override:
+		(_nvg_overlay_mesh.material_override as ShaderMaterial).set_shader_parameter("brightness", val)
+func _on_cfg_nvg_mono(idx: int) -> void:
+	_nvg_mono = (idx == 1)
+	if _nvg_active and _nvg_overlay_mesh and _nvg_overlay_mesh.material_override:
+		var mat = _nvg_overlay_mesh.material_override as ShaderMaterial
+		if _nvg_mono:
+			_create_nvg_mono_viewport()
+			_nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+			mat.set_shader_parameter("mono_tex", _nvg_mono_viewport.get_texture())
+		else:
+			if _nvg_mono_viewport:
+				_nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		mat.set_shader_parameter("use_mono", _nvg_mono)
 
 
 func _on_cfg_save_close() -> void:
@@ -2978,7 +3145,9 @@ func _save_full_config() -> void:
 	# NVG zone
 	data["nvg_zone"] = {
 		"y": snapped(_nvg_zone_offset.y, 0.001),
-		"radius": _nvg_zone_radius
+		"radius": _nvg_zone_radius,
+		"brightness": _nvg_brightness,
+		"mono": _nvg_mono
 	}
 
 	# Preserve existing weapon_offsets (already in data from the read above)
