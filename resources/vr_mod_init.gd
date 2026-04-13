@@ -1779,7 +1779,7 @@ func _update_hand_visibility() -> void:
 			if grab_ray and grab_ray.is_colliding():
 				var c = grab_ray.get_collider()
 				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
-				if not pointing_at_grabbable and c.get_script() != null:
+				if not pointing_at_grabbable and c.is_in_group("Interactable"):
 					pointing_at_interactable = true
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
@@ -2770,6 +2770,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_dump_weapon_tree()
 	if event is InputEventKey and event.pressed and event.keycode == KEY_F11:
 		_dump_nvg_and_environment()
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F12:
+		_dump_ray_target()
 
 
 func _toggle_config_screen() -> void:
@@ -3721,6 +3723,64 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 	f.store_line(line)
 	for child in node.get_children():
 		_dump_weapon_node(f, child, depth + 1, max_depth)
+
+
+# ── Ray target debug dump (F12) ────────────────────────────────────────────
+
+func _dump_ray_target() -> void:
+	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
+	if not f:
+		return
+	f.seek_end(0)
+	f.store_line("")
+	f.store_line("=== RAY TARGET DUMP (F12) " + Time.get_datetime_string_from_system() + " ===")
+	for ray_info in [["Right GrabRay", _grab_ray_right], ["Left GrabRay", _grab_ray_left]]:
+		var label: String = ray_info[0]
+		var ray: RayCast3D = ray_info[1]
+		f.store_line("  " + label + ":")
+		if not ray or not ray.is_colliding():
+			f.store_line("    (not colliding)")
+			continue
+		var c = ray.get_collider()
+		if not c:
+			f.store_line("    (collider null)")
+			continue
+		f.store_line("    Class: " + c.get_class())
+		f.store_line("    Path: " + str(c.get_path()))
+		f.store_line("    Script: " + (str(c.get_script().resource_path) if c.get_script() else "none"))
+		if c is CollisionObject3D:
+			f.store_line("    collision_layer: " + str(c.collision_layer) + " (bin: " + _bits_str(c.collision_layer) + ")")
+			f.store_line("    collision_mask: " + str(c.collision_mask) + " (bin: " + _bits_str(c.collision_mask) + ")")
+		f.store_line("    Groups: " + str(c.get_groups()))
+		f.store_line("    Visible: " + str(c.visible if c is CanvasItem or c is Node3D else "n/a"))
+		# Walk parents up to /root/Map
+		var parent_chain := ""
+		var p = c.get_parent()
+		var depth := 0
+		while p and depth < 10:
+			var pscript = str(p.get_script().resource_path) if p.get_script() else ""
+			var pinfo = p.name + " (" + p.get_class() + ")"
+			if pscript != "":
+				pinfo += " script=" + pscript
+			if p is CollisionObject3D:
+				pinfo += " layer=" + str(p.collision_layer)
+			parent_chain += "    -> " + pinfo + "\n"
+			if p.name == "Map" or p == get_tree().root:
+				break
+			p = p.get_parent()
+			depth += 1
+		f.store_line("    Parent chain:")
+		f.store_line(parent_chain)
+	f.close()
+	print("[VR Mod] Ray target dumped to log (F12)")
+
+func _bits_str(val: int) -> String:
+	var s := ""
+	for i in range(20):
+		if val & (1 << i):
+			s += str(i + 1) + ","
+	return s.trim_suffix(",") if s != "" else "none"
 
 
 # ── HUD tree debug dump (F9) ───────────────────────────────────────────────
