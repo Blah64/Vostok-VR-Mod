@@ -1334,7 +1334,12 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if hand == "left":
 				_inject_action("interface", true)  # Y = toggle inventory
 			else:
-				_inject_action("interact", true)
+				if _holster_state == HolsterState.DRAWN:
+					_inject_key(KEY_F, true)
+					_inject_key(KEY_F, false)
+					print("[VR Mod] FIRE MODE toggled (B button)")
+				else:
+					_inject_action("interact", true)
 		"menu_button":
 			_inject_action("escape", true)
 		"primary_click":
@@ -1396,7 +1401,8 @@ func _on_button_released(button_name: String, hand: String) -> void:
 			if hand == "left":
 				_inject_action("interface", false)
 			else:
-				_inject_action("interact", false)
+				if _holster_state != HolsterState.DRAWN:
+					_inject_action("interact", false)
 		"menu_button":
 			_inject_action("escape", false)
 		"primary_click":
