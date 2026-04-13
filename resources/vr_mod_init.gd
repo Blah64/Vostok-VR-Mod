@@ -16,6 +16,7 @@ var right_controller: XRController3D
 var game_camera: Camera3D
 var _phase := 0  # 0=waiting_for_camera, 1=xr_activating, 2=running
 var _frames_waited := 0
+var _level_transition_count := 0
 var _xr_ready := false
 var _weapons_reparented := false
 
@@ -536,6 +537,11 @@ func _process(delta: float) -> void:
 				_update_holster_zone_haptics()
 				_update_nvg_overlay(delta)
 
+				# Keep game camera from reclaiming "current" (causes blur/glow artifacts)
+				if game_camera and is_instance_valid(game_camera) and game_camera.current:
+					game_camera.current = false
+					xr_camera.current = true
+
 				_update_interface_state()
 				_sync_origin_to_game()
 				_process_input(delta)
@@ -1041,7 +1047,8 @@ func _attach_rig_to_camera() -> void:
 
 func _on_level_transition() -> void:
 	# Reset state that depends on game scene nodes (freed during level change).
-	print("[VR Mod] Level transition — resetting scene-dependent state")
+	_level_transition_count += 1
+	print("[VR Mod] Level transition #", _level_transition_count, " — resetting scene-dependent state")
 	_weapons_reparented = false
 	_weapon_loaded = false
 	_holster_state = HolsterState.UNARMED
@@ -1052,6 +1059,19 @@ func _on_level_transition() -> void:
 		_grabbed_object = null
 		_grab_hand = ""
 	_nvg_active = false
+	if _nvg_overlay_mesh:
+		_nvg_overlay_mesh.visible = false
+
+	# Re-assert XR camera ownership — the new level's camera sets current=true,
+	# which makes Godot apply its Environment/CameraAttributes (glow, DOF, etc.)
+	# to the render pipeline, causing blurry menus.
+	if xr_camera:
+		xr_camera.current = true
+	get_viewport().use_xr = true
+	if game_camera:
+		game_camera.current = false
+	print("[VR Mod] XR camera re-asserted as current")
+
 	_log("Level transition reset complete, camera at " + str(game_camera.global_position))
 
 
