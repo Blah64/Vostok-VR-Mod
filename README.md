@@ -41,6 +41,8 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 | Left stick click | Sprint |
 | Right stick click | Crouch |
 | Menu button | Pause / escape |
+| X (left, weapon holstered) | Toggle flashlight |
+| Trigger (above head, unarmed) | Toggle night vision goggles |
 
 ### Holster System
 
@@ -71,7 +73,7 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 |-------|--------|
 | Weapon hand trigger | Fire |
 | Support hand trigger | Reload |
-| Support hand trigger (while gripping) | Toggle flashlight |
+| Support hand trigger (while gripping) | Toggle laser attachment |
 | Support hand grip | Two-hand grip (stabilised aim) |
 | Right stick up / down (weapon drawn, variable scope) | Zoom in / out |
 | B (right) | Interact with objects |
@@ -130,6 +132,7 @@ to discard changes for this session.
 | **Controls** | Dominant hand |
 | **Holster Zones** | Zone radius, per-slot X/Y/Z position for all 4 holsters |
 | **Bag Zone** | Inventory pickup zone radius and X/Y/Z position |
+| **NVG Zone** | Night vision toggle zone radius and height above head |
 
 ---
 

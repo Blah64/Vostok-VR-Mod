@@ -63,6 +63,11 @@ var _bag_zone_offset := Vector3(0.15, -0.10, 0.35)  # Right-back, upper body (ya
 var _bag_zone_radius := 0.35
 var _grab_in_bag_zone := false  # For haptic edge-detection while holding item
 
+# NVG zone: reach above head to toggle night vision goggles
+var _nvg_zone_offset := Vector3(0.0, 0.30, 0.0)   # Head-relative, above head
+var _nvg_zone_radius := 0.25
+var _hand_in_nvg_zone := {"left": false, "right": false}  # Edge-detection for haptic
+
 # Per-slot grip offsets in aim-local space (up, forward from controller)
 # Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
 var _slot_grip_offsets := {
@@ -139,6 +144,13 @@ func _is_in_bag_zone(world_pos: Vector3) -> bool:
 	return local.distance_to(_bag_zone_offset) < _bag_zone_radius
 
 
+func _is_in_nvg_zone(world_pos: Vector3) -> bool:
+	if not xr_camera or not is_instance_valid(xr_camera):
+		return false
+	var head_pos = xr_camera.global_position
+	return world_pos.distance_to(head_pos + _nvg_zone_offset) < _nvg_zone_radius
+
+
 func _update_holster_zone_haptics() -> void:
 	# Check each controller against holster zones and pulse haptic on entry
 	for hand in ["left", "right"]:
@@ -168,6 +180,18 @@ func _update_holster_zone_haptics() -> void:
 			_grab_in_bag_zone = in_zone
 	else:
 		_grab_in_bag_zone = false
+
+	# NVG zone haptic: buzz when either hand enters the NVG zone above head
+	for hand in ["left", "right"]:
+		var ctrl = _get_controller(hand)
+		if not ctrl or not ctrl.get_is_active():
+			_hand_in_nvg_zone[hand] = false
+			continue
+		var in_zone := _is_in_nvg_zone(ctrl.global_position)
+		if in_zone and not _hand_in_nvg_zone[hand]:
+			ctrl.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.15, 0.0)
+			print("[VR Mod] ", hand, " hand entered NVG zone")
+		_hand_in_nvg_zone[hand] = in_zone
 
 
 func _draw_weapon(hand: String, slot: int) -> void:
@@ -974,7 +998,15 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				_inject_action("left_mouse", true)
 			else:
-				if is_weapon_hand and _holster_state == HolsterState.DRAWN:
+				# NVG zone: trigger above head toggles night vision
+				var _trig_ctrl = _get_controller(hand)
+				var _in_nvg = _trig_ctrl and _is_in_nvg_zone(_trig_ctrl.global_position) and _grabbed_object == null
+				if _in_nvg and not (is_weapon_hand and _holster_state == HolsterState.DRAWN):
+					_inject_mouse_button(MOUSE_BUTTON_XBUTTON1, true)
+					_inject_mouse_button(MOUSE_BUTTON_XBUTTON1, false)
+					_trig_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.15, 0.0)
+					print("[VR Mod] NVG toggled (trigger above head)")
+				elif is_weapon_hand and _holster_state == HolsterState.DRAWN:
 					# Weapon hand trigger = fire (only when weapon is raised/drawn)
 					Input.action_press("fire", 1.0)
 					Input.action_press("left_mouse", 1.0)
@@ -982,10 +1014,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_inject_action("left_mouse", true)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				elif is_support_hand and _holster_state in [HolsterState.DRAWN, HolsterState.LOWERED]:
-					# Support hand trigger = reload or flashlight (drawn or lowered)
+					# Support hand trigger = reload or laser (drawn or lowered)
 					if _support_grip_held:
-						_inject_action("flashlight", true)
-						print("[VR Mod] FLASHLIGHT toggled (support trigger + grip)")
+						_inject_key(KEY_T, true)
+						_inject_key(KEY_T, false)
+						print("[VR Mod] LASER toggled (support trigger + grip)")
 					else:
 						_inject_action("reload", true)
 						print("[VR Mod] RELOAD pressed (support trigger)")
@@ -1044,6 +1077,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
 					print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
 					print("[VR Mod] A=Save, X=Discard")
+				else:
+					# X button when unarmed/lowered = toggle flashlight
+					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, true)
+					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, false)
+					print("[VR Mod] FLASHLIGHT toggled (X button)")
 			else:
 				if _adjust_mode:
 					_save_grip_config()
@@ -1084,7 +1122,6 @@ func _on_button_released(button_name: String, hand: String) -> void:
 					_inject_action("left_mouse", false)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
 				else:
-					_inject_action("flashlight", false)
 					_inject_action("reload", false)
 		"grip_click":
 			if _interface_open:
@@ -2128,6 +2165,10 @@ func _load_config() -> void:
 					var b = data["holsters"]["bag"]
 					_bag_zone_offset = Vector3(b.get("x", 0.15), b.get("y", -0.10), b.get("z", 0.35))
 					_bag_zone_radius = b.get("radius", 0.35)
+			if data.has("nvg_zone"):
+				var nz = data["nvg_zone"]
+				_nvg_zone_offset.y = nz.get("y", 0.30)
+				_nvg_zone_radius = nz.get("radius", 0.25)
 			if data.has("weapon_offsets"):
 				var wo = data["weapon_offsets"]
 				for slot in [1, 2, 3, 4]:
@@ -2414,6 +2455,14 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_bag, "X (L/R)", _bag_zone_offset.x, -0.5, 0.5, 0.01, "_on_cfg_bag_x")
 	_add_stepper_row(grid_bag, "Y (U/D)", _bag_zone_offset.y, -0.5, 0.5, 0.01, "_on_cfg_bag_y")
 	_add_stepper_row(grid_bag, "Z (F/B)", _bag_zone_offset.z, 0.0, 0.8, 0.01, "_on_cfg_bag_z")
+
+	_mk_sep(vbox)
+
+	# ── NVG Zone (Above Head) ──
+	_mk_header(vbox, "NVG Zone (Above Head)")
+	var grid_nvg = _mk_grid(vbox)
+	_add_stepper_row(grid_nvg, "Radius", _nvg_zone_radius, 0.05, 0.5, 0.01, "_on_cfg_nvg_radius")
+	_add_stepper_row(grid_nvg, "Y (Height)", _nvg_zone_offset.y, 0.0, 0.6, 0.01, "_on_cfg_nvg_y")
 
 	_mk_sep(vbox)
 
@@ -2725,6 +2774,11 @@ func _on_cfg_bag_y(val: float) -> void:
 func _on_cfg_bag_z(val: float) -> void:
 	_bag_zone_offset.z = val
 
+func _on_cfg_nvg_radius(val: float) -> void:
+	_nvg_zone_radius = val
+func _on_cfg_nvg_y(val: float) -> void:
+	_nvg_zone_offset.y = val
+
 
 func _on_cfg_save_close() -> void:
 	_save_full_config()
@@ -2904,6 +2958,12 @@ func _save_full_config() -> void:
 			"z": snapped(_bag_zone_offset.z, 0.001),
 			"radius": _bag_zone_radius
 		}
+	}
+
+	# NVG zone
+	data["nvg_zone"] = {
+		"y": snapped(_nvg_zone_offset.y, 0.001),
+		"radius": _nvg_zone_radius
 	}
 
 	# Preserve existing weapon_offsets (already in data from the read above)
