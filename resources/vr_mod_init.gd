@@ -2866,11 +2866,18 @@ func _populate_config_ui() -> void:
 	root.anchor_right = 1.0
 	root.anchor_bottom = 1.0
 
+	# Outer layout: scroll area (expands) + button row (pinned, never scrolls)
+	var outer = VBoxContainer.new()
+	outer.name = "CfgOuter"
+	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	outer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(outer)
+
 	var scroll = ScrollContainer.new()
 	scroll.name = "CfgScroll"
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(scroll)
+	outer.add_child(scroll)
 
 	var vbox = VBoxContainer.new()
 	vbox.name = "CfgVBox"
@@ -2978,12 +2985,15 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_watch, "Rot Y", _watch_rot.y, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_y")
 	_add_stepper_row(grid_watch, "Rot Z", _watch_rot.z, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_z")
 
-	_mk_sep(vbox)
+	# ── Save & Close (pinned outside scroll — always visible) ──
+	var btn_sep = HSeparator.new()
+	btn_sep.add_theme_constant_override("separation", 10)
+	outer.add_child(btn_sep)
 
-	# ── Save & Close ──
 	var btn_row = HBoxContainer.new()
 	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_child(btn_row)
+	btn_row.custom_minimum_size = Vector2(0, 52)
+	outer.add_child(btn_row)
 
 	var save_btn = _mk_btn("Save & Close", Color(0.2, 0.7, 0.3))
 	save_btn.pressed.connect(Callable(self, "_on_cfg_save_close"))
@@ -3481,7 +3491,7 @@ func _inject_config_click(pressed: bool) -> void:
 func _scroll_config_panel(amount: float) -> void:
 	if not _config_panel_vp:
 		return
-	var scroll = _config_panel_vp.get_node_or_null("CfgRoot/CfgScroll")
+	var scroll = _config_panel_vp.get_node_or_null("CfgRoot/CfgOuter/CfgScroll")
 	if scroll and scroll is ScrollContainer:
 		scroll.scroll_vertical += int(amount)
 
