@@ -993,15 +993,15 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
 				_inject_action("context", true)
+			elif _holster_cooldown > 0.0:
+				print("[VR Mod] Grip blocked - holster cooldown (" + str(snappedf(_holster_cooldown, 0.01)) + "s remaining)")
 			else:
 				var ctrl = _get_controller(hand)
 				var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
 				match _holster_state:
 					HolsterState.UNARMED:
-						if zone > 0 and _holster_cooldown <= 0.0:
+						if zone > 0:
 							_draw_weapon(hand, zone)
-						elif zone > 0:
-							print("[VR Mod] Draw blocked - holster cooldown (" + str(snappedf(_holster_cooldown, 0.01)) + "s remaining)")
 						else:
 							_try_grab(hand)
 					HolsterState.DRAWN:
