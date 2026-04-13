@@ -74,9 +74,10 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 | Weapon hand trigger | Fire |
 | Support hand trigger | Reload |
 | Support hand trigger (while gripping) | Toggle laser attachment |
-| Support hand grip | Two-hand grip (stabilised aim) |
+| Support hand grip | Two-hand grip (stabilised aim, rifles/shotguns only) |
 | Right stick up / down (weapon drawn, variable scope) | Zoom in / out |
-| B (right) | Interact with objects |
+| B (right, weapon drawn) | Cycle fire mode |
+| B (right, weapon lowered) | Interact with objects |
 | X (left, while weapon drawn) | Enter grip adjust mode |
 
 > **Note:** All weapon inputs follow the weapon hand dynamically. If you draw with your
@@ -92,7 +93,7 @@ zoom out while the weapon is drawn. A haptic pulse confirms each step.
 Release the weapon hand grip (away from a holster zone) to **lower** the weapon — it stays
 in your hand but you no longer grip it. A laser appears on the weapon hand to help aim
 interactions. Press **B** to interact with whatever you're pointing at. Re-grip with the
-weapon hand to raise the weapon again.
+weapon hand (or support hand) to raise the weapon again.
 
 ### Grabbing Items
 
