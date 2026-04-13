@@ -32,6 +32,7 @@ var _grab_ray_left: RayCast3D   # Grab raycast on left controller
 var _grab_ray_right: RayCast3D  # Grab raycast on right controller
 var _throw_samples: Array = []  # Recent [position, time] pairs for throw velocity
 var _weapon_loaded := false  # Track if weapon appeared
+var _weapon_is_long := false  # True for rifles/shotguns that support two-hand aim
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
 var _pending_holster_key: int = -1  # KEY_N pending delayed injection on holster; -1 = none
 var _holster_cooldown := 0.0        # Seconds remaining before a new draw is allowed after holstering
@@ -277,6 +278,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 
 	# Start weapon load detection + auto-raise sequence
 	_weapon_loaded = false
+	_weapon_is_long = false
 	_weapon_raise_timer = 3.0
 	_scroll_cooldown = 1.0
 	_fixed_reticle_instances.clear()  # Re-scan for reticle on new weapon
@@ -335,6 +337,7 @@ func _holster_weapon() -> void:
 	_weapon_hand = ""
 	_weapon_slot = 0
 	_weapon_loaded = false
+	_weapon_is_long = false
 	_support_grip_held = false
 	_holster_cooldown = 0.8  # Block re-draw until animation completes
 
@@ -499,6 +502,7 @@ func _process(delta: float) -> void:
 						_weapon_loaded = true
 						var wep = mgr.get_child(0)
 						print("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
+						_weapon_is_long = _classify_weapon_is_long(wep)
 						# Auto-raise weapon after short delay
 						_weapon_raise_timer = 0.5
 						print("[VR Mod] Will auto-raise weapon in 0.5s")
@@ -1051,6 +1055,7 @@ func _on_level_transition() -> void:
 	print("[VR Mod] Level transition #", _level_transition_count, " — resetting scene-dependent state")
 	_weapons_reparented = false
 	_weapon_loaded = false
+	_weapon_is_long = false
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
 	_watch_crop_computed = false
@@ -1278,9 +1283,12 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 								_holster_weapon()
 								_draw_weapon(hand, zone)
 							else:
-								# Support hand grip = two-hand aim
-								_support_grip_held = true
-								print("[VR Mod] Support grip: two-hand aim ON")
+								# Support hand grip = two-hand aim (long weapons only)
+								if _weapon_is_long:
+									_support_grip_held = true
+									print("[VR Mod] Support grip: two-hand aim ON")
+								else:
+									print("[VR Mod] Support grip ignored — short weapon, no two-hand aim")
 					HolsterState.LOWERED:
 						if zone > 0 and zone != _weapon_slot:
 							# Near a different holster — holster old, draw new
@@ -1292,7 +1300,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						else:
 							# Different hand, no new holster — raise with original hand
 							_raise_weapon()
-							_support_grip_held = true
+							if _weapon_is_long:
+								_support_grip_held = true
 		"ax_button":  # A on right, X on left (physical mapping)
 			if hand == "left":
 				# X button: adjust mode when weapon drawn
@@ -2122,6 +2131,37 @@ func _find_node_by_class(root: Node, class_name_str: String) -> Node:
 		if found:
 			return found
 	return null
+
+
+func _classify_weapon_is_long(weapon_rig: Node3D) -> bool:
+	# Slots 3 (knife) and 4 (grenade) are never long weapons
+	if _weapon_slot == 3 or _weapon_slot == 4:
+		_log("Weapon class: short (slot " + str(_weapon_slot) + ")")
+		return false
+	# Check weapon data resource for weaponType property (authoritative)
+	var data_res = weapon_rig.get("data")
+	if data_res and data_res is Resource:
+		var weapon_type = data_res.get("weaponType")
+		var subtype = data_res.get("subtype")
+		_log("Weapon classify: name=" + weapon_rig.name + " slot=" + str(_weapon_slot)
+			+ " weaponType=" + str(weapon_type) + " subtype=" + str(subtype))
+		if weapon_type != null:
+			var wt: String = str(weapon_type).to_lower()
+			# Long weapon types: rifle, shotgun, SMG, carbine, DMR, sniper, LMG, etc.
+			# Short weapon types: pistol
+			if "pistol" in wt:
+				_log("Weapon class: short (weaponType=" + str(weapon_type) + ")")
+				return false
+			# Any non-pistol firearm type is long
+			_log("Weapon class: long (weaponType=" + str(weapon_type) + ")")
+			return true
+	# Fallback: slot 2 defaults to short, slot 1 defaults to long
+	_log("Weapon classify: name=" + weapon_rig.name + " slot=" + str(_weapon_slot) + " (no data resource)")
+	if _weapon_slot == 2:
+		_log("Weapon class: short (sidearm slot, no weaponType)")
+		return false
+	_log("Weapon class: long (default for slot " + str(_weapon_slot) + ")")
+	return true
 
 
 # ── Wrist watch crop shader ───────────────────────────────────────────────
