@@ -2035,8 +2035,13 @@ func _sync_weapon_to_controller() -> void:
 			use_two_hand = true
 			# Forward = from dominant hand toward off-hand
 			var forward = (off_controller.global_position - controller.global_position).normalized()
-			var up = controller.global_basis.y
-			var right_vec = up.cross(forward).normalized()
+			# Use world up; fall back to controller Y when aiming nearly vertical
+			var up = Vector3.UP
+			var right_vec = up.cross(forward)
+			if right_vec.length_squared() < 0.01:
+				up = controller.global_basis.y
+				right_vec = up.cross(forward)
+			right_vec = right_vec.normalized()
 			var corrected_up = forward.cross(right_vec).normalized()
 			aim_basis = Basis(right_vec, corrected_up, -forward)
 			aim_basis = aim_basis * Basis(Vector3.UP, deg_to_rad(180))
