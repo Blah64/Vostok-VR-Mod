@@ -63,7 +63,7 @@
 		"width": 3.0
 	},
 	"nvg_zone": {
-		"brightness": 2.0,
+		"brightness": 5.0,
 		"mono": true,
 		"radius": 0.25,
 		"y": 0.3
