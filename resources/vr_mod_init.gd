@@ -340,6 +340,7 @@ func _holster_weapon() -> void:
 
 # HUD
 var hud_viewport: SubViewport
+var _watch_b_vp: SubViewport = null  # Second viewport for Medical element (separate crop)
 var hud_mesh: MeshInstance3D
 var _hud_installed := false
 var _interface_open := false
@@ -360,8 +361,25 @@ var _hud_smooth_follow := false
 var _hud_smooth_speed := 3.0
 var _hud_yaw := 0.0         # Lagged yaw for smooth follow — tracked separately, never read from mesh
 var _hud_spread := 1.0      # HUD element spread (1.0 = default, <1 = closer together)
+var _hud_spread_active := 1.0  # Spread value actually used by _apply_hud_spread (watch vs menu)
 var _menu_laser_uv_x := 0.02  # Horizontal laser offset for menu/inventory (UV units)
 var _menu_laser_uv_y := 0.06  # Vertical laser offset for menu/inventory (UV units)
+
+# Wrist watch HUD
+var _watch_mesh: MeshInstance3D       # Watch face quad, child of hand model Node3D
+var _watch_alpha := 0.0               # Fade alpha (0=hidden, 1=visible)
+var _watch_size := 0.12               # Watch quad side length (metres)
+var _watch_glance_enabled := false    # Glance-to-reveal on/off (off = always visible)
+var _watch_glance_angle := 40.0       # Max gaze angle (degrees) for reveal
+var _watch_fade_speed := 8.0          # Alpha lerp speed (units/sec)
+var _watch_spread := 0.15             # Compact spread for watch mode
+var _watch_offset := Vector3(0.0, 0.02, -0.05)  # X/Y/Z offset on hand model
+var _watch_rot := Vector3(0.0, 0.0, 0.0)         # Extra rotation offset in degrees (base -90 X is always applied)
+var _vitals_node: Control = null             # Reference only — stays in game HUD tree
+var _medical_node: Control = null            # Reference only — stays in game HUD tree
+var _watch_crop_delay := 0                   # Countdown frames before reading node rects
+var _watch_crop_computed := false            # True once crop canvas_transform is applied
+var _watch_crop_retries := 0                 # How many times _compute_watch_crop has run
 
 # Config screen
 var _config_screen_open := false
@@ -524,6 +542,16 @@ func _process(delta: float) -> void:
 
 				_update_smooth_hud(delta)
 
+				# Wrist watch glance-to-reveal (only during gameplay)
+				if not _interface_open:
+					_update_watch_glance(delta)
+
+				# Delayed crop computation: wait for HUD layout to settle
+				if _watch_crop_delay > 0:
+					_watch_crop_delay -= 1
+					if _watch_crop_delay == 0:
+						_compute_watch_crop()
+
 				if _config_screen_open:
 					_update_config_laser()
 				elif _interface_open:
@@ -674,6 +702,7 @@ func _setup_vr_hud() -> void:
 	var main_vp = get_viewport()
 	var vp_size = main_vp.get_visible_rect().size
 
+	_log("HUD vp_size=" + str(vp_size))
 	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
 	if ui_node:
 		print("[VR Mod] UI node: ", ui_node.get_path(), " vis=", ui_node.visible)
@@ -687,6 +716,17 @@ func _setup_vr_hud() -> void:
 	hud_viewport.world_2d = main_vp.world_2d
 	hud_viewport.gui_disable_input = true
 	add_child(hud_viewport)
+
+	# Second viewport for Medical element — same setup, separate canvas_transform
+	_watch_b_vp = SubViewport.new()
+	_watch_b_vp.name = "VRWatchMedVP"
+	_watch_b_vp.size = Vector2i(int(vp_size.x), int(vp_size.y))
+	_watch_b_vp.transparent_bg = true
+	_watch_b_vp.disable_3d = true
+	_watch_b_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_watch_b_vp.world_2d = main_vp.world_2d
+	_watch_b_vp.gui_disable_input = true
+	add_child(_watch_b_vp)
 
 	hud_mesh = MeshInstance3D.new()
 	hud_mesh.name = "VRHudPanel"
@@ -707,13 +747,26 @@ func _setup_vr_hud() -> void:
 
 	# Put HUD on layer 20 only so NVG mono camera doesn't render it
 	hud_mesh.layers = (1 << 19)
-	# Start head-locked
-	hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
-	xr_camera.add_child(hud_mesh)
+
+	# Park hud_mesh invisibly under self — watch takes over during gameplay
+	# hud_mesh is still used for menus/inventory (shown by _on_interface_opened)
+	hud_mesh.visible = false
+	add_child(hud_mesh)
 
 	_hud_installed = true
+
+	# Set compact spread, set up dedicated watch content VP, then create watch mesh
+	_hud_spread_active = _watch_spread
 	_apply_hud_spread()
-	print("[VR Mod] VR HUD installed (head-locked, ", _hud_width, "m wide)")
+	_setup_watch_content()
+	_log("HUD viewport ready, creating watch mesh...")
+	_create_watch_mesh()
+	if _watch_mesh:
+		_log("Watch mesh created OK, visible=" + str(_watch_mesh.visible) + " layers=" + str(_watch_mesh.layers))
+	else:
+		_log("WARNING: watch mesh is null after _create_watch_mesh!")
+
+	print("[VR Mod] VR HUD installed (wrist watch mode)")
 
 	_setup_nvg_overlay()
 	print("[VR Mod] === VR fully active ===")
@@ -804,9 +857,25 @@ func _on_interface_opened() -> void:
 	if not hud_mesh:
 		return
 
-	# Detach from camera and place in world space in front of player
-	var global_xform = hud_mesh.global_transform
-	hud_mesh.get_parent().remove_child(hud_mesh)
+	# Hide watch during menus
+	if _watch_mesh:
+		_watch_mesh.visible = false
+		_watch_alpha = 0.0
+		var wmat = _watch_mesh.material_override as ShaderMaterial
+		if wmat:
+			wmat.set_shader_parameter("alpha", 0.0)
+
+	# Restore normal spread and full canvas for floating menu
+	_hud_spread_active = _hud_spread
+	_apply_hud_spread()
+	if hud_viewport:
+		hud_viewport.canvas_transform = Transform2D.IDENTITY
+	if _watch_b_vp:
+		_watch_b_vp.canvas_transform = Transform2D.IDENTITY
+
+	# Detach hud_mesh from parked location and place in world space
+	if hud_mesh.get_parent():
+		hud_mesh.get_parent().remove_child(hud_mesh)
 
 	# Place in front of camera at current look direction
 	var cam_pos = xr_camera.global_position
@@ -821,6 +890,7 @@ func _on_interface_opened() -> void:
 
 	# Add to scene root so it's world-fixed
 	get_tree().root.add_child(hud_mesh)
+	hud_mesh.visible = true
 	hud_mesh.global_position = menu_pos
 	hud_mesh.look_at(cam_pos, Vector3.UP)
 	# look_at makes it face camera, but quad's front might be wrong direction
@@ -847,32 +917,30 @@ func _on_interface_opened() -> void:
 
 
 func _on_interface_closed() -> void:
-	print("[VR Mod] Interface CLOSED - switching to head-locked mode")
+	print("[VR Mod] Interface CLOSED - switching to wrist watch mode")
 	if not hud_mesh:
 		return
 
-	if _hud_smooth_follow:
-		# Seed yaw from camera direction so smooth follow resumes correctly
-		if xr_camera:
-			_hud_yaw = xr_camera.global_rotation.y
-		# HUD is already in world space (placed there by _on_interface_opened) — leave it
-		# _update_smooth_hud will take over next frame
-	else:
-		# Instant: reparent back to camera
-		if hud_mesh.get_parent():
-			hud_mesh.get_parent().remove_child(hud_mesh)
-		xr_camera.add_child(hud_mesh)
-		hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
-		hud_mesh.rotation = Vector3.ZERO
+	# Restore spread=1.0 for watch (elements at known positions for crop)
+	_hud_spread_active = 1.0
+	_apply_hud_spread()
+	if _watch_crop_computed and hud_viewport:
+		# Re-derive and apply the crop (spread may have changed positions)
+		_watch_crop_delay = 1
+		_watch_crop_retries = 0
 
-	# Scale back down for HUD
-	var aspect = float(hud_viewport.size.y) / float(hud_viewport.size.x)
-	(hud_mesh.mesh as QuadMesh).size = Vector2(_hud_width, _hud_width * aspect)
+	# Park hud_mesh invisibly — watch takes over during gameplay
+	if hud_mesh.get_parent():
+		hud_mesh.get_parent().remove_child(hud_mesh)
+	hud_mesh.visible = false
+	add_child(hud_mesh)
 
 	# Hide laser pointer and return to grab-range mode
 	_menu_open = false
 	if _laser_mesh and not _config_screen_open:
 		_laser_mesh.visible = false
+
+	# Watch will be revealed by glance logic next frame
 
 
 func _update_laser_pointer() -> void:
@@ -1509,6 +1577,163 @@ func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 	print("[VR Mod] Created hand model: ", model_name)
 
 
+func _create_watch_mesh() -> void:
+	# Determine non-dominant hand
+	var non_dom = "left" if _config_dominant_hand == "right" else "right"
+	var controller = _get_controller(non_dom)
+	if not controller:
+		_log("WARNING: non-dominant controller not found for watch")
+		return
+
+	# Use a dedicated mount Node3D with no rotation — avoids hand model rotation complexity
+	# CRITICAL: Never add MeshInstance3D directly to XRController3D; always wrap in Node3D
+	var mount = Node3D.new()
+	mount.name = "WatchMount"
+	controller.add_child(mount)
+
+	_watch_mesh = MeshInstance3D.new()
+	_watch_mesh.name = "WristWatch"
+
+	var quad = QuadMesh.new()
+	quad.size = Vector2(_watch_size, _watch_size)
+	_watch_mesh.mesh = quad
+
+	# ShaderMaterial with UV crop + alpha fade
+	var shader = Shader.new()
+	shader.code = WATCH_CROP_SHADER
+	var mat = ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("hud_texture", hud_viewport.get_texture())
+	if _watch_b_vp:
+		mat.set_shader_parameter("medical_tex", _watch_b_vp.get_texture())
+	mat.set_shader_parameter("alpha", 0.0)
+	mat.render_priority = 10
+	_watch_mesh.material_override = mat
+
+	# Use layer 1 so it's definitely in the XR camera cull_mask
+	# (layer 20 would require game camera's cull_mask to include it)
+	_watch_mesh.layers = 1
+
+	# Position: slightly forward and up from the controller tracking point,
+	# rotated so the face points upward (palm-up wrist position)
+	# In controller space: +Z = forward/pointing, +Y = up, +X = right
+	# Watch at 0.05m forward, 0.02m up, face pointing upward
+	_watch_mesh.position = _watch_offset
+	# Base -90 X points the quad face upward; _watch_rot is an additional user offset
+	# applied before the base, giving three independent axes to tune.
+	_watch_mesh.basis = _watch_rot_basis()
+
+	mount.add_child(_watch_mesh)
+	_watch_mesh.visible = false
+	_log("Wrist watch installed on " + non_dom + " hand, mount at " + str(mount.get_path()))
+
+
+func _destroy_watch_mesh() -> void:
+	if _watch_mesh and is_instance_valid(_watch_mesh):
+		# Free the WatchMount parent too
+		var mount = _watch_mesh.get_parent()
+		if mount and is_instance_valid(mount) and mount.name == "WatchMount":
+			mount.queue_free()
+		else:
+			_watch_mesh.queue_free()
+	_watch_mesh = null
+	_watch_alpha = 0.0
+	_teardown_watch_content()
+
+
+func _setup_watch_content() -> void:
+	# Find Vitals and Medical in the game HUD
+	var stats = get_tree().root.get_node_or_null("Map/Core/UI/HUD/Stats")
+	if not stats:
+		_log("WARNING: HUD/Stats not found — watch will show full HUD texture")
+		return
+
+	_vitals_node = stats.get_node_or_null("Vitals") as Control
+	_medical_node = stats.get_node_or_null("Medical") as Control
+
+	if not _vitals_node and not _medical_node:
+		_log("WARNING: Neither Vitals nor Medical found — watch will show full HUD texture")
+		return
+
+	# Nodes stay in the game HUD tree — reparenting breaks their size (containers).
+	# Wait 30 frames for layout to compute, then read their screen rects.
+	# If rects are still zero-size (tutorial / early game), fall back to a
+	# geometry-guided crop after 60 attempts, then stop retrying.
+	_watch_crop_computed = false
+	_watch_crop_delay = 30
+	_watch_crop_retries = 0
+	_log("Watch: found Vitals=" + str(_vitals_node != null) + " Medical=" + str(_medical_node != null) + " — crop will be computed in 30 frames")
+
+
+func _compute_watch_crop() -> void:
+	if not hud_viewport:
+		return
+
+	var vp_w = float(hud_viewport.size.x)
+	var vp_h = float(hud_viewport.size.y)
+
+	# ── Force spread=1.0 so elements land at known canvas positions ──────────
+	# At spread=1.0: Stats container at (vp_w/2, vp_h).
+	# Vitals x = vp_w/2 - vp_w/4 = vp_w/4  (960 for 3840-wide canvas)
+	# Medical x = vp_w/2 + vp_w/4 = 3*vp_w/4 (2880 for 3840-wide canvas)
+	# Elements are ~800px wide and ~270px tall from the bottom of the canvas.
+	_hud_spread_active = 1.0
+	_apply_hud_spread()
+
+	# ── Fixed crop rects proportional to viewport size ────────────────────────
+	var elem_w  = vp_w * 0.208       # ~800 / 3840 at 3840-wide canvas
+	var elem_h  = vp_h * 0.25        # ~270 / 1080
+	var elem_top = vp_h - elem_h     # bottom-aligned
+	var vitals_cx  = vp_w * 0.25    # x=960
+	var medical_cx = vp_w * 0.75    # x=2880
+
+	var vitals_rect  = Rect2(vitals_cx  - elem_w * 0.5, elem_top, elem_w, elem_h)
+	var medical_rect = Rect2(medical_cx - elem_w * 0.5, elem_top, elem_w, elem_h)
+
+	_log("Watch crop: vitals=" + str(vitals_rect) + " medical=" + str(medical_rect))
+
+	# ── Apply canvas_transform — each viewport shows its own element only ─────
+	var sx = vp_w / elem_w
+	var sy = vp_h / elem_h
+
+	var tv = Transform2D()
+	tv[0] = Vector2(sx, 0.0)
+	tv[1] = Vector2(0.0, sy)
+	tv[2] = Vector2(-vitals_rect.position.x * sx, -vitals_rect.position.y * sy)
+	hud_viewport.canvas_transform = tv
+
+	if _watch_b_vp:
+		var tm = Transform2D()
+		tm[0] = Vector2(sx, 0.0)
+		tm[1] = Vector2(0.0, sy)
+		tm[2] = Vector2(-medical_rect.position.x * sx, -medical_rect.position.y * sy)
+		_watch_b_vp.canvas_transform = tm
+
+	_watch_crop_computed = true
+	_log("Watch crop scale=(" + str(snapped(sx, 0.01)) + "," + str(snapped(sy, 0.01)) + ")")
+
+	if _watch_mesh and is_instance_valid(_watch_mesh):
+		# Each viewport is elem_w x elem_h; stacked vertically = elem_w x (2*elem_h)
+		var stacked_aspect = elem_w / (elem_h * 2.0)
+		var quad_w = clamp(_watch_size * stacked_aspect, 0.02, 1.0)
+		var quad_h = _watch_size
+		(_watch_mesh.mesh as QuadMesh).size = Vector2(quad_w, quad_h)
+		_log("Watch quad: " + str(snapped(quad_w, 0.001)) + "m x " + str(snapped(quad_h, 0.001)) + "m (aspect " + str(snapped(stacked_aspect, 0.01)) + ")")
+
+
+func _teardown_watch_content() -> void:
+	# Reset canvas_transforms so the floating menu HUD renders correctly
+	if hud_viewport:
+		hud_viewport.canvas_transform = Transform2D.IDENTITY
+	if _watch_b_vp:
+		_watch_b_vp.canvas_transform = Transform2D.IDENTITY
+	_vitals_node = null
+	_medical_node = null
+	_watch_crop_computed = false
+	_watch_crop_delay = 0
+	_watch_crop_retries = 0
+
+
 func _update_hand_visibility() -> void:
 	var left_hand = left_controller.get_node_or_null("LeftHandModel")
 	var right_hand = right_controller.get_node_or_null("RightHandModel")
@@ -1853,6 +2078,35 @@ func _find_node_by_class(root: Node, class_name_str: String) -> Node:
 		if found:
 			return found
 	return null
+
+
+# ── Wrist watch crop shader ───────────────────────────────────────────────
+
+const WATCH_CROP_SHADER := """
+shader_type spatial;
+render_mode blend_mix, unshaded, cull_disabled, depth_test_disabled;
+
+// hud_viewport is cropped to just the Vitals element.
+// watch_b_vp is cropped to just the Medical element.
+// Each viewport has its own canvas_transform so the elements never overlap.
+uniform sampler2D hud_texture : source_color, filter_linear;
+uniform sampler2D medical_tex : source_color, filter_linear;
+uniform float alpha : hint_range(0.0, 1.0) = 0.0;
+
+void fragment() {
+	vec4 tex;
+	// QuadMesh: UV.y=1 is top of visible face, UV.y=0 is bottom
+	if (UV.y >= 0.5) {
+		// Top half of watch face: Vitals viewport
+		tex = texture(hud_texture, vec2(UV.x, (UV.y - 0.5) * 2.0));
+	} else {
+		// Bottom half of watch face: Medical viewport
+		tex = texture(medical_tex, vec2(UV.x, UV.y * 2.0));
+	}
+	ALBEDO = tex.rgb;
+	ALPHA = tex.a * alpha;
+}
+"""
 
 
 # ── NVG overlay shader ─────────────────────────────────────────────────────
@@ -2360,6 +2614,17 @@ func _load_config() -> void:
 				_hud_smooth_follow = h.get("smooth_follow", false)
 				_hud_smooth_speed = h.get("smooth_speed", 3.0)
 				_hud_spread = h.get("spread", 1.0)
+			if data.has("watch"):
+				var w = data["watch"]
+				_watch_size = w.get("size", 0.12)
+				_watch_glance_enabled = w.get("glance_enabled", false)
+				_watch_glance_angle = w.get("glance_angle", 40.0)
+				_watch_fade_speed = w.get("fade_speed", 8.0)
+				_watch_spread = w.get("spread", 0.15)
+				var wo = w.get("offset", {})
+				_watch_offset = Vector3(wo.get("x", 0.0), wo.get("y", 0.02), wo.get("z", -0.05))
+				var wr = w.get("rot", {})
+				_watch_rot = Vector3(wr.get("x", 0.0), wr.get("y", 0.0), wr.get("z", 0.0))
 			if data.has("menu"):
 				var m = data["menu"]
 				_menu_width = m.get("width", 3.0)
@@ -2419,6 +2684,8 @@ func _update_smooth_hud(delta: float) -> void:
 		return
 	if not hud_mesh:
 		return
+	if not hud_mesh.visible:
+		return
 	if _interface_open:
 		return
 	if hud_mesh.get_parent() == xr_camera:
@@ -2438,6 +2705,50 @@ func _update_smooth_hud(delta: float) -> void:
 	# (no PI offset needed — lagged_basis already points HUD away from player,
 	#  so +Z normal naturally faces back toward player)
 	hud_mesh.global_rotation = Vector3(0.0, _hud_yaw, 0.0)
+
+
+# ── Wrist watch glance ────────────────────────────────────────────────────────
+
+func _update_watch_glance(delta: float) -> void:
+	if not _watch_mesh or not xr_camera:
+		return
+
+	if not _watch_glance_enabled:
+		# Glance disabled — always visible
+		_watch_alpha = 1.0
+		var mat = _watch_mesh.material_override as ShaderMaterial
+		if mat:
+			mat.set_shader_parameter("alpha", 1.0)
+		_watch_mesh.visible = true
+		return
+
+	# Gaze direction (camera forward, world space)
+	var gaze_dir = -xr_camera.global_basis.z
+
+	# Vector from eye to watch (world space)
+	var eye_to_watch = _watch_mesh.global_position - xr_camera.global_position
+	var dist = eye_to_watch.length()
+	if dist < 0.01:
+		return
+	eye_to_watch = eye_to_watch / dist
+
+	# One condition: gaze direction points toward watch
+	var gaze_dot = gaze_dir.dot(eye_to_watch)
+
+	var threshold = cos(deg_to_rad(_watch_glance_angle))
+	var looking = gaze_dot > threshold
+
+	# Smooth fade
+	var target_alpha = 1.0 if looking else 0.0
+	_watch_alpha = move_toward(_watch_alpha, target_alpha, _watch_fade_speed * delta)
+
+	# Apply alpha to shader
+	var mat = _watch_mesh.material_override as ShaderMaterial
+	if mat:
+		mat.set_shader_parameter("alpha", _watch_alpha)
+
+	# Toggle visibility for render cost savings
+	_watch_mesh.visible = _watch_alpha > 0.001
 
 
 # ── Config Screen (F8) ──────────────────────────────────────────────────────
@@ -2649,6 +2960,23 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_nvg, "Y (Height)", _nvg_zone_offset.y, 0.0, 0.6, 0.01, "_on_cfg_nvg_y")
 	_add_stepper_row(grid_nvg, "Brightness", _nvg_brightness, 1.0, 5.0, 0.25, "_on_cfg_nvg_brightness")
 	_add_toggle_row(grid_nvg, "Mono Vision", ["Off", "On"], 1 if _nvg_mono else 0, "_on_cfg_nvg_mono")
+
+	_mk_sep(vbox)
+
+	# ── Wrist Watch ──
+	_mk_header(vbox, "Wrist Watch")
+	var grid_watch = _mk_grid(vbox)
+	_add_toggle_row(grid_watch, "Glance Reveal", ["Off", "On"], 1 if _watch_glance_enabled else 0, "_on_cfg_watch_glance")
+	_add_stepper_row(grid_watch, "Glance Angle", _watch_glance_angle, 20.0, 70.0, 5.0, "_on_cfg_watch_angle")
+	_add_stepper_row(grid_watch, "Glance Fade", _watch_fade_speed, 2.0, 20.0, 1.0, "_on_cfg_watch_fade")
+	_add_stepper_row(grid_watch, "Size", _watch_size, 0.04, 0.50, 0.01, "_on_cfg_watch_size")
+	_add_stepper_row(grid_watch, "Spread", _watch_spread, 0.0, 1.0, 0.05, "_on_cfg_watch_spread")
+	_add_stepper_row(grid_watch, "X (L/R)", _watch_offset.x, -0.5, 0.5, 0.01, "_on_cfg_watch_x")
+	_add_stepper_row(grid_watch, "Y (U/D)", _watch_offset.y, -0.5, 0.5, 0.01, "_on_cfg_watch_y")
+	_add_stepper_row(grid_watch, "Z (F/B)", _watch_offset.z, -0.5, 0.5, 0.01, "_on_cfg_watch_z")
+	_add_stepper_row(grid_watch, "Rot X", _watch_rot.x, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_x")
+	_add_stepper_row(grid_watch, "Rot Y", _watch_rot.y, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_y")
+	_add_stepper_row(grid_watch, "Rot Z", _watch_rot.z, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_z")
 
 	_mk_sep(vbox)
 
@@ -2918,6 +3246,9 @@ func _on_cfg_hand(idx: int) -> void:
 		_config_dominant_hand = "right"
 	else:
 		_config_dominant_hand = "left"
+	# Recreate watch on the other wrist
+	_destroy_watch_mesh()
+	_create_watch_mesh()
 
 
 func _on_cfg_hz_radius(val: float) -> void:
@@ -2982,6 +3313,65 @@ func _on_cfg_nvg_mono(idx: int) -> void:
 		mat.set_shader_parameter("use_mono", _nvg_mono)
 
 
+func _watch_rot_basis() -> Basis:
+	# Base orientation: -90 X makes the quad face upward (palm-up wrist position).
+	# _watch_rot is a user offset applied first (in the un-tilted local space),
+	# giving three distinct independent adjustment axes.
+	var base = Basis(Vector3(1.0, 0.0, 0.0), deg_to_rad(-90.0))
+	var offset = Basis.from_euler(Vector3(deg_to_rad(_watch_rot.x), deg_to_rad(_watch_rot.y), deg_to_rad(_watch_rot.z)))
+	return base * offset
+
+
+func _on_cfg_watch_glance(idx: int) -> void:
+	_watch_glance_enabled = (idx == 1)
+
+func _on_cfg_watch_angle(val: float) -> void:
+	_watch_glance_angle = val
+
+func _on_cfg_watch_fade(val: float) -> void:
+	_watch_fade_speed = val
+
+func _on_cfg_watch_size(val: float) -> void:
+	_watch_size = val
+	if _watch_mesh:
+		(_watch_mesh.mesh as QuadMesh).size = Vector2(_watch_size, _watch_size)
+
+func _on_cfg_watch_spread(val: float) -> void:
+	_watch_spread = val
+	if not _interface_open:
+		_hud_spread_active = _watch_spread
+		_apply_hud_spread()
+
+func _on_cfg_watch_x(val: float) -> void:
+	_watch_offset.x = val
+	if _watch_mesh:
+		_watch_mesh.position = _watch_offset
+
+func _on_cfg_watch_y(val: float) -> void:
+	_watch_offset.y = val
+	if _watch_mesh:
+		_watch_mesh.position = _watch_offset
+
+func _on_cfg_watch_z(val: float) -> void:
+	_watch_offset.z = val
+	if _watch_mesh:
+		_watch_mesh.position = _watch_offset
+
+func _on_cfg_watch_rot_x(val: float) -> void:
+	_watch_rot.x = val
+	if _watch_mesh:
+		_watch_mesh.basis = _watch_rot_basis()
+
+func _on_cfg_watch_rot_y(val: float) -> void:
+	_watch_rot.y = val
+	if _watch_mesh:
+		_watch_mesh.basis = _watch_rot_basis()
+
+func _on_cfg_watch_rot_z(val: float) -> void:
+	_watch_rot.z = val
+	if _watch_mesh:
+		_watch_mesh.basis = _watch_rot_basis()
+
 func _on_cfg_save_close() -> void:
 	_save_full_config()
 	_close_config_screen()
@@ -3032,17 +3422,17 @@ func _apply_hud_spread() -> void:
 	if stats:
 		var vitals = stats.get_node_or_null("Vitals")
 		if vitals and vitals is Control:
-			vitals.position.x = -960.0 * _hud_spread
+			vitals.position.x = -960.0 * _hud_spread_active
 		var medical = stats.get_node_or_null("Medical")
 		if medical and medical is Control:
-			medical.position.x = 960.0 * _hud_spread
+			medical.position.x = 960.0 * _hud_spread_active
 	# Top-left info (Map/FPS) — anchored top-left, default pos=(32, 32)
 	var info = hud_node.get_node_or_null("Info")
 	if info and info is Control:
 		# Move inward from left edge: at spread=1.0 → x=32, at spread=0.5 → x=~928 (toward center)
 		var half_w = 1920.0  # half of 3840 HUD width
 		var default_x = 32.0
-		info.position.x = half_w - (half_w - default_x) * _hud_spread
+		info.position.x = half_w - (half_w - default_x) * _hud_spread_active
 
 
 # ── Config laser & click ────────────────────────────────────────────────────
@@ -3173,6 +3563,25 @@ func _save_full_config() -> void:
 		"radius": _nvg_zone_radius,
 		"brightness": _nvg_brightness,
 		"mono": _nvg_mono
+	}
+
+	# Wrist watch
+	data["watch"] = {
+		"size": _watch_size,
+		"glance_enabled": _watch_glance_enabled,
+		"glance_angle": _watch_glance_angle,
+		"fade_speed": _watch_fade_speed,
+		"spread": _watch_spread,
+		"offset": {
+			"x": snapped(_watch_offset.x, 0.001),
+			"y": snapped(_watch_offset.y, 0.001),
+			"z": snapped(_watch_offset.z, 0.001)
+		},
+		"rot": {
+			"x": snapped(_watch_rot.x, 0.1),
+			"y": snapped(_watch_rot.y, 0.1),
+			"z": snapped(_watch_rot.z, 0.1)
+		}
 	}
 
 	# Preserve existing weapon_offsets (already in data from the read above)

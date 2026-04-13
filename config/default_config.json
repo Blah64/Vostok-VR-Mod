@@ -81,6 +81,23 @@
 		"scale": 1.0
 	},
 	"version": 1.0,
+	"watch": {
+		"fade_speed": 8.0,
+		"glance_angle": 40.0,
+		"glance_enabled": false,
+		"offset": {
+			"x": -0.02,
+			"y": -0.04,
+			"z": 0.3
+		},
+		"rot": {
+			"x": 180.0,
+			"y": 90.0,
+			"z": -90.0
+		},
+		"size": 0.15,
+		"spread": 0.15
+	},
 	"weapon_offsets": {
 		"1": {
 			"rot": 0.7,
