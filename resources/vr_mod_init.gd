@@ -2303,7 +2303,11 @@ void fragment() {
 
 func _setup_scope_pip(weapon_rig: Node3D) -> void:
 	if _scope_active and _scope_weapon_slot == _weapon_slot:
-		return
+		# Check if current scope attachment is still valid and visible
+		# (player may have swapped scopes on the same weapon slot)
+		if _scope_attachment and is_instance_valid(_scope_attachment) and _scope_attachment.visible:
+			return
+		# Scope changed — re-detect
 	_cleanup_scope()
 	var skel = _find_node_by_class(weapon_rig, "Skeleton3D")
 	if not skel:
