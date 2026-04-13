@@ -62,6 +62,12 @@
 		"lr_offset": 0.0,
 		"width": 3.0
 	},
+	"nvg_zone": {
+		"brightness": 2.0,
+		"mono": true,
+		"radius": 0.25,
+		"y": 0.3
+	},
 	"performance": {
 		"async_spacewarp": true,
 		"perf_overlay_enabled": false
