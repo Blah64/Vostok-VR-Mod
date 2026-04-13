@@ -1,111 +1,119 @@
-# VR Mod — New Session Handover
+# VR Mod — Session Handover
 
 ## What This Is
 
-A working GDScript VR mod for Road to Vostok (Godot 4.6.1). Single autoload script,
-no compiled code. OpenXR is already built into the game binary.
+A GDScript-only VR mod for **Road to Vostok** (Godot 4.6.1, Forward Mobile, Vulkan 1.4).
+Single autoload script injected via `override.cfg`. No compiled extensions.
 
-## Working Directory
+**Source of truth:** `VR Mod/resources/vr_mod_init.gd`  
+**After every edit, deploy:** `cp "VR Mod/resources/vr_mod_init.gd" "C:/Program Files (x86)/Steam/steamapps/common/Road to Vostok/vr_mod_init.gd"`  
+**Debug log:** `C:/Program Files (x86)/Steam/steamapps/common/Road to Vostok/vr_mod_debug.log`
 
-`C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\VR Mod\`
+Always read CLAUDE.md before making changes — it contains critical rules, architecture,
+and all current input bindings.
 
-Read `CLAUDE.md` first — it has the full architecture, constraints, and critical rules.
+---
 
-## What Works Today
+## Current State (as of last commit)
 
-- **Head tracking** — XRCamera3D follows HMD
-- **Hand models** — simple box-mesh hands, always visible; game arm meshes hidden separately
-- **Weapon sync** — gun follows controller orientation and position in real-time, per-slot grip offsets
-- **Location-based holster system** — reach to right shoulder / right hip / left hip / chest to draw each slot; dynamic dominant hand; haptic buzz on zone entry
-- **Holster states** — DRAWN / LOWERED / UNARMED with full transition logic
-- **Two-hand aiming** — hold support grip to aim with both hands
-- **Live grip adjust mode** — B button when drawn; thumbsticks tune position/rotation; A to save, B to discard
-- **Grab system** — point red/green laser at loose items (layer 4), grip picks up; throw on release
-- **Bag zone pickup** — reach behind right shoulder while holding a loose item, release grip → calls `item.Interact()` to add to inventory; haptic on zone entry
-- **Arm hiding** — game first-person arm mesh hidden via surface override
-- **Flashlight / Reload** — support hand trigger
-- **UI / Inventory** — HUD in world space via shared World2D SubViewport, laser pointer + mouse warp
-- **Snap and smooth turn** — right stick left/right
-- **Movement** — left stick → WASD injection; crouch = right stick click; jump = A/X
-- **F8 Config Screen** — in-game VR settings panel with laser pointer interaction and right-stick scrolling. Covers: turn mode/speed, HUD distance/size/height/LR/spread/follow mode, menu distance/size/LR/laser calibration, dominant hand, holster zone positions and radii, bag zone position and radius. Save & Close writes `default_config.json`.
+All core systems are working and committed to `master`. Latest commits:
 
-## Key State Variables
-
-```gdscript
-_holster_state        # HolsterState enum: UNARMED / DRAWN / LOWERED
-_weapon_hand          # "left" or "right" — whichever hand drew the weapon
-_weapon_slot          # int 1-4, active holster slot
-_config_dominant_hand # preferred hand for UI/grab when unarmed
-_support_grip_held    # true when off-hand grip held (two-hand aim)
-_grabbed_object       # currently held loose RigidBody3D (null if none)
-_grab_hand            # which hand holds the grabbed object
-_adjust_mode          # true when in live grip adjust mode
-_pending_holster_key  # delayed KEY injection guard (prevents double-toggle)
-_config_screen_open   # true while F8 config panel is visible
-_interface_open       # true while game menu/inventory is open
-_hud_smooth_follow    # HUD lerp mode vs instant snap
-_hud_spread           # HUD element spread multiplier (0.1–2.0)
+```
+34f3361 Add laser, flashlight and NVG toggles
+41148a7 Block all grip actions during holster cooldown, not just zone draws
+a563eac Block re-draw during holster animation with 0.8s cooldown
+e237601 Fix README config section formatting
+1b32839 Simplify README scope zoom docs to controls only
+c3ff1e8 Add haptic feedback on scope zoom and document scope features in README
 ```
 
-## Config File
+### Working Features
 
-`VR Mod/config/default_config.json` — written by F8 config screen and grip adjust mode.
-Current tuned values:
+- **Full weapon handling**: draw/holster/lower/raise via body zones, two-hand aim
+- **Scope PIP**: SubViewport scopes render correctly; variable-zoom scopes (Leopard, Vudu) use right stick U/D
+- **Equipment toggles**:
+  - Laser attachment: support trigger + grip → KEY_T
+  - Flashlight: X (left, weapon holstered) → MOUSE_BUTTON_XBUTTON2
+  - NVG: trigger above head in NVG zone → MOUSE_BUTTON_XBUTTON1
+- **Grab system**: pick up loose items, throw, or deposit into inventory via bag zone
+- **HUD**: SubViewport sharing World2D, head-locked, smooth follow option
+- **F8 config screen**: all zones, HUD, grip offsets, NVG zone tunable in-game
+- **F9**: dump HUD tree; **F10**: dump weapon tree + attachmentData
+
+---
+
+## Known Gaps / Possible Next Features
+
+These are **not implemented yet** — pick up from here:
+
+### High Priority
+- **Physical reloading** — currently reload is just a button press; could require reaching to a mag pouch zone on the body
+- **Melee gesture** — no unarmed/melee mapped; could be a punch/swing gesture or button combo
+- **Two-handed weapon raise** — currently raising requires re-gripping with weapon hand; could let support-hand grip also raise
+
+### Medium Priority
+- **Item containers** — crates/loot bodies open via inventory UI but don't have VR grab/open gesture
+- **Scope eye relief** — PIP quad currently floats at fixed distance; should snap to scope model position when weapon is raised
+- **Flashlight direction** — game flashlight tracks camera/head; ideally it should track the weapon hand or an off-hand controller
+- **Smooth crouch** — currently uses game toggle, doesn't track physical crouch from HMD height
+
+### Low Priority / Polish
+- **Holster zone visual indicators** — currently only haptic; could render subtle glowing spheres at each zone
+- **Hand poses** — current hand meshes are static; could animate finger curl from trigger/grip analog values
+- **Voice/proximity chat** — no push-to-talk mapped
+
+---
+
+## Game Node Structure (reference)
+
+```
+/root/Map/
+  Core/
+    Camera (Camera3D) — game_camera; found by _find_game_camera()
+      Manager (Node3D)
+        <child 0> (Node3D) — weapon_rig; synced to controller every frame
+          Handling → Sway → Noise → Tilt → Impulse → Recoil → Holder → [weapon meshes]
+          Attachments/
+            [optic node] — has attachmentData Resource; variable=true for zoom scopes
+              SubViewport — scope PIP view
+              Camera (Camera3D) — scope PIP camera
+      Core/
+        UI (CanvasLayer) — HUD; shared into VRHudViewport via World2D
+          HUD/Stats/Vitals  — health bars (bottom-left)
+          HUD/Stats/Medical — status icons (bottom-right)
+          HUD/Info          — map/FPS labels (top-left)
+          NVG               — night vision overlay (skipped in interface detection)
+      Flashlight (Node3D) — camera-mounted flashlight (SpotLight3D + OmniLight3D)
+  [loose items] — RigidBody3D, collision_layer & 4, script Pickup.gd, group "Item"
+```
+
+---
+
+## Critical Rules (summary — read CLAUDE.md for full list)
+
+1. **Debug log** → `vr_mod_debug.log` (not godot.log, it truncates)
+2. **Deploy after every edit** — game loads from game dir, not VR Mod/
+3. **Never add MeshInstance3D directly to XRController3D** → black HMD
+4. **No inline lambdas with semicolons** → GDScript parse error → black HMD
+5. **No Co-Authored-By in commits**
+6. **process_priority = 1000** — mod runs after game scripts
+
+---
+
+## Config File Structure (`VR Mod/config/default_config.json`)
 
 ```json
 {
-  "comfort":  { "turn_type": "smooth", "snap_turn_degrees": 45, "smooth_turn_speed": 120 },
-  "controls": { "dominant_hand": "right", "thumbstick_deadzone": 0.15 },
-  "holsters": { "zone_radius": 0.25 },
-  "hud": {
-    "width": 2.3, "distance": 0.9, "height_offset": -0.05,
-    "lr_offset": 0.0, "smooth_follow": true, "smooth_speed": 1.5, "spread": 0.5
+  "xr": { "world_scale": 1.0 },
+  "controls": { "dominant_hand": "right", "snap_turn": true, "snap_degrees": 30.0, "smooth_turn_speed": 60.0 },
+  "hud": { "width": 2.0, "distance": 1.5, "height_offset": -0.1, "lr_offset": 0.0, "smooth_follow": false, "smooth_speed": 3.0, "spread": 1.0 },
+  "menu": { "width": 3.0, "distance": 1.3, "lr_offset": 0.0, "laser_uv_x": 0.02, "laser_uv_y": 0.06 },
+  "holsters": {
+    "zone_radius": 0.20,
+    "offsets": { "1": {"x":0.25,"y":-0.15,"z":0.20}, "2": {"x":0.25,"y":-0.55,"z":0.0}, "3": {"x":-0.25,"y":-0.55,"z":0.0}, "4": {"x":0.0,"y":-0.15,"z":0.10} },
+    "bag": { "x": 0.15, "y": -0.10, "z": 0.35, "radius": 0.35 }
   },
-  "menu": { "width": 3.0, "distance": 1.3, "lr_offset": 0.0, "laser_uv_x": 0.03, "laser_uv_y": 0.06 },
-  "weapon_offsets": {
-    "1": { "rot": 0.7,   "x": 0.046, "y": 0.119, "z": -0.237 },
-    "2": { "rot": -4.3,  "x": 0.01,  "y": 0.076, "z": -0.369 },
-    "3": { "rot": -94.7, "x": 0.105, "y": 0.087, "z": -0.327 },
-    "4": { "rot": -29.4, "x": 0.079, "y": 0.061, "z": -0.343 }
-  },
-  "xr": { "world_scale": 1.0 }
+  "nvg_zone": { "y": 0.30, "radius": 0.25 },
+  "weapon_offsets": { "1": { "x":0, "y":0.15, "z":-0.20, "rot":0.0 }, "2": {...}, "3": {...}, "4": {...} }
 }
-```
-
-## Critical GDScript Rules (learned the hard way)
-
-- **No inline lambda semicolons** — `func(v): a = v; b()` causes parse error → black HMD with no output. Use named methods instead.
-- **Black HMD = parse error** — if the script fails to parse, the mod loads silently with no output anywhere. If you get black HMD after a code change, revert immediately and add changes in small steps.
-- **No MeshInstance3D directly on XRController3D** — wraps in Node3D or reuse existing.
-
-## Known Quirks
-
-- Weapon can occasionally snap to camera on rapid holster/draw; holstering and re-drawing restores it.
-- HUD spread adjusts `Map/Core/UI/HUD/Stats/Vitals` and `Stats/Medical` x positions directly (960px from center at default spread=1.0).
-- F9 dumps the full HUD node tree to `vr_mod_debug.log` for debugging.
-
-## Possible Next Features
-
-- Procedural hand grip poses (fingers curl around weapon/item)
-- Melee gesture (swing arm to melee)
-- Comfort vignette on locomotion
-- Physical crouch tracking (map real squat to in-game crouch)
-- Iron sights / scope alignment to eye level
-- Haptic recoil patterns per weapon type
-- Inventory container interaction (open crates/bodies in VR)
-- World-space notifications (damage numbers, zone text) instead of 2D HUD
-
-## Git Log (recent)
-
-```
-eb61ab2 Add holster/bag zone position settings in config screen; update README
-bcd822f Add tunable laser UV offsets for inventory menu in config screen
-62f33ea Right thumbstick up/down scrolls config screen; suppress turn while open
-fcb448e Add HUD spread control and fix config screen settings preview
-071b1cf Add F8 in-game config screen for VR settings
-3d7d72c Make HUD/menu sizing runtime-configurable for in-game config screen
-f78f514 Update CLAUDE.md and HANDOVER.md for new session handover
-093702e Add bag zone: reach behind shoulder to add grabbed item to inventory
-1ff46de Fix weapon stuck to camera on rapid holster/redraw
-5dd8b37 Always show VR hands; move right shoulder holster zone back 1 foot
 ```
