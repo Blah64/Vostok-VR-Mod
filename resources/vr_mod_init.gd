@@ -85,6 +85,10 @@ var _scope_overridden_surfaces: Array = []   # [{surf: int, original: Material}]
 var _scope_active := false
 var _scope_weapon_slot := 0
 var _scope_vp_created := false           # True once our VP is created (reuse across weapons)
+var _scope_is_variable := false          # True if active scope supports variable zoom
+var _scope_zoom_fovs := []               # FOV per zoom level (derived from reticleSize ratios)
+var _scope_zoom_reticle_scales := []     # Reticle UV scale per zoom level
+var _scope_zoom_index := 0               # Current zoom level index
 
 # Grip adjust mode — tune offsets live with thumbsticks
 var _adjust_mode := false
@@ -933,6 +937,11 @@ func _process_input(delta: float) -> void:
 			if abs(turn_input.y) > thumbstick_deadzone:
 				_scroll_config_panel(-turn_input.y * 600.0 * delta)
 			_snap_turn_cooldown = false
+		elif _scope_active and _scope_is_variable and _holster_state == HolsterState.DRAWN and abs(turn_input.y) > thumbstick_deadzone:
+			# Variable zoom scope: directly change weapon rig zoomLevel
+			if _scroll_cooldown <= 0.0 and abs(turn_input.y) > 0.6:
+				_cycle_scope_zoom(1 if turn_input.y > 0 else -1)
+				_scroll_cooldown = 0.3
 		else:
 			if abs(turn_input.x) > thumbstick_deadzone:
 				if use_snap_turn:
@@ -1691,6 +1700,7 @@ uniform float eyebox_fade_distance = 0.15;
 uniform float shadow_inner_radius : hint_range(0.0, 1.0) = 1.0;
 uniform float shadow_fade_factor = 0.2;
 uniform float shadow_movement_factor : hint_range(0.5, 1.0) = 1.0;
+uniform float reticle_scale = 1.0;
 
 varying vec3 view;
 
@@ -1727,9 +1737,12 @@ void fragment() {
 	float fade_start = fade_end - scope_fade_size;
 	col = mix(col, vec3(0.0), smoothstep(fade_start, fade_end, edge_dist));
 
-	// Reticle overlay — fixed on the glass, no parallax/depth shift
-	vec4 ret = texture(reticle, UV);
-	ALBEDO = mix(col, ret.rgb * intensity, ret.a);
+	// Reticle overlay — fixed on the glass, scaled by zoom level
+	vec2 ret_uv = (UV - vec2(0.5)) / reticle_scale + vec2(0.5);
+	vec4 ret = texture(reticle, ret_uv);
+	// Hide reticle outside 0-1 UV range (when zoomed in past texture edge)
+	float in_bounds = step(0.0, ret_uv.x) * step(ret_uv.x, 1.0) * step(0.0, ret_uv.y) * step(ret_uv.y, 1.0);
+	ALBEDO = mix(col, ret.rgb * intensity, ret.a * in_bounds);
 }
 """
 
@@ -1760,6 +1773,30 @@ func _setup_scope_pip(weapon_rig: Node3D) -> void:
 		_scope_lens_mesh = mi
 		_scope_weapon_slot = _weapon_slot
 		_scope_active = true
+		# Detect variable zoom capability and build per-level FOV/reticle arrays
+		var att_data = child.get("attachmentData")
+		_scope_is_variable = att_data != null and att_data.get("variable") == true
+		if _scope_is_variable and att_data:
+			var ret_sizes = att_data.get("reticleSize")  # Vector3 with per-level sizes
+			if ret_sizes and ret_sizes is Vector3:
+				var num_levels := 3
+				_scope_zoom_fovs.clear()
+				_scope_zoom_reticle_scales.clear()
+				# Base reticle size is level 0 (widest zoom)
+				var base_size: float = ret_sizes.x
+				for i in range(num_levels):
+					var s: float = [ret_sizes.x, ret_sizes.y, ret_sizes.z][i]
+					# Reticle scale: how much bigger the reticle appears vs level 0
+					_scope_zoom_reticle_scales.append(s / base_size if base_size > 0.0 else 1.0)
+					# FOV: inversely proportional to magnification (reticle ratio)
+					# Use game camera FOV at default zoom as reference
+					_scope_zoom_fovs.append(0.0)  # Will be filled after reading game cam FOV
+			# Initialize zoom index from game's current zoom level
+			var wr_zoom = weapon_rig.get("zoomLevel")
+			if wr_zoom != null:
+				_scope_zoom_index = clampi(int(wr_zoom), 0, _scope_zoom_fovs.size() - 1)
+			else:
+				_scope_zoom_index = 0
 		# Create our own SubViewport + Camera if not already done
 		if not _scope_vp_created:
 			_scope_viewport = SubViewport.new()
@@ -1786,7 +1823,18 @@ func _setup_scope_pip(weapon_rig: Node3D) -> void:
 		var scope_fov := 3.0
 		if game_cam:
 			scope_fov = game_cam.fov
-		_scope_camera.fov = scope_fov
+		if _scope_is_variable and _scope_zoom_fovs.size() > 0 and _scope_zoom_reticle_scales.size() > 0:
+			# Derive per-level FOVs from game camera FOV and reticle size ratios
+			# Game camera FOV corresponds to _scope_zoom_index (current zoomLevel)
+			var base_scale: float = _scope_zoom_reticle_scales[_scope_zoom_index] if _scope_zoom_index < _scope_zoom_reticle_scales.size() else 1.0
+			for i in range(_scope_zoom_fovs.size()):
+				# FOV is inversely proportional to magnification ratio
+				var ratio: float = _scope_zoom_reticle_scales[i] / base_scale if base_scale > 0.0 else 1.0
+				_scope_zoom_fovs[i] = scope_fov / ratio
+			_scope_camera.fov = _scope_zoom_fovs[_scope_zoom_index]
+			_log("scope: variable zoom fovs=" + str(_scope_zoom_fovs) + " reticle_scales=" + str(_scope_zoom_reticle_scales) + " index=" + str(_scope_zoom_index))
+		else:
+			_scope_camera.fov = scope_fov
 		# Re-enable rendering (may have been disabled by cleanup)
 		_scope_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 		# Disable game's scope viewport to save perf
@@ -1858,6 +1906,30 @@ func _update_scope_camera() -> void:
 	_scope_camera.look_at(scope_pos + barrel_forward * 100.0, barrel_up)
 
 
+func _cycle_scope_zoom(direction: int) -> void:
+	# direction: +1 = zoom in (higher index = narrower FOV), -1 = zoom out
+	var new_index = clampi(_scope_zoom_index + direction, 0, _scope_zoom_fovs.size() - 1)
+	if new_index == _scope_zoom_index:
+		return
+	_scope_zoom_index = new_index
+	_scope_camera.fov = _scope_zoom_fovs[_scope_zoom_index]
+	# Update reticle scale on PIP material
+	if _scope_zoom_reticle_scales.size() > _scope_zoom_index:
+		var ret_scale: float = _scope_zoom_reticle_scales[_scope_zoom_index]
+		if _scope_lens_mesh and is_instance_valid(_scope_lens_mesh):
+			for entry in _scope_overridden_surfaces:
+				var mat = _scope_lens_mesh.get_surface_override_material(entry["surf"])
+				if mat and mat is ShaderMaterial:
+					mat.set_shader_parameter("reticle_scale", ret_scale)
+	# Sync game's weapon rig zoomLevel so reticle size etc. stays consistent
+	if game_camera and is_instance_valid(game_camera):
+		var mgr = game_camera.get_node_or_null("Manager")
+		if mgr and mgr.get_child_count() > 0:
+			var wr = mgr.get_child(0)
+			wr.set("zoomLevel", _scope_zoom_index)
+	_log("scope zoom: level=" + str(_scope_zoom_index) + " fov=" + str(_scope_zoom_fovs[_scope_zoom_index]))
+
+
 func _cleanup_scope() -> void:
 	if _scope_lens_mesh and is_instance_valid(_scope_lens_mesh):
 		for entry in _scope_overridden_surfaces:
@@ -1867,6 +1939,10 @@ func _cleanup_scope() -> void:
 	_scope_attachment = null
 	_scope_active = false
 	_scope_weapon_slot = 0
+	_scope_is_variable = false
+	_scope_zoom_index = 0
+	_scope_zoom_fovs.clear()
+	_scope_zoom_reticle_scales.clear()
 	# Don't destroy viewport/camera — reuse across weapon changes
 	if _scope_viewport and is_instance_valid(_scope_viewport):
 		_scope_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -2865,6 +2941,30 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 		return
 	var indent = "  ".repeat(depth)
 	var line = indent + node.name + " (" + node.get_class() + ")"
+	if node.get_script():
+		line += " script=" + str(node.get_script().resource_path)
+		# Dump script properties (exported/user vars)
+		var prop_strs := []
+		for prop in node.get_property_list():
+			if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+				var pname: String = prop["name"]
+				var val = node.get(pname)
+				if val != null and str(val).length() < 200:
+					prop_strs.append(pname + "=" + str(val))
+		if prop_strs.size() > 0:
+			line += "\n" + indent + "  PROPS: " + " | ".join(prop_strs)
+		# Dump attachmentData resource properties if present
+		var att_data = node.get("attachmentData")
+		if att_data and att_data is Resource:
+			var res_strs := []
+			for rprop in att_data.get_property_list():
+				if rprop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+					var rpname: String = rprop["name"]
+					var rval = att_data.get(rpname)
+					if rval != null and str(rval).length() < 300:
+						res_strs.append(rpname + "=" + str(rval))
+			if res_strs.size() > 0:
+				line += "\n" + indent + "  ATTACHMENT_DATA: " + " | ".join(res_strs)
 	if node is Node3D:
 		line += " pos=" + str(node.position) + " vis=" + str(node.visible)
 	if node is MeshInstance3D:
