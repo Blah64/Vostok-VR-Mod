@@ -2903,25 +2903,14 @@ func _populate_config_ui() -> void:
 
 	_mk_sep(vbox)
 
-	# ── HUD ──
-	_mk_header(vbox, "HUD (Gameplay)")
-	var grid_hud = _mk_grid(vbox)
-	_add_stepper_row(grid_hud, "Distance", _hud_distance, 0.5, 3.0, 0.1, "_on_cfg_hud_dist")
-	_add_stepper_row(grid_hud, "Size", _hud_width, 0.5, 4.0, 0.1, "_on_cfg_hud_wid")
-	_add_stepper_row(grid_hud, "Height", _hud_height_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_hgt")
-	_add_stepper_row(grid_hud, "Left/Right", _hud_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_lr")
-	_add_toggle_row(grid_hud, "Follow Mode", ["Instant", "Smooth"], 1 if _hud_smooth_follow else 0, "_on_cfg_hud_follow")
-	_add_stepper_row(grid_hud, "Smooth Speed", _hud_smooth_speed, 0.5, 10.0, 0.5, "_on_cfg_hud_smooth_spd")
-	_add_stepper_row(grid_hud, "Spread", _hud_spread, 0.1, 2.0, 0.1, "_on_cfg_hud_spread")
-
-	_mk_sep(vbox)
-
 	# ── Menu ──
 	_mk_header(vbox, "Menu / Inventory")
 	var grid_menu = _mk_grid(vbox)
 	_add_stepper_row(grid_menu, "Distance", _menu_distance, 0.5, 3.0, 0.1, "_on_cfg_menu_dist")
 	_add_stepper_row(grid_menu, "Size", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
 	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
+	_add_stepper_row(grid_menu, "Height", _hud_height_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_hgt")
+	_add_stepper_row(grid_menu, "HUD Spread", _hud_spread, 0.1, 2.0, 0.1, "_on_cfg_hud_spread")
 	_add_stepper_row(grid_menu, "Laser X", _menu_laser_uv_x, -0.2, 0.2, 0.01, "_on_cfg_laser_x")
 	_add_stepper_row(grid_menu, "Laser Y", _menu_laser_uv_y, -0.2, 0.2, 0.01, "_on_cfg_laser_y")
 
@@ -2977,7 +2966,6 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_watch, "Glance Angle", _watch_glance_angle, 20.0, 70.0, 5.0, "_on_cfg_watch_angle")
 	_add_stepper_row(grid_watch, "Glance Fade", _watch_fade_speed, 2.0, 20.0, 1.0, "_on_cfg_watch_fade")
 	_add_stepper_row(grid_watch, "Size", _watch_size, 0.04, 0.50, 0.01, "_on_cfg_watch_size")
-	_add_stepper_row(grid_watch, "Spread", _watch_spread, 0.0, 1.0, 0.05, "_on_cfg_watch_spread")
 	_add_stepper_row(grid_watch, "X (L/R)", _watch_offset.x, -0.5, 0.5, 0.01, "_on_cfg_watch_x")
 	_add_stepper_row(grid_watch, "Y (U/D)", _watch_offset.y, -0.5, 0.5, 0.01, "_on_cfg_watch_y")
 	_add_stepper_row(grid_watch, "Z (F/B)", _watch_offset.z, -0.5, 0.5, 0.01, "_on_cfg_watch_z")
