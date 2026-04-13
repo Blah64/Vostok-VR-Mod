@@ -110,6 +110,21 @@ var _bag_zone_radius := 0.35
 
 Haptic buzz on zone entry (only when `_grabbed_object` is valid).
 
+## NVG Zone (night vision toggle)
+
+Reaching either hand above the head (in the NVG zone) and pulling the trigger injects
+`MOUSE_BUTTON_XBUTTON1` (game's NVG keybind). Haptic buzz on zone entry.
+
+```gdscript
+var _nvg_zone_offset := Vector3(0.0, 0.30, 0.0)   # head-relative, above head
+var _nvg_zone_radius := 0.25
+var _hand_in_nvg_zone := {"left": false, "right": false}  # edge-detection
+```
+
+Zone position offset is head-world-space (no yaw rotation applied — straight up).
+Tunable via F8 config → "NVG Zone" section (Radius + Y height). Persisted as
+`nvg_zone.y` and `nvg_zone.radius` in `default_config.json`.
+
 ## Input Bindings
 
 | Button | Action |
@@ -121,18 +136,25 @@ Haptic buzz on zone entry (only when `_grabbed_object` is valid).
 | Right grip release (away from zone) | Lower weapon |
 | Support grip (DRAWN) | Two-hand aim |
 | Support grip (near different zone) | Swap weapon |
-| Left trigger + DRAWN | Toggle flashlight (with support grip) or reload |
+| Support trigger (DRAWN, no grip) | Reload |
+| Support trigger (DRAWN, grip held) | Toggle laser attachment → injects KEY_T |
+| X (left, UNARMED or LOWERED) | Toggle standalone flashlight → MOUSE_BUTTON_XBUTTON2 |
+| X (left, DRAWN) | Enter grip adjust mode |
+| Trigger (either hand, above head, no grab) | Toggle NVG → MOUSE_BUTTON_XBUTTON1 |
 | Left stick | Move (WASD) |
 | Right stick L/R | Snap/smooth turn |
 | Right stick U/D (config screen open) | Scroll config panel |
+| Right stick U/D (variable scope, DRAWN) | Zoom in / out |
 | Right stick click | Crouch |
-| A/X button | Jump |
-| B (right, DRAWN) | Enter grip adjust mode |
+| A (right) | Jump |
 | A (right, adjust mode) | Save grip offsets to config |
-| B (right, adjust mode) | Discard and exit adjust mode |
+| X (left, adjust mode) | Discard and exit adjust mode |
+| Y (left) | Open/close inventory |
+| B (right) | Interact with objects |
 | Release grabbed item near bag zone | Add item to inventory |
 | F8 | Toggle in-game VR config screen |
 | F9 | Dump HUD node tree to vr_mod_debug.log |
+| F10 | Dump weapon node tree (with attachmentData) to vr_mod_debug.log |
 
 ## Weapon Sync
 
@@ -191,6 +213,30 @@ var _menu_laser_uv_x := 0.02   # laser UV correction for menu quad
 var _menu_laser_uv_y := 0.06
 ```
 
+## Scope PIP System
+
+Variable-zoom scopes (Leopard, Vudu) render a Picture-in-Picture view via a `SubViewport`
++ `Camera3D` + `ShaderMaterial` on the scope mesh.
+
+- `_scope_active` (bool): set when a scope attachment's SubViewport is detected
+- `_scope_is_variable` (bool): set from `attachmentData.variable` at scope setup time
+- `_scope_zoom_index` (int): current zoom level (0-based)
+- `_scope_zoom_fovs` (Array[float]): per-level FOV values derived from `attachmentData.reticleSize`
+- `_scope_zoom_reticle_scales` (Array[float]): per-level reticle UV scale values
+- Right stick U/D cycles zoom when `_scope_active and _scope_is_variable and DRAWN`
+- Zoom changes: set `weapon_rig.zoomLevel`, update scope camera FOV, update `reticle_scale` shader uniform
+- `_scroll_cooldown` (0.3 s) gates rapid zoom changes
+- `_cleanup_scope()` resets all scope vars on weapon lower/holster
+- F10 (`_dump_weapon_tree()`) dumps full weapon node tree + `attachmentData` resource properties
+
+## Equipment Toggles
+
+| Action | Game Input | VR Binding |
+|--------|-----------|-----------|
+| Laser attachment (weapon) | KEY_T | Support trigger + grip while DRAWN |
+| Flashlight (standalone) | MOUSE_BUTTON_XBUTTON2 | X (left) when UNARMED/LOWERED |
+| Night vision goggles | MOUSE_BUTTON_XBUTTON1 | Trigger above head (NVG zone) |
+
 ## F8 Config Screen
 
 - Opens a SubViewport-based panel (`_config_panel_vp` / `_config_panel_quad`) in world space
@@ -199,6 +245,7 @@ var _menu_laser_uv_y := 0.06
 - All buttons use `Callable(self, "named_method_string")` — no inline lambdas
 - Steppers work by disconnecting/reconnecting button signals with updated value in bound args
 - Save & Close calls `_save_full_config()` which writes the full config JSON
+- Sections: Comfort, HUD (Gameplay), Menu/Inventory, Controls, Holster Zones, Bag Zone, NVG Zone
 
 ## Known Issues / Constraints
 
