@@ -1772,15 +1772,23 @@ func _update_hand_visibility() -> void:
 				target_ctrl.add_child(_laser_mesh)
 				_laser_mesh.rotation.x = deg_to_rad(90)
 
-			# Check what the ray is pointing at (loose item on layer 4)
+			# Check what the ray is pointing at
 			var grab_ray := _grab_ray_right if laser_hand == "right" else _grab_ray_left
 			var pointing_at_grabbable := false
+			var pointing_at_interactable := false
 			if grab_ray and grab_ray.is_colliding():
 				var c = grab_ray.get_collider()
 				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
+				if not pointing_at_grabbable and c.get_script() != null:
+					pointing_at_interactable = true
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
-				mat.albedo_color = Color(0.1, 1.0, 0.2, 0.7) if pointing_at_grabbable else Color(1.0, 0.2, 0.1, 0.6)
+				if pointing_at_grabbable:
+					mat.albedo_color = Color(0.1, 1.0, 0.2, 0.7)   # Green - grabbable item
+				elif pointing_at_interactable:
+					mat.albedo_color = Color(1.0, 0.8, 0.1, 0.7)   # Yellow - B-interact
+				else:
+					mat.albedo_color = Color(1.0, 0.2, 0.1, 0.6)   # Red - nothing
 			var cyl := _laser_mesh.mesh as CylinderMesh
 			if cyl:
 				cyl.height = 1.0
