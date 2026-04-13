@@ -2061,14 +2061,38 @@ func _update_hand_visibility() -> void:
 			var grab_ray := _grab_ray_right if laser_hand == "right" else _grab_ray_left
 			var pointing_at_grabbable := false
 			var pointing_at_interactable := false
-			if grab_ray and grab_ray.is_colliding():
+			var pointing_at_furniture := false
+			if _decor_mode and game_camera and is_instance_valid(game_camera):
+				# Use the game's Interactor raycast (driven by game camera we steer)
+				var interactor = game_camera.get_node_or_null("Interactor")
+				if interactor is RayCast3D and interactor.is_colliding():
+					var col = interactor.get_collider()
+					if col:
+						# Check collider and its parent for furniture indicators
+						var check = col
+						for _i in range(4):
+							if not check:
+								break
+							if check.is_in_group("Interactable") or check.is_in_group("Furniture") \
+									or check.is_in_group("Placable") or check.is_in_group("Placeable"):
+								pointing_at_furniture = true
+								break
+							if check.get_script():
+								var sp: String = check.get_script().resource_path
+								if "Furniture" in sp or "Placabl" in sp or "Decor" in sp:
+									pointing_at_furniture = true
+									break
+							check = check.get_parent()
+			elif grab_ray and grab_ray.is_colliding():
 				var c = grab_ray.get_collider()
 				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
 				if not pointing_at_grabbable and c.is_in_group("Interactable"):
 					pointing_at_interactable = true
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
-				if _decor_mode:
+				if _decor_mode and pointing_at_furniture:
+					mat.albedo_color = Color(1.0, 0.65, 0.1, 0.8)  # Orange - furniture targeted
+				elif _decor_mode:
 					mat.albedo_color = Color(0.2, 0.8, 1.0, 0.7)   # Cyan - decor placement
 				elif pointing_at_grabbable:
 					mat.albedo_color = Color(0.1, 1.0, 0.2, 0.7)   # Green - grabbable item
@@ -4078,6 +4102,28 @@ func _dump_ray_target() -> void:
 	f.seek_end(0)
 	f.store_line("")
 	f.store_line("=== RAY TARGET DUMP (F12) " + Time.get_datetime_string_from_system() + " ===")
+	# In decor mode, also dump the game's Interactor raycast
+	if _decor_mode and game_camera and is_instance_valid(game_camera):
+		var interactor = game_camera.get_node_or_null("Interactor")
+		f.store_line("  Game Interactor (decor mode):")
+		if interactor is RayCast3D and interactor.is_colliding():
+			var c = interactor.get_collider()
+			if c:
+				f.store_line("    Class: " + c.get_class())
+				f.store_line("    Path: " + str(c.get_path()))
+				f.store_line("    Script: " + (str(c.get_script().resource_path) if c.get_script() else "none"))
+				f.store_line("    Groups: " + str(c.get_groups()))
+				var p = c.get_parent()
+				var depth := 0
+				while p and depth < 6:
+					var pi = p.name + " (" + p.get_class() + ")" + (" script=" + str(p.get_script().resource_path) if p.get_script() else "") + " groups=" + str(p.get_groups())
+					f.store_line("    -> " + pi)
+					if p.name == "Map" or p == get_tree().root:
+						break
+					p = p.get_parent()
+					depth += 1
+		else:
+			f.store_line("    (not colliding)")
 	for ray_info in [["Right GrabRay", _grab_ray_right], ["Left GrabRay", _grab_ray_left]]:
 		var label: String = ray_info[0]
 		var ray: RayCast3D = ray_info[1]

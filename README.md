@@ -106,6 +106,28 @@ weapon hand (or support hand) to raise the weapon again.
 Point the laser from your dominant hand at a loose item to target it. Release the grip with
 arm motion to throw — velocity is calculated from your last few hand-position samples.
 
+### Shelter Decoration Mode
+
+When inside a shelter you can enter furniture placement mode to arrange your base.
+
+**Enter / exit:** Squeeze **both grips simultaneously** while unarmed and not holding
+anything. The controllers buzz to confirm. You can also exit with the **X button (left)**.
+Exiting is blocked while a furniture ghost preview is active — place or cancel the item first.
+
+| Input | Action |
+|-------|--------|
+| Both grips (unarmed) | Enter / exit decor mode |
+| X (left) | Exit decor mode |
+| Controller aim (dominant) | Aim furniture ghost / target placed furniture |
+| Right stick up / down | Adjust distance or rotation amount |
+| Right grip (single) | Toggle between distance and rotation scroll |
+| Right trigger | Place furniture (G) |
+| A (right) | Toggle surface magnet |
+| B (right) | Store item back to furniture inventory |
+| Y (left) | Open furniture inventory |
+| Left stick | Move around the shelter |
+| Right stick left / right | Turn |
+
 ### Laser Colors
 
 | Color | Meaning |
@@ -114,11 +136,14 @@ arm motion to throw — velocity is calculated from your last few hand-position 
 | 🟢 Green | Grabbable loose item in range (grip to pick up) |
 | 🟡 Yellow | B-button interactable in range (trader, loot pool, etc.) |
 | 🔵 Blue | Menu / inventory open — laser extends to 5 m for UI pointing |
+| 🩵 Cyan | Decor mode active — aiming for furniture placement |
+| 🟠 Orange | Decor mode — pointing at furniture that can be moved |
 
 ### Inventory / UI
 
 When a menu or inventory panel is open the laser switches to **blue** and extends to 5 m.
-Point and pull the trigger to click. Grip acts as right-click.
+Point and pull the trigger to click. Grip acts as right-click. **Right stick up/down**
+scrolls any open menu or inventory panel.
 
 ---
 
