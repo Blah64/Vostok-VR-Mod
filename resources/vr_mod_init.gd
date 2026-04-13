@@ -33,6 +33,7 @@ var _throw_samples: Array = []  # Recent [position, time] pairs for throw veloci
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
 var _pending_holster_key: int = -1  # KEY_N pending delayed injection on holster; -1 = none
+var _holster_cooldown := 0.0        # Seconds remaining before a new draw is allowed after holstering
 
 # Holster system
 enum HolsterState { UNARMED, DRAWN, LOWERED }
@@ -147,8 +148,8 @@ func _update_holster_zone_haptics() -> void:
 		var zone = _get_nearby_holster_zone(ctrl.global_position)
 		var prev_zone = _left_in_zone if hand == "left" else _right_in_zone
 		if zone != prev_zone:
-			if zone > 0:
-				# Entered a new zone — haptic buzz
+			if zone > 0 and _holster_cooldown <= 0.0:
+				# Entered a new zone — haptic buzz (suppressed during holster cooldown)
 				ctrl.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.15, 0.0)
 				print("[VR Mod] ", hand, " hand entered zone: ", HOLSTER_ZONES[zone]["name"])
 			if hand == "left":
@@ -245,6 +246,7 @@ func _holster_weapon() -> void:
 	_weapon_slot = 0
 	_weapon_loaded = false
 	_support_grip_held = false
+	_holster_cooldown = 0.8  # Block re-draw until animation completes
 
 
 # HUD
@@ -412,6 +414,10 @@ func _process(delta: float) -> void:
 				if _weapon_debug_timer >= 3.0:
 					_weapon_debug_timer = 0.0
 					_deep_camera_debug()
+
+				# Tick down holster cooldown
+				if _holster_cooldown > 0.0:
+					_holster_cooldown -= delta
 
 				# Holster zone haptic feedback
 				_update_holster_zone_haptics()
@@ -992,8 +998,10 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
 				match _holster_state:
 					HolsterState.UNARMED:
-						if zone > 0:
+						if zone > 0 and _holster_cooldown <= 0.0:
 							_draw_weapon(hand, zone)
+						elif zone > 0:
+							print("[VR Mod] Draw blocked - holster cooldown (" + str(snappedf(_holster_cooldown, 0.01)) + "s remaining)")
 						else:
 							_try_grab(hand)
 					HolsterState.DRAWN:
