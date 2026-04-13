@@ -1927,6 +1927,10 @@ func _cycle_scope_zoom(direction: int) -> void:
 		if mgr and mgr.get_child_count() > 0:
 			var wr = mgr.get_child(0)
 			wr.set("zoomLevel", _scope_zoom_index)
+	# Haptic feedback on weapon hand
+	var ctrl = _get_controller(_weapon_hand)
+	if ctrl:
+		ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.1, 0.0)
 	_log("scope zoom: level=" + str(_scope_zoom_index) + " fov=" + str(_scope_zoom_fovs[_scope_zoom_index]))
 
 
