@@ -90,9 +90,9 @@ zoom out while the weapon is drawn. A haptic pulse confirms each step.
 ### Lowered Weapon
 
 Release the weapon hand grip (away from a holster zone) to **lower** the weapon — it stays
-in your hand but you no longer grip it. A **red/green laser** appears on the weapon hand to
-help aim interactions. Press **B** to interact with whatever you're pointing at (loot pools,
-doors, etc.). Re-grip with the weapon hand to raise the weapon again.
+in your hand but you no longer grip it. A laser appears on the weapon hand to help aim
+interactions. Press **B** to interact with whatever you're pointing at. Re-grip with the
+weapon hand to raise the weapon again.
 
 ### Grabbing Items
 
@@ -102,14 +102,34 @@ doors, etc.). Re-grip with the weapon hand to raise the weapon again.
 | Release grip near bag zone (behind right shoulder) | Add item to inventory |
 | Release grip elsewhere | Drop / throw item |
 
-Point the **red laser** from your dominant hand at a loose item to target it. The laser
-turns **green** when a grabbable item is in range. Release the grip with arm motion
-to throw — velocity is calculated from your last few hand-position samples.
+Point the laser from your dominant hand at a loose item to target it. Release the grip with
+arm motion to throw — velocity is calculated from your last few hand-position samples.
+
+### Laser Colors
+
+| Color | Meaning |
+|-------|---------|
+| 🔴 Red | Nothing interactable in range |
+| 🟢 Green | Grabbable loose item in range (grip to pick up) |
+| 🟡 Yellow | B-button interactable in range (trader, loot pool, etc.) |
+| 🔵 Blue | Menu / inventory open — laser extends to 5 m for UI pointing |
 
 ### Inventory / UI
 
 When a menu or inventory panel is open the laser switches to **blue** and extends to 5 m.
 Point and pull the trigger to click. Grip acts as right-click.
+
+---
+
+## Wrist Watch HUD
+
+During gameplay your health, status effects, and other HUD info are displayed on a
+**wrist-mounted watch** on your non-dominant hand. Raise your wrist toward your face to
+reveal it — the display fades in when you look at it and fades out when you look away.
+
+All watch settings (glance angle, fade speed, size, position on wrist) are tunable in the
+F8 config screen under **Wrist Watch**. You can also disable glance-to-reveal so the watch
+is always visible.
 
 ---
 
@@ -119,20 +139,21 @@ Press **F8** at any time during gameplay to open the VR settings panel. It float
 world space in front of you. Point your dominant-hand controller at it and pull the
 trigger to interact. **Right stick up/down** scrolls the panel.
 
-Press **Save & Close** to write all settings to `default_config.json`. Press **Cancel**
-to discard changes for this session.
+**Save & Close** and **Cancel** are pinned at the bottom of the panel and always visible
+without scrolling. Press **Save & Close** to write all settings to `default_config.json`.
+Press **Cancel** to discard changes for this session.
 
 ### Settings available in the config screen
 
 | Section | Settings |
 |---------|---------|
 | **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed |
-| **HUD (Gameplay)** | Distance, size, height, left/right offset, follow mode (Instant / Smooth), smooth speed, element spread |
-| **Menu / Inventory** | Distance, size, left/right offset, laser X/Y calibration |
+| **Menu / Inventory** | Distance, size, height, left/right offset, HUD element spread, laser X/Y calibration |
+| **Wrist Watch** | Glance reveal on/off, glance angle, fade speed, watch size, X/Y/Z position on wrist |
 | **Controls** | Dominant hand |
 | **Holster Zones** | Zone radius, per-slot X/Y/Z position for all 4 holsters |
 | **Bag Zone** | Inventory pickup zone radius and X/Y/Z position |
-| **NVG Zone** | Night vision toggle zone radius and height above head |
+| **NVG Zone** | Night vision toggle zone radius, height above head, brightness, mono vision |
 
 ---
 
@@ -213,11 +234,9 @@ taller; below `1.0` makes the world feel bigger.
 
 - **Melee / unarmed** is not yet mapped to a VR gesture.
 - **Crouching** uses the game's toggle and does not track physical crouch height.
-- **Item containers** (crates, loot bodies) can be opened via inventory UI but do not
-  yet have dedicated VR grab interaction.
 - Occasionally the weapon snaps back to the camera position mid-session; holstering
   and re-drawing the weapon restores tracking.
-- The HUD may take a second to appear after the map loads — this is normal.
+- The wrist watch may take a second to appear after the map loads — this is normal.
 
 ---
 
