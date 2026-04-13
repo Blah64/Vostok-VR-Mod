@@ -33,6 +33,7 @@ var _grab_ray_right: RayCast3D  # Grab raycast on right controller
 var _throw_samples: Array = []  # Recent [position, time] pairs for throw velocity
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_is_long := false  # True for rifles/shotguns that support two-hand aim
+var _recoil_rest_xform := Transform3D.IDENTITY  # Cached rest pose of recoil chain
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
 var _pending_holster_key: int = -1  # KEY_N pending delayed injection on holster; -1 = none
 var _holster_cooldown := 0.0        # Seconds remaining before a new draw is allowed after holstering
@@ -279,6 +280,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	# Start weapon load detection + auto-raise sequence
 	_weapon_loaded = false
 	_weapon_is_long = false
+	_recoil_rest_xform = Transform3D.IDENTITY
 	_weapon_raise_timer = 3.0
 	_scroll_cooldown = 1.0
 	_fixed_reticle_instances.clear()  # Re-scan for reticle on new weapon
@@ -338,6 +340,7 @@ func _holster_weapon() -> void:
 	_weapon_slot = 0
 	_weapon_loaded = false
 	_weapon_is_long = false
+	_recoil_rest_xform = Transform3D.IDENTITY
 	_support_grip_held = false
 	_holster_cooldown = 0.8  # Block re-draw until animation completes
 
@@ -503,6 +506,7 @@ func _process(delta: float) -> void:
 						var wep = mgr.get_child(0)
 						print("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
 						_weapon_is_long = _classify_weapon_is_long(wep)
+						_recoil_rest_xform = _sample_recoil_chain(wep)
 						# Auto-raise weapon after short delay
 						_weapon_raise_timer = 0.5
 						print("[VR Mod] Will auto-raise weapon in 0.5s")
@@ -1056,6 +1060,7 @@ func _on_level_transition() -> void:
 	_weapons_reparented = false
 	_weapon_loaded = false
 	_weapon_is_long = false
+	_recoil_rest_xform = Transform3D.IDENTITY
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
 	_watch_crop_computed = false
@@ -2040,9 +2045,11 @@ func _sync_weapon_to_controller() -> void:
 		var rot_offset: float = _slot_grip_rotations.get(_weapon_slot, 0.0)
 		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + rot_offset))
 
-	weapon_rig.global_basis = aim_basis
+	# Sample recoil chain and apply delta on top of controller aim
+	var recoil_delta := _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
+	weapon_rig.global_basis = aim_basis * recoil_delta.basis
 	var local_offset: Vector3 = _slot_grip_offsets.get(_weapon_slot, Vector3(0, 0.15, -0.20))
-	weapon_rig.global_position = controller.global_position + aim_basis * local_offset
+	weapon_rig.global_position = controller.global_position + aim_basis * (local_offset + recoil_delta.origin)
 
 	# Hide all arm surfaces on every weapon type (guns, knives, grenades)
 	_hide_arms_in_subtree(weapon_rig)
@@ -2053,6 +2060,20 @@ func _sync_weapon_to_controller() -> void:
 	# Scope PIP: detect and activate game's scope SubViewport, position camera
 	_setup_scope_pip(weapon_rig)
 	_update_scope_camera()
+
+
+const _RECOIL_CHAIN_NAMES: Array = ["Handling", "Sway", "Noise", "Tilt", "Impulse", "Recoil"]
+
+func _sample_recoil_chain(weapon_rig: Node3D) -> Transform3D:
+	var composed := Transform3D.IDENTITY
+	var current: Node3D = weapon_rig
+	for chain_name in _RECOIL_CHAIN_NAMES:
+		var child = current.get_node_or_null(chain_name)
+		if not child or not child is Node3D:
+			break
+		composed = composed * child.transform
+		current = child
+	return composed
 
 
 func _log(msg: String) -> void:
