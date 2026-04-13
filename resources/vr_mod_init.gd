@@ -293,6 +293,7 @@ var _hud_lr_offset := 0.0
 var _menu_lr_offset := 0.0
 var _hud_smooth_follow := false
 var _hud_smooth_speed := 3.0
+var _hud_yaw := 0.0         # Lagged yaw for smooth follow — tracked separately, never read from mesh
 var _hud_spread := 1.0      # HUD element spread (1.0 = default, <1 = closer together)
 var _menu_laser_uv_x := 0.02  # Horizontal laser offset for menu/inventory (UV units)
 var _menu_laser_uv_y := 0.06  # Vertical laser offset for menu/inventory (UV units)
@@ -723,12 +724,11 @@ func _on_interface_closed() -> void:
 		return
 
 	if _hud_smooth_follow:
-		# Smooth follow: leave in world space, _update_smooth_hud will lerp it
-		if hud_mesh.get_parent() == xr_camera:
-			var gx = hud_mesh.global_transform
-			hud_mesh.get_parent().remove_child(hud_mesh)
-			get_tree().root.add_child(hud_mesh)
-			hud_mesh.global_transform = gx
+		# Seed yaw from camera direction so smooth follow resumes correctly
+		if xr_camera:
+			_hud_yaw = xr_camera.global_rotation.y
+		# HUD is already in world space (placed there by _on_interface_opened) — leave it
+		# _update_smooth_hud will take over next frame
 	else:
 		# Instant: reparent back to camera
 		if hud_mesh.get_parent():
@@ -2249,13 +2249,21 @@ func _update_smooth_hud(delta: float) -> void:
 		return
 	if hud_mesh.get_parent() == xr_camera:
 		return
-	var target_pos = xr_camera.global_position + xr_camera.global_basis * Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
-	hud_mesh.global_position = hud_mesh.global_position.lerp(target_pos, clampf(_hud_smooth_speed * delta, 0.0, 1.0))
-	var look_from = hud_mesh.global_position
-	var look_target = xr_camera.global_position
-	if look_from.distance_to(look_target) > 0.01:
-		hud_mesh.look_at(look_target, Vector3.UP)
-		hud_mesh.rotate_y(deg_to_rad(180))
+
+	var cam_yaw = xr_camera.global_rotation.y
+
+	# Shortest-path yaw lerp — use _hud_yaw member, never read back from mesh
+	var diff = fmod(cam_yaw - _hud_yaw + PI, TAU) - PI
+	_hud_yaw += diff * clampf(_hud_smooth_speed * delta, 0.0, 1.0)
+
+	# Position: instantly at exact offset from camera, rotated by lagged yaw
+	var lagged_basis = Basis(Vector3.UP, _hud_yaw)
+	hud_mesh.global_position = xr_camera.global_position + lagged_basis * Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
+
+	# Orientation: quad local +Z faces toward player when rotation.y == _hud_yaw
+	# (no PI offset needed — lagged_basis already points HUD away from player,
+	#  so +Z normal naturally faces back toward player)
+	hud_mesh.global_rotation = Vector3(0.0, _hud_yaw, 0.0)
 
 
 # ── Config Screen (F8) ──────────────────────────────────────────────────────
@@ -2267,6 +2275,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_dump_hud_tree()
 	if event is InputEventKey and event.pressed and event.keycode == KEY_F10:
 		_dump_weapon_tree()
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F11:
+		_dump_nvg_and_environment()
 
 
 func _toggle_config_screen() -> void:
@@ -2800,12 +2810,17 @@ func _apply_hud_follow_mode() -> void:
 	if not hud_mesh:
 		return
 	if _hud_smooth_follow:
+		# Seed yaw from current camera so there's no snap on first frame
+		if xr_camera:
+			_hud_yaw = xr_camera.global_rotation.y
 		# Switch to world-space
 		if hud_mesh.get_parent() == xr_camera:
-			var gx = hud_mesh.global_transform
 			xr_camera.remove_child(hud_mesh)
 			get_tree().root.add_child(hud_mesh)
-			hud_mesh.global_transform = gx
+			# Place immediately at correct position using seeded yaw
+			var lagged_basis = Basis(Vector3.UP, _hud_yaw)
+			hud_mesh.global_position = xr_camera.global_position + lagged_basis * Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
+			hud_mesh.global_rotation = Vector3(0.0, _hud_yaw, 0.0)
 	else:
 		# Switch to head-locked
 		if hud_mesh.get_parent() != xr_camera:
@@ -3151,3 +3166,216 @@ func _dump_node_recursive(f: FileAccess, node: Node, depth: int) -> void:
 	f.store_line(line)
 	for child in node.get_children():
 		_dump_node_recursive(f, child, depth + 1)
+
+
+# ── NVG & Environment debug dump (F11) ────────────────────────────────────
+
+func _dump_nvg_and_environment() -> void:
+	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
+	if not f:
+		f = FileAccess.open(log_path, FileAccess.WRITE)
+	if not f:
+		print("[VR Mod] Cannot open debug log for NVG dump")
+		return
+	f.seek_end(0)
+	f.store_line("")
+	f.store_line("=== NVG & ENVIRONMENT DUMP (" + str(Time.get_datetime_string_from_system()) + ") ===")
+
+	# ── 1. Dump the NVG node under Map/Core/UI ──
+	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
+	if ui_node:
+		var nvg_node = ui_node.get_node_or_null("NVG")
+		if nvg_node:
+			f.store_line("")
+			f.store_line("── NVG Node (" + nvg_node.get_class() + ") vis=" + str(nvg_node.visible) + " ──")
+			if nvg_node.get_script():
+				f.store_line("  script=" + str(nvg_node.get_script().resource_path))
+			if nvg_node is CanvasItem:
+				f.store_line("  modulate=" + str(nvg_node.modulate))
+				f.store_line("  self_modulate=" + str(nvg_node.self_modulate))
+				f.store_line("  z_index=" + str(nvg_node.z_index))
+				f.store_line("  light_mask=" + str(nvg_node.light_mask))
+			if nvg_node is CanvasLayer:
+				f.store_line("  layer=" + str((nvg_node as CanvasLayer).layer))
+				f.store_line("  follow_viewport=" + str((nvg_node as CanvasLayer).follow_viewport_enabled))
+			_dump_nvg_node(f, nvg_node, 0, 15)
+		else:
+			f.store_line("  NVG node not found under Map/Core/UI")
+			f.store_line("  Children of UI:")
+			for c in ui_node.get_children():
+				f.store_line("    " + c.name + " (" + c.get_class() + ") vis=" + str(c.visible if c is CanvasItem else "n/a"))
+
+		# Also dump Effects node since it might contain NVG-related overlays
+		var effects_node = ui_node.get_node_or_null("Effects")
+		if effects_node:
+			f.store_line("")
+			f.store_line("── Effects Node (" + effects_node.get_class() + ") vis=" + str(effects_node.visible) + " ──")
+			_dump_nvg_node(f, effects_node, 0, 10)
+	else:
+		f.store_line("  Map/Core/UI not found!")
+
+	# ── 2. Scan for all WorldEnvironment nodes in the scene ──
+	f.store_line("")
+	f.store_line("── WorldEnvironment Nodes ──")
+	var we_nodes = _find_nodes_of_class(get_tree().root, "WorldEnvironment", 6)
+	if we_nodes.size() == 0:
+		f.store_line("  (none found in scene, depth 6)")
+	for we in we_nodes:
+		f.store_line("  " + str(we.get_path()) + " vis=" + str(we.visible if we is Node3D else "n/a"))
+		var env = we.get("environment")
+		if env and env is Environment:
+			_dump_environment(f, env, "    ")
+
+	# ── 3. Check camera's own environment ──
+	f.store_line("")
+	f.store_line("── Camera Environments ──")
+	if game_camera and is_instance_valid(game_camera):
+		var cam_env = game_camera.get("environment")
+		if cam_env and cam_env is Environment:
+			f.store_line("  game_camera (" + str(game_camera.get_path()) + ") has environment:")
+			_dump_environment(f, cam_env, "    ")
+		else:
+			f.store_line("  game_camera has no environment override")
+	if xr_camera and is_instance_valid(xr_camera):
+		var xr_env = xr_camera.get("environment")
+		if xr_env and xr_env is Environment:
+			f.store_line("  xr_camera has environment:")
+			_dump_environment(f, xr_env, "    ")
+		else:
+			f.store_line("  xr_camera has no environment override")
+
+	# ── 4. Check for CanvasLayer nodes at the root level (post-processing overlays) ──
+	f.store_line("")
+	f.store_line("── Root-level CanvasLayers ──")
+	for child in get_tree().root.get_children():
+		if child is CanvasLayer:
+			f.store_line("  " + child.name + " layer=" + str((child as CanvasLayer).layer) + " vis=" + str(child.visible))
+	var map_node = get_tree().root.get_node_or_null("Map")
+	if map_node:
+		for child in map_node.get_children():
+			if child is CanvasLayer:
+				f.store_line("  Map/" + child.name + " layer=" + str((child as CanvasLayer).layer) + " vis=" + str(child.visible))
+
+	f.store_line("")
+	f.store_line("=== END NVG & ENVIRONMENT DUMP ===")
+	f.close()
+	print("[VR Mod] NVG & environment dump written to vr_mod_debug.log (F11)")
+
+
+func _dump_nvg_node(f: FileAccess, node: Node, depth: int, max_depth: int) -> void:
+	if depth > max_depth:
+		return
+	var indent = "  ".repeat(depth + 1)
+	var line = indent + node.name + " (" + node.get_class() + ")"
+
+	if node.get_script():
+		line += " script=" + str(node.get_script().resource_path)
+		# Dump script variables
+		var prop_strs := []
+		for prop in node.get_property_list():
+			if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+				var pname: String = prop["name"]
+				var val = node.get(pname)
+				if val != null and str(val).length() < 200:
+					prop_strs.append(pname + "=" + str(val))
+		if prop_strs.size() > 0:
+			line += "\n" + indent + "  PROPS: " + " | ".join(prop_strs)
+
+	if node is CanvasItem:
+		var ci = node as CanvasItem
+		line += " vis=" + str(ci.visible)
+		if ci.modulate != Color(1, 1, 1, 1):
+			line += " modulate=" + str(ci.modulate)
+		if ci.self_modulate != Color(1, 1, 1, 1):
+			line += " self_mod=" + str(ci.self_modulate)
+		if ci.material:
+			line += " mat=" + ci.material.get_class()
+			if ci.material is ShaderMaterial:
+				var sm = ci.material as ShaderMaterial
+				line += " shader=" + str(sm.shader.resource_path if sm.shader else "null")
+				if sm.shader:
+					for param in sm.shader.get_shader_uniform_list():
+						var pname: String = param["name"]
+						var val = sm.get_shader_parameter(pname)
+						var val_str = str(val)
+						if val is Texture2D and val.resource_path != "":
+							val_str = val.resource_path
+						line += "\n" + indent + "  uniform " + pname + " type=" + str(param["type"]) + " val=" + val_str
+
+	if node is Control:
+		var ctrl = node as Control
+		line += " pos=" + str(ctrl.position) + " size=" + str(ctrl.size)
+		line += " anchors=(" + str(ctrl.anchor_left) + "," + str(ctrl.anchor_top) + "," + str(ctrl.anchor_right) + "," + str(ctrl.anchor_bottom) + ")"
+
+	if node is TextureRect:
+		var tr = node as TextureRect
+		if tr.texture:
+			line += " tex=" + tr.texture.get_class()
+			if tr.texture.resource_path != "":
+				line += " res=" + tr.texture.resource_path
+			if tr.texture is ViewportTexture:
+				line += " vp=" + str(tr.texture.viewport_path)
+			line += " tex_size=" + str(tr.texture.get_size())
+		line += " stretch=" + str(tr.stretch_mode)
+
+	if node is ColorRect:
+		line += " color=" + str((node as ColorRect).color)
+
+	if node is CanvasLayer:
+		var cl = node as CanvasLayer
+		line += " layer=" + str(cl.layer)
+		line += " follow_vp=" + str(cl.follow_viewport_enabled)
+
+	if node is SubViewport:
+		var sv = node as SubViewport
+		line += " vp_size=" + str(sv.size) + " update=" + str(sv.render_target_update_mode)
+		line += " transparent=" + str(sv.transparent_bg)
+
+	f.store_line(line)
+	for child in node.get_children():
+		_dump_nvg_node(f, child, depth + 1, max_depth)
+
+
+func _dump_environment(f: FileAccess, env: Environment, indent: String) -> void:
+	f.store_line(indent + "bg_mode=" + str(env.background_mode))
+	f.store_line(indent + "ambient_mode=" + str(env.ambient_light_source))
+	f.store_line(indent + "ambient_color=" + str(env.ambient_light_color))
+	f.store_line(indent + "ambient_energy=" + str(env.ambient_light_energy))
+	f.store_line(indent + "tonemap_mode=" + str(env.tonemap_mode))
+	f.store_line(indent + "tonemap_exposure=" + str(env.tonemap_exposure))
+	f.store_line(indent + "tonemap_white=" + str(env.tonemap_white))
+	# Adjustment (color correction)
+	f.store_line(indent + "adjustment_enabled=" + str(env.adjustment_enabled))
+	if env.adjustment_enabled:
+		f.store_line(indent + "  brightness=" + str(env.adjustment_brightness))
+		f.store_line(indent + "  contrast=" + str(env.adjustment_contrast))
+		f.store_line(indent + "  saturation=" + str(env.adjustment_saturation))
+		if env.adjustment_color_correction:
+			f.store_line(indent + "  color_correction=" + str(env.adjustment_color_correction.resource_path))
+	# Glow
+	f.store_line(indent + "glow_enabled=" + str(env.glow_enabled))
+	if env.glow_enabled:
+		f.store_line(indent + "  glow_intensity=" + str(env.glow_intensity))
+		f.store_line(indent + "  glow_strength=" + str(env.glow_strength))
+		f.store_line(indent + "  glow_bloom=" + str(env.glow_bloom))
+		f.store_line(indent + "  glow_blend_mode=" + str(env.glow_blend_mode))
+	# Fog
+	f.store_line(indent + "fog_enabled=" + str(env.fog_enabled))
+	if env.fog_enabled:
+		f.store_line(indent + "  fog_color=" + str(env.fog_light_color))
+		f.store_line(indent + "  fog_density=" + str(env.fog_density))
+	# SSAO / SSIL / SSR (may not all be available in Forward Mobile)
+	f.store_line(indent + "ssao_enabled=" + str(env.ssao_enabled))
+	f.store_line(indent + "ssil_enabled=" + str(env.ssil_enabled))
+	f.store_line(indent + "ssr_enabled=" + str(env.ssr_enabled))
+
+
+func _find_nodes_of_class(root: Node, class_name_str: String, max_depth: int, _depth: int = 0) -> Array:
+	var result := []
+	if root.get_class() == class_name_str or root.is_class(class_name_str):
+		result.append(root)
+	if _depth < max_depth:
+		for child in root.get_children():
+			result.append_array(_find_nodes_of_class(child, class_name_str, max_depth, _depth + 1))
+	return result
