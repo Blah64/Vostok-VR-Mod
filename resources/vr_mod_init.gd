@@ -80,6 +80,14 @@ var _nvg_mono_camera: Camera3D          # mono render camera (centered between e
 var _nvg_brightness := 2.0             # config: brightness multiplier
 var _nvg_overlay_installed := false
 
+# Decor mode (shelter furniture placement)
+var _decor_mode := false
+var _decor_scroll_mode := 0       # 0 = distance, 1 = rotation
+var _decor_scroll_cooldown := 0.0
+var _left_grip_held := false      # Track individual grips for both-grips detection
+var _right_grip_held := false
+var _both_grips_triggered := false # Edge detection — prevent repeat triggers
+
 # Per-slot grip offsets in aim-local space (up, forward from controller)
 # Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
 var _slot_grip_offsets := {
@@ -161,6 +169,46 @@ func _is_in_nvg_zone(world_pos: Vector3) -> bool:
 		return false
 	var head_pos = xr_camera.global_position
 	return world_pos.distance_to(head_pos + _nvg_zone_offset) < _nvg_zone_radius
+
+
+func _is_decor_placing() -> bool:
+	# Check if a furniture ghost preview is active (item selected for placement).
+	# The game creates a "Hint" MeshInstance3D under /root/Map/ when placing.
+	var map_node = get_tree().root.get_node_or_null("Map")
+	if not map_node:
+		return false
+	var hint = map_node.get_node_or_null("Hint")
+	return hint != null and hint is MeshInstance3D and hint.visible
+
+
+func _toggle_decor_mode() -> void:
+	_decor_mode = not _decor_mode
+	_inject_key(KEY_F1, true)
+	_inject_key(KEY_F1, false)
+	if _decor_mode:
+		_decor_scroll_mode = 0
+		_decor_scroll_cooldown = 0.0
+		# Ensure Placer starts in distance mode
+		if game_camera:
+			var placer = game_camera.get_node_or_null("Placer")
+			if placer:
+				placer.set("rotateMode", false)
+		_log("[VR Mod] === DECOR MODE ON ===")
+		if left_controller:
+			left_controller.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.2, 0.0)
+		if right_controller:
+			right_controller.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.2, 0.0)
+	else:
+		# Reset Placer to distance mode on exit
+		if game_camera:
+			var placer = game_camera.get_node_or_null("Placer")
+			if placer:
+				placer.set("rotateMode", false)
+		_log("[VR Mod] === DECOR MODE OFF ===")
+		if left_controller:
+			left_controller.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.15, 0.0)
+		if right_controller:
+			right_controller.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.15, 0.0)
 
 
 func _update_holster_zone_haptics() -> void:
@@ -555,7 +603,8 @@ func _process(delta: float) -> void:
 				_process_input(delta)
 
 				# Sync weapon AFTER origin/camera so our position override wins
-				_sync_weapon_to_controller()
+				if not _decor_mode:
+					_sync_weapon_to_controller()
 				_update_hand_visibility()
 				_update_grabbed()
 
@@ -1095,8 +1144,45 @@ func _sync_origin_to_game() -> void:
 
 		# Steer game camera toward controller aim via mouse injection
 		if not _interface_open:
-			_steer_game_camera_via_mouse()
+			if _decor_mode:
+				_steer_decor_camera_to_controller()
+			else:
+				_steer_game_camera_via_mouse()
 
+
+func _steer_decor_camera_to_controller() -> void:
+	# In decor mode, steer game camera to match dominant hand controller aim.
+	# The game uses game camera direction for furniture placement, so this makes
+	# the furniture ghost follow where the player points the controller.
+	var ctrl = _get_controller(_config_dominant_hand)
+	if not ctrl or not ctrl.get_is_active():
+		return
+	if not game_camera or not is_instance_valid(game_camera):
+		return
+
+	var aim_forward = -ctrl.global_basis.z
+	var target_yaw = atan2(-aim_forward.x, -aim_forward.z)
+	var target_pitch = asin(clampf(aim_forward.y, -1.0, 1.0))
+
+	var game_yaw = game_camera.global_rotation.y
+	var game_pitch = game_camera.global_rotation.x
+
+	var yaw_error = fmod(target_yaw - game_yaw + PI, TAU) - PI
+	var pitch_error = target_pitch - game_pitch
+
+	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
+		return
+
+	var mouse_sensitivity_estimate := 0.003
+	var correction_strength := 0.8
+
+	var mouse_dx = -(yaw_error * correction_strength) / mouse_sensitivity_estimate
+	var mouse_dy = -(pitch_error * correction_strength) / mouse_sensitivity_estimate
+
+	var event = InputEventMouseMotion.new()
+	event.relative = Vector2(mouse_dx, mouse_dy)
+	event.position = get_viewport().get_visible_rect().size / 2
+	Input.parse_input_event(event)
 
 
 func _steer_game_camera_via_mouse() -> void:
@@ -1150,6 +1236,12 @@ func _process_input(delta: float) -> void:
 		_inject_key(KEY_S, false)
 		_inject_key(KEY_A, false)
 		_inject_key(KEY_D, false)
+		# Right thumbstick Y = scroll in all menus/inventories
+		if right_controller and right_controller.get_is_active():
+			var stick = right_controller.get_vector2("primary")
+			if abs(stick.y) > 0.5 and _scroll_cooldown <= 0:
+				_inject_scroll(1 if stick.y > 0 else -1)
+				_scroll_cooldown = 0.15
 		return
 
 	# --- Grip adjust mode: thumbsticks control offsets ---
@@ -1178,6 +1270,53 @@ func _process_input(delta: float) -> void:
 		_inject_key(KEY_S, false)
 		_inject_key(KEY_A, false)
 		_inject_key(KEY_D, false)
+		return
+
+	# --- Decor mode: right stick Y = scroll (distance/rotation), left stick = move, right stick X = turn ---
+	if _decor_mode:
+		# Tick decor scroll cooldown
+		if _decor_scroll_cooldown > 0:
+			_decor_scroll_cooldown -= delta
+
+		# Right thumbstick Y = scroll for distance or rotation
+		if right_controller and right_controller.get_is_active():
+			var stick = right_controller.get_vector2("primary")
+			if abs(stick.y) > 0.5 and _decor_scroll_cooldown <= 0:
+				_inject_scroll(1 if stick.y > 0 else -1)
+				_decor_scroll_cooldown = 0.15
+
+		# Left thumbstick = movement (still works in decor mode)
+		if left_controller and left_controller.get_is_active():
+			var move = left_controller.get_vector2("primary")
+			if move.length() > thumbstick_deadzone:
+				var strength = (move.length() - thumbstick_deadzone) / (1.0 - thumbstick_deadzone)
+				move = move.normalized() * strength
+				if game_camera and is_instance_valid(game_camera) and xr_camera:
+					var yaw_diff = xr_camera.global_rotation.y - game_camera.global_rotation.y
+					move = move.rotated(yaw_diff)
+				_inject_key(KEY_W, move.y > 0.3)
+				_inject_key(KEY_S, move.y < -0.3)
+				_inject_key(KEY_A, move.x < -0.3)
+				_inject_key(KEY_D, move.x > 0.3)
+			else:
+				_inject_key(KEY_W, false)
+				_inject_key(KEY_S, false)
+				_inject_key(KEY_A, false)
+				_inject_key(KEY_D, false)
+
+		# Right thumbstick X = snap/smooth turn (fall through to turn section)
+		if right_controller and right_controller.get_is_active():
+			var turn_input = right_controller.get_vector2("primary")
+			if abs(turn_input.x) > thumbstick_deadzone:
+				if use_snap_turn:
+					if not _snap_turn_cooldown and abs(turn_input.x) > 0.6:
+						var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
+						xr_origin.rotate_y(deg_to_rad(angle))
+						_snap_turn_cooldown = true
+				else:
+					xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
+			else:
+				_snap_turn_cooldown = false
 		return
 
 	# --- Left thumbstick: Movement ---
@@ -1232,6 +1371,55 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 	var is_weapon_hand := (hand == _weapon_hand) if _holster_state != HolsterState.UNARMED else (hand == _config_dominant_hand)
 	var is_support_hand := not is_weapon_hand
 
+	# Grip tracking must happen before any early return (needed for both-grips detection)
+	if button_name == "grip_click":
+		if hand == "left":
+			_left_grip_held = true
+		else:
+			_right_grip_held = true
+
+	# Decor mode remaps (before normal input handling)
+	if _decor_mode and not _interface_open:
+		match button_name:
+			"trigger_click":
+				if is_weapon_hand:
+					_inject_key(KEY_G, true)  # Place furniture
+					print("[VR Mod] DECOR: Place (G pressed)")
+			"ax_button":
+				if hand == "right":
+					# A button = surface magnet toggle (left click)
+					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+					_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
+					print("[VR Mod] DECOR: Surface magnet toggled")
+				elif hand == "left" and not _is_decor_placing():
+					# X button = exit decor mode (blocked while placing)
+					_toggle_decor_mode()
+			"by_button":
+				if hand == "left":
+					# Y button = furniture inventory (Tab)
+					_inject_key(KEY_TAB, true)
+					_inject_key(KEY_TAB, false)
+					print("[VR Mod] DECOR: Furniture inventory (Tab)")
+				elif hand == "right":
+					# B button = store item to furniture inventory (middle mouse)
+					_inject_mouse_button(MOUSE_BUTTON_MIDDLE, true)
+					_inject_mouse_button(MOUSE_BUTTON_MIDDLE, false)
+					print("[VR Mod] DECOR: Store to furniture inv (middle click)")
+			"grip_click":
+				# Both grips = exit decor mode (blocked while placing)
+				if _left_grip_held and _right_grip_held and not _is_decor_placing():
+					_toggle_decor_mode()
+				# Single right grip = toggle distance/rotation mode via Placer.rotateMode
+				elif hand == "right":
+					_decor_scroll_mode = 1 - _decor_scroll_mode
+					var placer = game_camera.get_node_or_null("Placer") if game_camera else null
+					if placer:
+						placer.set("rotateMode", _decor_scroll_mode == 1)
+					var mode_name = "ROTATION" if _decor_scroll_mode == 1 else "DISTANCE"
+					_log("[VR Mod] DECOR: Scroll mode -> " + mode_name)
+					right_controller.trigger_haptic_pulse("haptic", 0.0, 0.2, 0.1, 0.0)
+		return  # Don't fall through to normal input handling
+
 	match button_name:
 		"trigger_click":
 			if _config_screen_open:
@@ -1265,9 +1453,18 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_inject_action("reload", true)
 						print("[VR Mod] RELOAD pressed (support trigger)")
 		"grip_click":
+			# Grip tracking already done above (before decor mode block)
+			# Both grips while unarmed and not holding anything = enter decor mode
+			if _left_grip_held and _right_grip_held and _holster_state == HolsterState.UNARMED and _grabbed_object == null and not _interface_open and not _decor_mode:
+				if not _both_grips_triggered:
+					_both_grips_triggered = true
+					_toggle_decor_mode()
+				return
 			if _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
 				_inject_action("context", true)
+			elif _decor_mode:
+				return
 			elif _holster_cooldown > 0.0:
 				print("[VR Mod] Grip blocked - holster cooldown (" + str(snappedf(_holster_cooldown, 0.01)) + "s remaining)")
 			else:
@@ -1358,6 +1555,23 @@ func _on_button_released(button_name: String, hand: String) -> void:
 	var is_weapon_hand := (hand == _weapon_hand) if _holster_state != HolsterState.UNARMED else (hand == _config_dominant_hand)
 	var is_support_hand := not is_weapon_hand
 
+	# Grip release tracking must happen before any early return
+	if button_name == "grip_click":
+		if hand == "left":
+			_left_grip_held = false
+		else:
+			_right_grip_held = false
+		if not _left_grip_held and not _right_grip_held:
+			_both_grips_triggered = false
+
+	# Decor mode release handling
+	if _decor_mode and not _interface_open:
+		match button_name:
+			"trigger_click":
+				if is_weapon_hand:
+					_inject_key(KEY_G, false)  # Release place key
+		return  # Don't fall through to normal release handling
+
 	match button_name:
 		"trigger_click":
 			if _config_screen_open:
@@ -1375,9 +1589,14 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				else:
 					_inject_action("reload", false)
 		"grip_click":
+			# Grip release tracking already done above (before decor mode block)
+			if _decor_mode and not _interface_open:
+				return  # Don't process holster/drop while in decor mode
 			if _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
 				_inject_action("context", false)
+			elif _decor_mode:
+				return
 			else:
 				if hand == _weapon_hand and _holster_state == HolsterState.DRAWN:
 					if not _weapon_loaded:
@@ -1430,6 +1649,7 @@ func _inject_key(keycode: int, pressed: bool) -> void:
 	event.physical_keycode = keycode
 	event.pressed = pressed
 	Input.parse_input_event(event)
+	get_viewport().push_input(event, false)
 
 
 func _inject_mouse_button(button: int, pressed: bool) -> void:
@@ -1460,18 +1680,24 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 
 
 func _inject_scroll(direction: int) -> void:
-	# direction: 1 = scroll up (next weapon), -1 = scroll down (prev weapon)
+	# direction: 1 = scroll up, -1 = scroll down
 	var event = InputEventMouseButton.new()
 	event.button_index = MOUSE_BUTTON_WHEEL_UP if direction > 0 else MOUSE_BUTTON_WHEEL_DOWN
 	event.pressed = true
-	event.position = get_viewport().get_visible_rect().size / 2
+	# Use laser pointer position when in a menu, center of screen otherwise
+	if _interface_open and _laser_screen_pos.x >= 0:
+		event.position = _laser_screen_pos
+	else:
+		event.position = get_viewport().get_visible_rect().size / 2
 	Input.parse_input_event(event)
+	get_viewport().push_input(event, false)
 	# Scroll events need immediate release
 	var release = InputEventMouseButton.new()
 	release.button_index = event.button_index
 	release.pressed = false
 	release.position = event.position
 	Input.parse_input_event(release)
+	get_viewport().push_input(release, false)
 
 
 func _inject_action(action_name: String, pressed: bool, strength: float = 1.0) -> void:
@@ -1813,7 +2039,10 @@ func _update_hand_visibility() -> void:
 		var show_laser := false
 		var laser_hand := _config_dominant_hand
 
-		if _holster_state == HolsterState.UNARMED and _grabbed_object == null:
+		if _decor_mode:
+			show_laser = true
+			laser_hand = _config_dominant_hand
+		elif _holster_state == HolsterState.UNARMED and _grabbed_object == null:
 			show_laser = true
 			laser_hand = _config_dominant_hand
 		elif _holster_state == HolsterState.LOWERED:
@@ -1839,7 +2068,9 @@ func _update_hand_visibility() -> void:
 					pointing_at_interactable = true
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
-				if pointing_at_grabbable:
+				if _decor_mode:
+					mat.albedo_color = Color(0.2, 0.8, 1.0, 0.7)   # Cyan - decor placement
+				elif pointing_at_grabbable:
 					mat.albedo_color = Color(0.1, 1.0, 0.2, 0.7)   # Green - grabbable item
 				elif pointing_at_interactable:
 					mat.albedo_color = Color(1.0, 0.8, 0.1, 0.7)   # Yellow - B-interact
@@ -3756,7 +3987,7 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 		# Dump script properties (exported/user vars)
 		var prop_strs := []
 		for prop in node.get_property_list():
-			if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			if prop["usage"] & 4096:  # PROPERTY_USAGE_SCRIPT_VARIABLE
 				var pname: String = prop["name"]
 				var val = node.get(pname)
 				if val != null and str(val).length() < 200:
@@ -3768,7 +3999,7 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 		if att_data and att_data is Resource:
 			var res_strs := []
 			for rprop in att_data.get_property_list():
-				if rprop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+				if rprop["usage"] & 4096:  # PROPERTY_USAGE_SCRIPT_VARIABLE
 					var rpname: String = rprop["name"]
 					var rval = att_data.get(rpname)
 					if rval != null and str(rval).length() < 300:
@@ -3963,6 +4194,57 @@ func _dump_nvg_and_environment() -> void:
 	f.store_line("")
 	f.store_line("=== NVG & ENVIRONMENT DUMP (" + str(Time.get_datetime_string_from_system()) + ") ===")
 
+	# ── 0. Decor mode state ──
+	f.store_line("")
+	f.store_line("-- Decor Mode --")
+	f.store_line("  _decor_mode=" + str(_decor_mode))
+	f.store_line("  _decor_scroll_mode=" + str(_decor_scroll_mode) + " (0=distance, 1=rotation)")
+	f.store_line("  _left_grip_held=" + str(_left_grip_held) + " _right_grip_held=" + str(_right_grip_held))
+	if _decor_mode and game_camera and is_instance_valid(game_camera):
+		# Dump direct children of game_camera that might be decor-related
+		f.store_line("  game_camera children:")
+		for c in game_camera.get_children():
+			var vis_str = ""
+			if c is Node3D:
+				vis_str = " vis=" + str(c.visible)
+			elif c is CanvasItem:
+				vis_str = " vis=" + str(c.visible)
+			f.store_line("    " + c.name + " (" + c.get_class() + ")" + vis_str)
+		# Check for Placer node
+		var placer = game_camera.get_node_or_null("Placer")
+		if placer:
+			f.store_line("  Placer node found! Children:")
+			for c in placer.get_children():
+				var vis_str2 = ""
+				if c is Node3D:
+					vis_str2 = " vis=" + str(c.visible)
+				f.store_line("    " + c.name + " (" + c.get_class() + ")" + vis_str2)
+				if c.get_script():
+					f.store_line("      script=" + str(c.get_script().resource_path))
+
+	# ── 0b. Placer script properties + Map/Hint ghost node ──
+	if _decor_mode:
+		var placer = game_camera.get_node_or_null("Placer") if game_camera else null
+		if placer and placer.get_script():
+			f.store_line("  Placer script: " + str(placer.get_script().resource_path))
+			f.store_line("  Placer PROPS:")
+			var prop_list = placer.get_property_list()
+			for prop in prop_list:
+				# 4096 = PROPERTY_USAGE_SCRIPT_VARIABLE
+				if prop["usage"] & 4096:
+					var val = placer.get(prop["name"])
+					f.store_line("    " + prop["name"] + " = " + str(val))
+		var map_node = get_tree().root.get_node_or_null("Map")
+		if map_node:
+			f.store_line("  /root/Map/ direct children:")
+			for c in map_node.get_children():
+				var info = "    " + c.name + " (" + c.get_class() + ")"
+				if c is Node3D:
+					info += " vis=" + str(c.visible)
+				if c.get_script():
+					info += " script=" + str(c.get_script().resource_path)
+				f.store_line(info)
+
 	# ── 1. Dump the NVG node under Map/Core/UI ──
 	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
 	if ui_node:
@@ -4055,7 +4337,7 @@ func _dump_nvg_node(f: FileAccess, node: Node, depth: int, max_depth: int) -> vo
 		# Dump script variables
 		var prop_strs := []
 		for prop in node.get_property_list():
-			if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			if prop["usage"] & 4096:  # PROPERTY_USAGE_SCRIPT_VARIABLE
 				var pname: String = prop["name"]
 				var val = node.get(pname)
 				if val != null and str(val).length() < 200:
