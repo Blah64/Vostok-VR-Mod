@@ -225,10 +225,18 @@ func _update_nvg_overlay(_delta: float) -> void:
 		if _nvg_mono:
 			_create_nvg_mono_viewport()
 			_nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-			mat.set_shader_parameter("mono_tex", _nvg_mono_viewport.get_texture())
+			var vp_tex = _nvg_mono_viewport.get_texture()
+			mat.set_shader_parameter("mono_tex", vp_tex)
 			mat.set_shader_parameter("use_mono", true)
+			# Place far enough that IPD parallax is negligible (~3° at 1m)
+			# Size to overfill FOV: 2*tan(60°)*1.0 ≈ 3.46m, use 4.0m
+			(_nvg_overlay_mesh.mesh as QuadMesh).size = Vector2(4.0, 4.0)
+			_nvg_overlay_mesh.position = Vector3(0.0, 0.0, -1.0)
 		else:
 			mat.set_shader_parameter("use_mono", false)
+			# Stereo: close to camera, oversized for SCREEN_UV coverage
+			(_nvg_overlay_mesh.mesh as QuadMesh).size = Vector2(4.0, 4.0)
+			_nvg_overlay_mesh.position = Vector3(0.0, 0.0, -0.15)
 		print("[VR Mod] NVG overlay activated (mono=", _nvg_mono, ")")
 
 	# State transition: NVG just turned off
@@ -697,6 +705,8 @@ func _setup_vr_hud() -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	hud_mesh.material_override = mat
 
+	# Put HUD on layer 20 only so NVG mono camera doesn't render it
+	hud_mesh.layers = (1 << 19)
 	# Start head-locked
 	hud_mesh.position = Vector3(_hud_lr_offset, _hud_height_offset, -_hud_distance)
 	xr_camera.add_child(hud_mesh)
@@ -726,6 +736,9 @@ func _setup_nvg_overlay() -> void:
 	mat.set_shader_parameter("use_mono", _nvg_mono)
 	_nvg_overlay_mesh.material_override = mat
 
+	# Put overlay on layer 20 ONLY so the mono camera can exclude it (prevents feedback loop)
+	# XR cameras default cull_mask includes all 20 layers, so they still see it
+	_nvg_overlay_mesh.layers = (1 << 19)  # layer 20 only
 	_nvg_overlay_mesh.position = Vector3(0.0, 0.0, -0.15)
 	_nvg_overlay_mesh.visible = false
 	xr_camera.add_child(_nvg_overlay_mesh)
@@ -736,9 +749,17 @@ func _setup_nvg_overlay() -> void:
 func _create_nvg_mono_viewport() -> void:
 	if _nvg_mono_viewport:
 		return
+	# Use XR per-eye render size for correct aspect ratio, scaled down for perf
+	var xr_iface = XRServer.primary_interface
+	var vp_size := Vector2i(1024, 1024)
+	if xr_iface:
+		var eye_size = xr_iface.get_render_target_size()
+		var scale_factor := 0.5
+		vp_size = Vector2i(maxi(int(eye_size.x * scale_factor), 512), maxi(int(eye_size.y * scale_factor), 512))
+
 	_nvg_mono_viewport = SubViewport.new()
 	_nvg_mono_viewport.name = "NVGMonoVP"
-	_nvg_mono_viewport.size = Vector2i(1024, 1024)
+	_nvg_mono_viewport.size = vp_size
 	_nvg_mono_viewport.transparent_bg = false
 	_nvg_mono_viewport.disable_3d = false
 	_nvg_mono_viewport.world_3d = get_viewport().world_3d
@@ -750,8 +771,10 @@ func _create_nvg_mono_viewport() -> void:
 	_nvg_mono_camera.fov = 90.0
 	_nvg_mono_camera.near = 0.05
 	_nvg_mono_camera.far = 4000.0
+	# Exclude layer 20 so mono camera doesn't see the NVG overlay quad (prevents feedback loop)
+	_nvg_mono_camera.cull_mask = 0xFFFFF & ~(1 << 19)  # all 20 layers except layer 20
 	_nvg_mono_viewport.add_child(_nvg_mono_camera)
-	print("[VR Mod] NVG mono viewport created (1024x1024)")
+	print("[VR Mod] NVG mono viewport created (", vp_size.x, "x", vp_size.y, ")")
 
 
 func _update_interface_state() -> void:
@@ -1836,7 +1859,7 @@ func _find_node_by_class(root: Node, class_name_str: String) -> Node:
 
 const NVG_OVERLAY_SHADER := """
 shader_type spatial;
-render_mode unshaded, cull_disabled, depth_test_disabled;
+render_mode blend_mix, unshaded, cull_disabled, depth_test_disabled;
 
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
 uniform sampler2D mono_tex : filter_linear;
@@ -1853,11 +1876,13 @@ float hash(vec2 p) {
 }
 
 void fragment() {
-	vec2 uv = SCREEN_UV;
+	vec2 uv;
 	vec3 col;
 	if (use_mono) {
+		uv = UV;
 		col = texture(mono_tex, uv).rgb;
 	} else {
+		uv = SCREEN_UV;
 		col = texture(screen_tex, uv).rgb;
 	}
 	col *= brightness;
