@@ -462,10 +462,15 @@ func _process(delta: float) -> void:
 
 		2:
 			if xr_origin and is_instance_valid(xr_origin):
-				if game_camera and not is_instance_valid(game_camera):
-					game_camera = _find_game_camera(get_tree().root)
-					if game_camera:
-						_attach_rig_to_camera()
+				if not game_camera or not is_instance_valid(game_camera):
+					# Camera lost or freed (level transition). Poll for new one.
+					if _frames_waited % CAMERA_POLL_INTERVAL == 0:
+						if game_camera:
+							print("[VR Mod] Game camera lost (level transition?) — searching...")
+						game_camera = _find_game_camera(get_tree().root)
+						if game_camera:
+							_attach_rig_to_camera()
+							_on_level_transition()
 
 				if not _hud_installed and _frames_waited >= HUD_SETUP_DELAY:
 					_setup_vr_hud()
@@ -604,13 +609,11 @@ func _install_xr_rig() -> void:
 	print("[VR Mod] Grab raycasts added to both controllers")
 
 
-	if game_camera and is_instance_valid(game_camera):
-		var parent = game_camera.get_parent()
-		if parent:
-			parent.add_child(xr_origin)
-		else:
-			get_tree().root.add_child(xr_origin)
+	# Parent xr_origin to self (autoload) so it survives level/scene changes.
+	# Position sync is done via _sync_origin_to_game() using global coords.
+	add_child(xr_origin)
 
+	if game_camera and is_instance_valid(game_camera):
 		var approx_head_height := 1.6
 		var cam_pos = game_camera.global_position
 		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - approx_head_height, cam_pos.z)
@@ -623,7 +626,6 @@ func _install_xr_rig() -> void:
 		print("[VR Mod] XR rig placed: origin=", xr_origin.global_position)
 		print("[VR Mod] Copied cull_mask from game_camera: ", game_camera.cull_mask)
 	else:
-		get_tree().root.add_child(xr_origin)
 		xr_origin.global_position = Vector3.ZERO
 		_last_game_cam_pos = Vector3(0, 1.7, 0)
 
@@ -1028,15 +1030,29 @@ func _ray_quad_intersection(ray_origin: Vector3, ray_dir: Vector3, quad: MeshIns
 func _attach_rig_to_camera() -> void:
 	if not game_camera or not xr_origin:
 		return
-	var parent = game_camera.get_parent()
-	if parent:
-		if xr_origin.get_parent():
-			xr_origin.get_parent().remove_child(xr_origin)
-		parent.add_child(xr_origin)
-		var approx_head_height := 1.6
-		var cam_pos = game_camera.global_position
-		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - approx_head_height, cam_pos.z)
-		_last_game_cam_pos = cam_pos
+	# xr_origin stays parented to self (autoload). Just snap position to new camera.
+	var approx_head_height := 1.6
+	var cam_pos = game_camera.global_position
+	xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - approx_head_height, cam_pos.z)
+	_last_game_cam_pos = cam_pos
+	xr_camera.cull_mask = game_camera.cull_mask
+	print("[VR Mod] Rig snapped to new camera at ", cam_pos)
+
+
+func _on_level_transition() -> void:
+	# Reset state that depends on game scene nodes (freed during level change).
+	print("[VR Mod] Level transition — resetting scene-dependent state")
+	_weapons_reparented = false
+	_weapon_loaded = false
+	_holster_state = HolsterState.UNARMED
+	_weapon_slot = 0
+	_watch_crop_computed = false
+	_cleanup_scope()
+	if _grabbed_object and not is_instance_valid(_grabbed_object):
+		_grabbed_object = null
+		_grab_hand = ""
+	_nvg_active = false
+	_log("Level transition reset complete, camera at " + str(game_camera.global_position))
 
 
 func _sync_origin_to_game() -> void:
