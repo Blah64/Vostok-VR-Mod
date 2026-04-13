@@ -82,10 +82,8 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 
 ### Scope Zoom
 
-Variable-zoom scopes (Leopard, Vudu) support thumbstick-driven zoom. While the weapon
-is drawn and raised, push the **right stick up** to zoom in and **right stick down** to
-zoom out. The scope image, FOV, and reticle scale together at each level. A haptic
-pulse confirms each step. Fixed-magnification scopes (ACOG, HMR) are unaffected.
+On variable-zoom scopes, push **right stick up** to zoom in and **right stick down** to
+zoom out while the weapon is drawn. A haptic pulse confirms each step.
 
 ### Lowered Weapon
 
@@ -205,23 +203,6 @@ the next game launch.
 
 Adjust if the world feels too large or too small. Values above `1.0` make you feel
 taller; below `1.0` makes the world feel bigger.
-
----
-
-## Scope Picture-in-Picture
-
-Zoom scopes (ACOG, HMR, Leopard, Vudu) render a live picture-in-picture view through the
-lens — the same magnified world you'd see on a flat screen, projected onto the scope glass
-in 3D. The view includes:
-
-- **Parallax** — the scope image shifts naturally as you move your eye off-axis
-- **Eye-relief vignette** — a realistic shadow closes in when your eye is too close or
-  too far from the ocular lens
-- **Reticle overlay** — the scope's reticle is composited on top of the zoomed view and
-  scales with zoom level on variable-zoom scopes
-
-Fixed-magnification scopes display a single zoom level. Variable-zoom scopes (Leopard,
-Vudu) step through three magnification levels via the right thumbstick.
 
 ---
 
