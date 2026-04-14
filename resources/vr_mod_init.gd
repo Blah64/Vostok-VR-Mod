@@ -428,6 +428,9 @@ func _enter_sling() -> void:
 	_clear_grenade_state()
 	_holster_state = HolsterState.SLING
 	_support_grip_held = false
+	# weapon_low signals the game to recharge arm stamina and show the aiming laser
+	_inject_action("weapon_low", true)
+	get_tree().create_timer(0.1).timeout.connect(func(): _inject_action("weapon_low", false))
 	Input.action_release("fire")
 	Input.action_release("left_mouse")
 	_inject_action("fire", false)
@@ -3322,7 +3325,7 @@ void fragment() {
 	vec3 view_dir = normalize(normalize(-VERTEX + EYE_OFFSET) * mat3(TANGENT, -BINORMAL, NORMAL));
 
 	// Depth UV — pushes the scope view deeper into the tube
-	vec2 depth_uv = vec2(1.0 - UV.x, UV.y) - view_dir.xy * (scope_depth * 2.0);
+	vec2 depth_uv = UV - view_dir.xy * (scope_depth * 2.0);
 	depth_uv = (depth_uv - vec2(0.5)) * 0.5 + vec2(0.5);
 
 	vec3 col = texture(scope_texture, depth_uv).rgb;
