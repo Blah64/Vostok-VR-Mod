@@ -3,6 +3,8 @@
 		"smooth_turn_speed": 120.0,
 		"snap_turn_degrees": 45.0,
 		"turn_type": "smooth",
+		"two_hand_smooth_enabled": true,
+		"two_hand_smooth_speed": 14.0,
 		"vignette_enabled": false,
 		"vignette_strength": 0.7
 	},

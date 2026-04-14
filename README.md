@@ -202,7 +202,7 @@ Press **Cancel** to discard changes for this session.
 
 | Section | Settings |
 |---------|---------|
-| **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed, comfort vignette on/off, vignette strength, render scale |
+| **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed, comfort vignette on/off, vignette strength, render scale, two-hand stabilization on/off, smoothing speed |
 | **Menu / Inventory** | Distance, size, height, left/right offset, HUD element spread, laser X/Y calibration |
 | **Wrist Watch** | Glance reveal on/off, glance angle, fade speed, watch size, X/Y/Z position on wrist |
 | **Controls** | Dominant hand |
@@ -311,6 +311,19 @@ the next game launch.
 
 Adjust if the world feels too large or too small. Values above `1.0` make you feel
 taller; below `1.0` makes the world feel bigger.
+
+### Two-Hand Aim Stabilization
+
+```json
+"comfort": { "two_hand_smooth_enabled": true, "two_hand_smooth_speed": 12.0 }
+```
+
+When gripping with the support hand, the aim direction is smoothed each frame to reduce
+jitter and hand tremor. Higher speed values (range 2–30) track your hands more closely;
+lower values give a floatier, more stabilized feel. Toggle and speed are both tunable live
+in the **F8 config screen → Comfort** section ("2H Stabilize" and "2H Smooth").
+
+---
 
 ### Render Scale
 
