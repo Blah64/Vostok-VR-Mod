@@ -517,7 +517,7 @@ var _last_game_cam_pos := Vector3.ZERO
 # Two-hand aim stabilization
 var _two_hand_smooth_enabled := true
 var _two_hand_smooth_speed := 12.0
-var _two_hand_smooth_forward := Vector3.ZERO
+var _two_hand_smooth_basis := Basis.IDENTITY
 var _two_hand_was_active := false
 
 # Comfort vignette
@@ -2882,38 +2882,40 @@ func _sync_weapon_to_controller() -> void:
 			use_two_hand = true
 			# Forward = from dominant hand toward off-hand
 			var forward = (off_controller.global_position - controller.global_position).normalized()
-			# Use world up; fall back to controller Y when aiming nearly vertical
+			# Use world up; fall back to controller Y when aiming nearly vertical.
+			# Godot is right-handed: right = forward x up (NOT up x forward, which gives LEFT
+			# and produces an improper/mirrored basis). Previous bug flipped aim_basis.x and
+			# mirrored the weapon mesh relative to single-hand mode.
 			var up = Vector3.UP
-			var right_vec = up.cross(forward)
+			var right_vec = forward.cross(up)
 			if right_vec.length_squared() < 0.01:
 				up = controller.global_basis.y
-				right_vec = up.cross(forward)
+				right_vec = forward.cross(up)
 			right_vec = right_vec.normalized()
-			var corrected_up = forward.cross(right_vec).normalized()
+			var corrected_up = right_vec.cross(forward).normalized()
 			aim_basis = Basis(right_vec, corrected_up, -forward)
 			aim_basis = aim_basis * Basis(Vector3.UP, deg_to_rad(180))
 
-	if not use_two_hand:
-		# Grenades (slot 4): ignore grip rotation — throw direction must follow controller forward
-		var rot_offset: float = 0.0 if _weapon_slot == 4 else _slot_grip_rotations.get(_weapon_slot, 0.0)
-		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + rot_offset))
+	# Single-hand basis computed at function scope so the smooth-init path can also use it.
+	# Grenades (slot 4): ignore grip rotation — throw direction must follow controller forward.
+	var sh_rot_offset: float = 0.0 if _weapon_slot == 4 else _slot_grip_rotations.get(_weapon_slot, 0.0)
+	var single_hand_basis: Basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + sh_rot_offset))
 
-	# Two-hand stabilization: smooth the aim forward direction post-hoc (at function scope, no deep nesting)
-	# aim_basis.z == the raw hand-to-hand forward vector after the 180-deg flip in the block above
+	if not use_two_hand:
+		aim_basis = single_hand_basis
+
+	# Two-hand stabilization: slerp the FULL aim basis from single-hand to the two-hand target.
+	# Slerping the complete basis (not just the forward vector) keeps both the dominant-hand grip
+	# position AND orientation aligned with the hand model throughout the transition, because both
+	# the GLTF hand offset and the weapon local_offset are defined in controller/aim-local space.
 	if use_two_hand and _two_hand_smooth_enabled:
-		var raw_fwd = aim_basis.z
+		var target_basis := aim_basis
 		if not _two_hand_was_active:
-			_two_hand_smooth_forward = raw_fwd
-		else:
-			_two_hand_smooth_forward = _two_hand_smooth_forward.slerp(raw_fwd, clampf(get_process_delta_time() * _two_hand_smooth_speed, 0.0, 1.0))
-		var smth := _two_hand_smooth_forward
-		var up2 = Vector3.UP
-		var right2 = up2.cross(smth)
-		if right2.length_squared() < 0.01:
-			right2 = controller.global_basis.y.cross(smth)
-		right2 = right2.normalized()
-		var cup2 = smth.cross(right2).normalized()
-		aim_basis = Basis(right2, cup2, -smth) * Basis(Vector3.UP, deg_to_rad(180))
+			# First frame: seed from the exact single-hand basis so the weapon stays
+			# exactly where it was the moment the off-hand grabs.
+			_two_hand_smooth_basis = single_hand_basis
+		_two_hand_smooth_basis = _two_hand_smooth_basis.slerp(target_basis, clampf(get_process_delta_time() * _two_hand_smooth_speed, 0.0, 1.0))
+		aim_basis = _two_hand_smooth_basis
 
 	if use_two_hand:
 		_two_hand_was_active = true
