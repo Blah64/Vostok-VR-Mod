@@ -8,6 +8,11 @@ extends Node
 # When inventory is OPEN: quad detaches, scales up, stays in world space
 # Controller pointing + trigger click for inventory interaction.
 
+var _is_metro := not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf")
+var _log_path := "user://vr_mod/vr_mod_debug.log" if not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf") else OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+var _config_path := "user://vr_mod/default_config.json" if not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf") else OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
+var _assets_base := "res://resources/hands/" if not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf") else OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/"
+
 var xr_interface: XRInterface
 var xr_origin: XROrigin3D
 var xr_camera: XRCamera3D
@@ -868,8 +873,12 @@ func _install_xr_rig() -> void:
 	# Ensure mouse is captured so fire input works
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
+	# Ensure user data directory exists for Metro installs
+	if _is_metro:
+		DirAccess.make_dir_recursive_absolute("user://vr_mod")
+
 	# Clear debug log and dump fire-related InputMap bindings
-	var dump_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var dump_path = _log_path
 	var f = FileAccess.open(dump_path, FileAccess.WRITE)
 	if f:
 		f.store_line("=== VR Mod Debug Log ===")
@@ -2210,7 +2219,7 @@ func _deep_camera_debug() -> void:
 	# Compare with previous snapshot to detect changes
 	if snapshot != _last_cam_child_snapshot:
 		# Something changed! Log it to file (append mode)
-		var dump_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+		var dump_path = _log_path
 		var f = FileAccess.open(dump_path, FileAccess.READ_WRITE)
 		if not f:
 			f = FileAccess.open(dump_path, FileAccess.WRITE)
@@ -2303,7 +2312,7 @@ var _post_scroll_timer := -1.0
 func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 	var is_left := "Left" in model_name
 	var gltf_name := "Hand_Nails_low_L.gltf" if is_left else "Hand_Nails_low_R.gltf"
-	var gltf_path := OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/" + gltf_name
+	var gltf_path := _assets_base + gltf_name
 
 	if not FileAccess.file_exists(gltf_path):
 		_log("hand: .gltf not found at " + gltf_path + " — falling back to box hand")
@@ -2424,7 +2433,7 @@ func _create_fallback_box_hand(controller: XRController3D, model_name: String) -
 func _apply_hand_texture(root: Node) -> void:
 	# Load the shared skin texture on first call; reuse for both hands after that.
 	if not _hand_tex:
-		var tex_path := OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/hand_col.png"
+		var tex_path := _assets_base + "hand_col.png"
 		if FileAccess.file_exists(tex_path):
 			var img := Image.load_from_file(tex_path)
 			if img:
@@ -3160,7 +3169,7 @@ func _find_interactable_display_name(collider: Node) -> String:
 
 
 func _log(msg: String) -> void:
-	var path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var path = _log_path
 	var f = FileAccess.open(path, FileAccess.READ_WRITE)
 	if not f:
 		f = FileAccess.open(path, FileAccess.WRITE)
@@ -3720,7 +3729,7 @@ func _update_rail_slide() -> void:
 func _force_debug_dump(label: String) -> void:
 	if not game_camera or not is_instance_valid(game_camera):
 		return
-	var dump_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var dump_path = _log_path
 	var f = FileAccess.open(dump_path, FileAccess.READ_WRITE)
 	if not f:
 		f = FileAccess.open(dump_path, FileAccess.WRITE)
@@ -3850,7 +3859,7 @@ func _find_game_camera(node: Node) -> Camera3D:
 
 
 func _load_config() -> void:
-	var config_path = OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
+	var config_path = _config_path
 	if not FileAccess.file_exists(config_path):
 		print("[VR Mod] Config not found at: ", config_path, ", using defaults")
 		return
@@ -3958,7 +3967,7 @@ func _load_config() -> void:
 
 
 func _save_grip_config() -> void:
-	var config_path = OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
+	var config_path = _config_path
 	if not FileAccess.file_exists(config_path):
 		print("[VR Mod] Config not found, cannot save: ", config_path)
 		return
@@ -5011,7 +5020,7 @@ func _scroll_config_panel(amount: float) -> void:
 # ── Save full config ────────────────────────────────────────────────────────
 
 func _save_full_config() -> void:
-	var config_path = OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
+	var config_path = _config_path
 	var data := {}
 
 	# Read existing config first
@@ -5164,7 +5173,7 @@ func _save_full_config() -> void:
 # ── Weapon tree debug dump (F10) ──────────────────────────────────────────
 
 func _dump_weapon_tree() -> void:
-	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var log_path = _log_path
 	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
 	if not f:
 		f = FileAccess.open(log_path, FileAccess.WRITE)
@@ -5288,7 +5297,7 @@ func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) ->
 # ── Ray target debug dump (F12) ────────────────────────────────────────────
 
 func _dump_ray_target() -> void:
-	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var log_path = _log_path
 	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
 	if not f:
 		return
@@ -5368,7 +5377,7 @@ func _bits_str(val: int) -> String:
 # ── HUD tree debug dump (F9) ───────────────────────────────────────────────
 
 func _dump_hud_tree() -> void:
-	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var log_path = _log_path
 	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
 	if not f:
 		f = FileAccess.open(log_path, FileAccess.WRITE)
@@ -5422,7 +5431,7 @@ func _dump_node_recursive(f: FileAccess, node: Node, depth: int) -> void:
 # ── NVG & Environment debug dump (F11) ────────────────────────────────────
 
 func _dump_nvg_and_environment() -> void:
-	var log_path = OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
+	var log_path = _log_path
 	var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
 	if not f:
 		f = FileAccess.open(log_path, FileAccess.WRITE)

@@ -1,0 +1,8 @@
+[mod]
+name="VR Mod"
+id="vr-mod"
+version="1.0.0"
+priority=100
+
+[autoload]
+VRModInit="res://vr_mod_init.gd"
