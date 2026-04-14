@@ -1859,15 +1859,12 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							if _weapon_is_long:
 								_support_grip_held = true
 					HolsterState.SLING:
-						if zone > 0 and zone != _weapon_slot:
-							# Near a different holster — holster current, draw new
-							_holster_weapon()
-							_draw_weapon(hand, zone)
-						elif zone == _weapon_slot:
+						if zone == _weapon_slot:
 							# Near own holster zone — holster completely
 							_holster_weapon()
 						else:
-							# Either hand can pick up the sling weapon; that hand becomes weapon hand
+							# Grab sling weapon; zone proximity to other holsters is ignored
+							# (chest-level sling overlaps zone 4, so any zone check would misfire)
 							_weapon_hand = hand
 							_raise_weapon()
 		"ax_button":  # A on right, X on left (physical mapping)
