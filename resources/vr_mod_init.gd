@@ -1520,7 +1520,14 @@ func _steer_decor_camera_to_controller() -> void:
 
 func _steer_game_camera_via_mouse() -> void:
 	# Steer game camera to match weapon barrel aim direction.
-	var aim_controller = _get_controller(_get_weapon_hand())
+	# In LOWERED/SLING the weapon is not raised; use dominant hand so the
+	# game's Interactor raycast follows the same hand as the laser pointer.
+	var aim_hand: String
+	if _holster_state == HolsterState.LOWERED or _holster_state == HolsterState.SLING:
+		aim_hand = _config_dominant_hand
+	else:
+		aim_hand = _get_weapon_hand()
+	var aim_controller = _get_controller(aim_hand)
 	if not aim_controller or not aim_controller.get_is_active():
 		return
 
@@ -2718,9 +2725,9 @@ func _update_hand_visibility() -> void:
 		elif _holster_state == HolsterState.UNARMED and _grabbed_object == null:
 			show_laser = true
 			laser_hand = _config_dominant_hand
-		elif _holster_state == HolsterState.LOWERED:
+		elif _holster_state == HolsterState.LOWERED or _holster_state == HolsterState.SLING:
 			show_laser = true
-			laser_hand = _weapon_hand
+			laser_hand = _config_dominant_hand
 
 		if show_laser:
 			# Reparent laser to correct controller if needed
@@ -3306,7 +3313,7 @@ uniform float scope_depth = 1.0;
 uniform float scope_inner_radius : hint_range(0.0, 1.0) = 0.7;
 uniform float scope_fade_size = 0.03;
 uniform float scope_parallax_factor : hint_range(0.0, 0.3) = 0.1;
-uniform float eyebox_position = 0.35;
+uniform float eyebox_position = 0.30;
 uniform float eyebox_tolerance = 0.025;
 uniform float eyebox_fade_distance = 0.15;
 uniform float shadow_inner_radius : hint_range(0.0, 1.0) = 1.0;
