@@ -129,6 +129,10 @@ var _rail_scroll_cooldown := 0.0       # Cooldown for stick-based scrolling
 # Support trigger long-press detection (short = reload, long = ammo check)
 var _support_trigger_pending := false
 var _support_trigger_press_time := 0.0
+var _ammo_check_timer := 0.0        # > 0 while ammo panel is visible; counts down to hide
+var _ammo_panel_vp: SubViewport = null
+var _ammo_panel_mesh: MeshInstance3D = null
+var _ammo_read_delay := 0           # frames to wait before reading labels after KEY_V
 
 # Grip adjust mode — tune offsets live with thumbsticks
 var _adjust_mode := false
@@ -578,7 +582,22 @@ func _process(delta: float) -> void:
 						var support_ctrl = _get_controller(_get_support_hand())
 						if support_ctrl:
 							support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.2, 0.1, 0.0)
+						_ammo_read_delay = 3
 						print("[VR Mod] AMMO CHECK (support trigger long-press)")
+
+				# Ammo check: wait a few frames for game to update labels after KEY_V
+				if _ammo_read_delay > 0:
+					_ammo_read_delay -= 1
+					if _ammo_read_delay == 0:
+						_show_ammo_check_panel()
+
+				# Ammo check panel auto-hide countdown + weapon-hand tracking
+				if _ammo_check_timer > 0.0:
+					_ammo_check_timer -= delta
+					if _ammo_check_timer <= 0.0:
+						_hide_ammo_check_panel()
+					elif _ammo_panel_mesh and is_instance_valid(_ammo_panel_mesh) and xr_camera:
+						_update_ammo_panel_position()
 
 				# Post-scroll delayed debug dump
 				if _post_scroll_timer > 0:
@@ -968,6 +987,8 @@ func _update_interface_state() -> void:
 
 func _on_interface_opened() -> void:
 	print("[VR Mod] Interface OPENED - switching to world-fixed mode")
+	_ammo_check_timer = 0.0
+	_cleanup_ammo_panel()
 	if not hud_mesh:
 		return
 
@@ -1055,6 +1076,108 @@ func _on_interface_closed() -> void:
 		_laser_mesh.visible = false
 
 	# Watch will be revealed by glance logic next frame
+
+
+func _show_ammo_check_panel() -> void:
+	if not xr_camera:
+		return
+
+	# Read counts directly from game HUD labels — no canvas coord issues
+	var hud_node = get_tree().root.get_node_or_null("Map/Core/UI/HUD")
+	var mag_text := "?"
+	var chb_text := "?"
+	if hud_node:
+		var mag_lbl = hud_node.get_node_or_null("Magazine/Panel/Count")
+		var chb_lbl = hud_node.get_node_or_null("Chamber/Panel/Count")
+		if mag_lbl:
+			mag_text = mag_lbl.text
+		if chb_lbl:
+			chb_text = chb_lbl.text
+
+	_cleanup_ammo_panel()
+
+	# Build a small SubViewport with two labels
+	_ammo_panel_vp = SubViewport.new()
+	_ammo_panel_vp.size = Vector2i(256, 128)
+	_ammo_panel_vp.transparent_bg = true
+	_ammo_panel_vp.disable_3d = true
+	_ammo_panel_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(_ammo_panel_vp)
+
+	var bg = ColorRect.new()
+	bg.color = Color(0.0, 0.0, 0.0, 0.75)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_ammo_panel_vp.add_child(bg)
+
+	var mag_label = Label.new()
+	mag_label.text = "MAG  " + mag_text
+	mag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mag_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	mag_label.anchor_left = 0.0
+	mag_label.anchor_top = 0.0
+	mag_label.anchor_right = 1.0
+	mag_label.anchor_bottom = 0.5
+	mag_label.add_theme_font_size_override("font_size", 40)
+	mag_label.add_theme_color_override("font_color", Color.WHITE)
+	_ammo_panel_vp.add_child(mag_label)
+
+	var chb_label = Label.new()
+	chb_label.text = "CHB  " + chb_text
+	chb_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	chb_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	chb_label.anchor_left = 0.0
+	chb_label.anchor_top = 0.5
+	chb_label.anchor_right = 1.0
+	chb_label.anchor_bottom = 1.0
+	chb_label.add_theme_font_size_override("font_size", 40)
+	chb_label.add_theme_color_override("font_color", Color.WHITE)
+	_ammo_panel_vp.add_child(chb_label)
+
+	# QuadMesh using the SubViewport texture
+	var quad = QuadMesh.new()
+	quad.size = Vector2(0.22, 0.11)
+	_ammo_panel_mesh = MeshInstance3D.new()
+	_ammo_panel_mesh.mesh = quad
+	_ammo_panel_mesh.layers = 1
+
+	var mat = StandardMaterial3D.new()
+	mat.albedo_texture = _ammo_panel_vp.get_texture()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ammo_panel_mesh.material_override = mat
+
+	get_tree().root.add_child(_ammo_panel_mesh)
+	_update_ammo_panel_position()
+	_ammo_check_timer = 3.0
+	print("[VR Mod] Ammo check: MAG=", mag_text, " CHB=", chb_text)
+
+
+func _hide_ammo_check_panel() -> void:
+	_cleanup_ammo_panel()
+
+
+func _cleanup_ammo_panel() -> void:
+	if _ammo_panel_mesh and is_instance_valid(_ammo_panel_mesh):
+		_ammo_panel_mesh.queue_free()
+		_ammo_panel_mesh = null
+	if _ammo_panel_vp and is_instance_valid(_ammo_panel_vp):
+		_ammo_panel_vp.queue_free()
+		_ammo_panel_vp = null
+
+
+func _update_ammo_panel_position() -> void:
+	if not _ammo_panel_mesh or not is_instance_valid(_ammo_panel_mesh):
+		return
+	var weapon_ctrl = _get_controller(_weapon_hand if _weapon_hand != "" else _config_dominant_hand)
+	if not weapon_ctrl or not weapon_ctrl.get_is_active():
+		return
+	# Float just above and slightly forward of the weapon hand, facing the player
+	var hand_pos = weapon_ctrl.global_position
+	var up = xr_camera.global_basis.y.normalized()
+	var to_cam = (xr_camera.global_position - hand_pos).normalized()
+	_ammo_panel_mesh.global_position = hand_pos + up * 0.12 + to_cam * 0.05
+	_ammo_panel_mesh.look_at(xr_camera.global_position, Vector3.UP)
+	_ammo_panel_mesh.rotate_y(deg_to_rad(180))
 
 
 func _update_laser_pointer() -> void:
