@@ -34,6 +34,13 @@ var _throw_samples: Array = []  # Recent [position, time] pairs for throw veloci
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_is_long := false  # True for rifles/shotguns that support two-hand aim
 var _recoil_rest_xform := Transform3D.IDENTITY  # Cached rest pose of recoil chain
+var _grenade_throw_samples: Array = []      # [[pos, time], ...] hand pos while grenade drawn
+var _grenade_pin_pulled := false             # True after first click (pin pulled), waiting for throw
+var _grenade_pending_throw := false          # Waiting for camera convergence before firing
+var _grenade_throw_dir := Vector3.ZERO       # Aim direction for pending throw
+var _grenade_throw_vel := Vector3.ZERO       # Full velocity vector for projectile override
+var _grenade_throw_frames := 0               # Frame counter for camera convergence
+var _grenade_awaiting_projectile := false     # Listening for spawned projectile
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
 var _pending_holster_key: int = -1  # KEY_N pending delayed injection on holster; -1 = none
 var _holster_cooldown := 0.0        # Seconds remaining before a new draw is allowed after holstering
@@ -338,6 +345,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_clear_grenade_state()
 	_weapon_raise_timer = 3.0
 	_scroll_cooldown = 1.0
 	_fixed_reticle_instances.clear()  # Re-scan for reticle on new weapon
@@ -349,6 +357,7 @@ func _lower_weapon() -> void:
 	_adjust_mode = false
 	if _rail_mode:
 		_exit_rail_mode()
+	_clear_grenade_state()
 	_holster_state = HolsterState.LOWERED
 	_support_grip_held = false
 	# Set weapon_low to lower the weapon visually
@@ -402,6 +411,7 @@ func _holster_weapon() -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_clear_grenade_state()
 	_support_grip_held = false
 	_holster_cooldown = 0.8  # Block re-draw until animation completes
 
@@ -628,6 +638,7 @@ func _process(delta: float) -> void:
 				# Sync weapon AFTER origin/camera so our position override wins
 				if not _decor_mode:
 					_sync_weapon_to_controller()
+				_update_grenade_throw(delta)
 				_update_hand_visibility()
 				_update_grabbed()
 
@@ -1133,6 +1144,7 @@ func _on_level_transition() -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_clear_grenade_state()
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
 	_watch_crop_computed = false
@@ -1216,11 +1228,18 @@ func _steer_game_camera_via_mouse() -> void:
 
 	# Compute barrel direction: must match the aim_basis used in _sync_weapon_to_controller
 	var aim_forward: Vector3
-	var off_controller = _get_controller(_get_support_hand())
-	if _support_grip_held and off_controller and off_controller.get_is_active():
-		var hand_dist = aim_controller.global_position.distance_to(off_controller.global_position)
-		if hand_dist > 0.1:
-			aim_forward = (off_controller.global_position - aim_controller.global_position).normalized()
+
+	# Grenade pending throw: override aim to throw direction for camera convergence
+	if _grenade_pending_throw and _grenade_throw_dir.length_squared() > 0.01:
+		aim_forward = _grenade_throw_dir
+	elif _support_grip_held:
+		var off_controller = _get_controller(_get_support_hand())
+		if off_controller and off_controller.get_is_active():
+			var hand_dist = aim_controller.global_position.distance_to(off_controller.global_position)
+			if hand_dist > 0.1:
+				aim_forward = (off_controller.global_position - aim_controller.global_position).normalized()
+			else:
+				aim_forward = -aim_controller.global_basis.z
 		else:
 			aim_forward = -aim_controller.global_basis.z
 	else:
@@ -1241,7 +1260,8 @@ func _steer_game_camera_via_mouse() -> void:
 		return
 
 	var mouse_sensitivity_estimate := 0.003
-	var correction_strength := 0.8  # More aggressive for responsive aiming
+	# Slam camera to target during grenade throw; normal tracking otherwise
+	var correction_strength := 1.0 if _grenade_pending_throw else 0.8
 
 	var mouse_dx = -(yaw_error * correction_strength) / mouse_sensitivity_estimate
 	var mouse_dy = -(pitch_error * correction_strength) / mouse_sensitivity_estimate
@@ -1470,12 +1490,25 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_trig_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.15, 0.0)
 					print("[VR Mod] NVG toggled (trigger above head)")
 				elif is_weapon_hand and _holster_state == HolsterState.DRAWN:
-					# Weapon hand trigger = fire (only when weapon is raised/drawn)
-					Input.action_press("fire", 1.0)
-					Input.action_press("left_mouse", 1.0)
-					_inject_action("fire", true)
-					_inject_action("left_mouse", true)
-					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+					if _weapon_slot == 4 and not _grenade_pin_pulled:
+						# Grenade: trigger pulls pin (first click)
+						Input.action_press("fire", 1.0)
+						Input.action_press("left_mouse", 1.0)
+						_inject_action("fire", true)
+						_inject_action("left_mouse", true)
+						_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+						_grenade_pin_pulled = true
+						var ctrl = _get_controller(hand)
+						if ctrl:
+							ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.1, 0.0)
+						print("[VR Mod] Grenade pin pulled")
+					elif _weapon_slot != 4:
+						# Non-grenade weapons: existing fire logic
+						Input.action_press("fire", 1.0)
+						Input.action_press("left_mouse", 1.0)
+						_inject_action("fire", true)
+						_inject_action("left_mouse", true)
+						_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				elif is_support_hand and _holster_state in [HolsterState.DRAWN, HolsterState.LOWERED]:
 					# Support hand trigger = rail slide / reload / laser (drawn or lowered)
 					if _rail_mode and _holster_state == HolsterState.DRAWN:
@@ -1637,7 +1670,10 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				return
 			else:
 				if hand == _weapon_hand and _holster_state == HolsterState.DRAWN:
-					if not _weapon_loaded:
+					if _weapon_slot == 4 and _grenade_pin_pulled:
+						# Grenade with pin pulled — grip release = throw
+						_grenade_start_throw()
+					elif not _weapon_loaded:
 						# Slot was empty — revert to unarmed regardless of position
 						_holster_weapon()
 					else:
@@ -2065,6 +2101,131 @@ func _teardown_watch_content() -> void:
 	_watch_crop_retries = 0
 
 
+func _update_grenade_throw(_delta: float) -> void:
+	# Sample hand position while grenade is drawn
+	if _weapon_slot == 4 and _holster_state == HolsterState.DRAWN and not _grenade_pending_throw:
+		var ctrl = _get_controller(_get_weapon_hand())
+		if ctrl and ctrl.get_is_active():
+			var now := Time.get_ticks_msec() / 1000.0
+			_grenade_throw_samples.append([ctrl.global_position, now])
+			if _grenade_throw_samples.size() > 8:
+				_grenade_throw_samples.pop_front()
+
+	# Process pending throw: wait for camera to converge, then fire
+	if _grenade_pending_throw:
+		_grenade_throw_frames += 1
+		if _grenade_throw_frames >= 4:
+			_grenade_fire_throw()
+
+
+func _grenade_start_throw() -> void:
+	# Called on grip release when pin is pulled — compute throw from hand velocity
+	var throw_vel := _compute_grenade_throw_vel()
+	var speed = throw_vel.length()
+	if speed > 0.5:
+		# Motion throw: use hand velocity direction
+		_grenade_throw_dir = throw_vel.normalized()
+		_grenade_throw_vel = throw_vel
+	else:
+		# Slow release: throw in controller aim direction at a minimum speed
+		var ctrl = _get_controller(_get_weapon_hand())
+		if ctrl and ctrl.get_is_active():
+			_grenade_throw_dir = (-ctrl.global_basis.z).normalized()
+		else:
+			_grenade_throw_dir = Vector3.FORWARD
+		_grenade_throw_vel = _grenade_throw_dir * 2.0  # gentle lob
+	_grenade_pending_throw = true
+	_grenade_throw_frames = 0
+	var ctrl = _get_controller(_get_weapon_hand())
+	if ctrl:
+		ctrl.trigger_haptic_pulse("haptic", 0.0, 0.6, 0.15, 0.0)
+	print("[VR Mod] Grenade throw started (speed=", snappedf(speed, 0.1), ")")
+
+
+func _grenade_fire_throw() -> void:
+	# Connect projectile detection before firing
+	var map_node = get_tree().root.get_node_or_null("Map")
+	if map_node and not _grenade_awaiting_projectile:
+		_grenade_awaiting_projectile = true
+		map_node.child_entered_tree.connect(_on_grenade_projectile_spawned)
+		# Timeout: disconnect after 0.5s if no projectile found
+		get_tree().create_timer(0.5).timeout.connect(_grenade_stop_listening)
+
+	# Fire the grenade (left click = long throw)
+	_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+	_inject_action("fire", true)
+	_inject_action("left_mouse", true)
+	Input.action_press("fire", 1.0)
+	Input.action_press("left_mouse", 1.0)
+	get_tree().create_timer(0.1).timeout.connect(_grenade_release_fire)
+
+	print("[VR Mod] Grenade thrown (dir=", _grenade_throw_dir, " vel=", _grenade_throw_vel.length(), " m/s)")
+	_grenade_pending_throw = false
+	_grenade_throw_frames = 0
+	_grenade_throw_samples.clear()
+
+	# Auto-holster after throw
+	get_tree().create_timer(0.3).timeout.connect(_grenade_auto_holster)
+
+
+func _grenade_release_fire() -> void:
+	_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
+	_inject_action("fire", false)
+	_inject_action("left_mouse", false)
+	Input.action_release("fire")
+	Input.action_release("left_mouse")
+
+
+func _grenade_auto_holster() -> void:
+	if _holster_state == HolsterState.DRAWN and _weapon_slot == 4:
+		_holster_weapon()
+
+
+func _on_grenade_projectile_spawned(node: Node) -> void:
+	if not _grenade_awaiting_projectile:
+		return
+	# Wait one frame for the node to be fully initialized
+	if node is RigidBody3D:
+		var rb := node as RigidBody3D
+		# Scale hand velocity to game-world grenade velocity
+		# Hand velocity ~2-5 m/s typical throw, game grenade ~10-20 m/s
+		var vel_scale := 4.0
+		rb.linear_velocity = _grenade_throw_vel * vel_scale
+		print("[VR Mod] Grenade projectile intercepted: ", node.name, " velocity overridden to ", rb.linear_velocity)
+		_grenade_stop_listening()
+
+
+func _grenade_stop_listening() -> void:
+	if not _grenade_awaiting_projectile:
+		return
+	_grenade_awaiting_projectile = false
+	var map_node = get_tree().root.get_node_or_null("Map")
+	if map_node and map_node.child_entered_tree.is_connected(_on_grenade_projectile_spawned):
+		map_node.child_entered_tree.disconnect(_on_grenade_projectile_spawned)
+
+
+func _compute_grenade_throw_vel() -> Vector3:
+	if _grenade_throw_samples.size() < 2:
+		return Vector3.ZERO
+	var start_idx = max(0, _grenade_throw_samples.size() - 3)
+	var oldest = _grenade_throw_samples[start_idx]
+	var newest = _grenade_throw_samples[-1]
+	var dt: float = newest[1] - oldest[1]
+	if dt < 0.001:
+		return Vector3.ZERO
+	return (newest[0] - oldest[0]) / dt
+
+
+func _clear_grenade_state() -> void:
+	_grenade_throw_samples.clear()
+	_grenade_pin_pulled = false
+	_grenade_pending_throw = false
+	_grenade_throw_dir = Vector3.ZERO
+	_grenade_throw_vel = Vector3.ZERO
+	_grenade_throw_frames = 0
+	_grenade_stop_listening()
+
+
 func _update_hand_visibility() -> void:
 	var left_hand = left_controller.get_node_or_null("LeftHandModel")
 	var right_hand = right_controller.get_node_or_null("RightHandModel")
@@ -2353,6 +2514,19 @@ func _sync_weapon_to_controller() -> void:
 	if not use_two_hand:
 		var rot_offset: float = _slot_grip_rotations.get(_weapon_slot, 0.0)
 		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + rot_offset))
+
+	# Grenade pending throw: override aim to throw direction so camera converges
+	if _grenade_pending_throw and _weapon_slot == 4 and _grenade_throw_dir.length_squared() > 0.01:
+		var forward = _grenade_throw_dir
+		var up = Vector3.UP
+		var right_vec = up.cross(forward)
+		if right_vec.length_squared() < 0.01:
+			up = controller.global_basis.y
+			right_vec = up.cross(forward)
+		right_vec = right_vec.normalized()
+		var corrected_up = forward.cross(right_vec).normalized()
+		aim_basis = Basis(right_vec, corrected_up, -forward)
+		aim_basis = aim_basis * Basis(Vector3.UP, deg_to_rad(180))
 
 	# Sample recoil chain and apply delta on top of controller aim
 	var recoil_delta := _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
