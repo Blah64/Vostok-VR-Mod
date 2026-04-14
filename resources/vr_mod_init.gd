@@ -477,6 +477,13 @@ var _config_dominant_hand := "right"
 var _snap_turn_cooldown := false
 var _last_game_cam_pos := Vector3.ZERO
 
+# Comfort vignette
+var _vignette_enabled := true
+var _vignette_strength := 0.8
+var _vignette_mesh: MeshInstance3D = null
+var _vignette_radius := 1.0   # current inner edge (1.0 = off screen, smaller = more coverage)
+var _vignette_hold := 0.0     # seconds; >0 = vignette active
+
 # Timing
 const CAMERA_POLL_INTERVAL := 30
 const XR_SETTLE_FRAMES := 10
@@ -653,6 +660,7 @@ func _process(delta: float) -> void:
 				# Holster zone haptic feedback
 				_update_holster_zone_haptics()
 				_update_nvg_overlay(delta)
+				_update_comfort_vignette(delta)
 
 				# Keep game camera from reclaiming "current" (causes blur/glow artifacts)
 				if game_camera and is_instance_valid(game_camera) and game_camera.current:
@@ -826,6 +834,8 @@ func _install_xr_rig() -> void:
 	var pointer_controller = _get_controller(_config_dominant_hand)
 	pointer_controller.add_child(_laser_mesh)
 
+	_setup_comfort_vignette()
+
 	print("[VR Mod] === VR rig active ===")
 
 
@@ -930,6 +940,71 @@ func _setup_nvg_overlay() -> void:
 	xr_camera.add_child(_nvg_overlay_mesh)
 	_nvg_overlay_installed = true
 	print("[VR Mod] NVG overlay installed (mono=", _nvg_mono, " brightness=", _nvg_brightness, ")")
+
+
+func _build_vignette_ring_mesh(steps: int) -> ArrayMesh:
+	var vertices := PackedVector3Array()
+	var indices := PackedInt32Array()
+	vertices.resize(2 * steps)
+	indices.resize(6 * steps)
+	for i in steps:
+		var v := Vector3.RIGHT.rotated(Vector3.FORWARD, deg_to_rad(360.0 * i / steps))
+		vertices[i] = v
+		vertices[steps + i] = v * 2.0
+		var off := i * 6
+		var i2 := (i + 1) % steps
+		indices[off + 0] = steps + i
+		indices[off + 1] = steps + i2
+		indices[off + 2] = i2
+		indices[off + 3] = steps + i
+		indices[off + 4] = i2
+		indices[off + 5] = i
+	var arr_mesh := ArrayMesh.new()
+	var arr := []
+	arr.resize(ArrayMesh.ARRAY_MAX)
+	arr[ArrayMesh.ARRAY_VERTEX] = vertices
+	arr[ArrayMesh.ARRAY_INDEX] = indices
+	arr_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	arr_mesh.custom_aabb = AABB(Vector3(-2, -2, -1), Vector3(4, 4, 2))
+	return arr_mesh
+
+
+func _setup_comfort_vignette() -> void:
+	_vignette_mesh = MeshInstance3D.new()
+	_vignette_mesh.name = "ComfortVignette"
+	_vignette_mesh.mesh = _build_vignette_ring_mesh(32)
+	var shader = Shader.new()
+	shader.code = COMFORT_VIGNETTE_SHADER
+	var mat = ShaderMaterial.new()
+	mat.shader = shader
+	mat.render_priority = 126
+	mat.set_shader_parameter("color", Color(0, 0, 0, 1))
+	mat.set_shader_parameter("radius", 1.0)
+	mat.set_shader_parameter("fade", 0.15)
+	_vignette_mesh.material_override = mat
+	_vignette_mesh.layers = (1 << 19)  # layer 20 only
+	_vignette_mesh.visible = false
+	xr_camera.add_child(_vignette_mesh)
+	_vignette_radius = 1.0
+	print("[VR Mod] Comfort vignette installed")
+
+
+func _update_comfort_vignette(delta: float) -> void:
+	if not _vignette_mesh or not is_instance_valid(_vignette_mesh):
+		return
+	# strength 0.1 -> inner radius 0.85 (subtle), strength 1.0 -> inner radius 0.2 (strong)
+	var target_inner := 1.0 - _vignette_strength * 0.8
+	var target_radius := 1.0
+	if _vignette_enabled and _vignette_hold > 0.0:
+		_vignette_hold -= delta
+		target_radius = target_inner
+	# Fast fade in, slow fade out
+	var speed := 5.0 if target_radius < _vignette_radius else 1.0
+	_vignette_radius = move_toward(_vignette_radius, target_radius, delta * speed)
+	var show := _vignette_radius < 0.99
+	_vignette_mesh.visible = show
+	if show:
+		(_vignette_mesh.material_override as ShaderMaterial).set_shader_parameter("radius", _vignette_radius)
 
 
 func _create_nvg_mono_viewport() -> void:
@@ -1489,8 +1564,10 @@ func _process_input(delta: float) -> void:
 						var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
 						xr_origin.rotate_y(deg_to_rad(angle))
 						_snap_turn_cooldown = true
+						_vignette_hold = maxf(_vignette_hold, 0.3)
 				else:
 					xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
+					_vignette_hold = maxf(_vignette_hold, 0.15)
 			else:
 				_snap_turn_cooldown = false
 		return
@@ -1546,8 +1623,10 @@ func _process_input(delta: float) -> void:
 						var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
 						xr_origin.rotate_y(deg_to_rad(angle))
 						_snap_turn_cooldown = true
+						_vignette_hold = maxf(_vignette_hold, 0.3)
 				else:
 					xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
+					_vignette_hold = maxf(_vignette_hold, 0.15)
 			else:
 				_snap_turn_cooldown = false
 
@@ -2757,6 +2836,43 @@ void fragment() {
 """
 
 
+# ── Comfort vignette shader ─────────────────────────────────────────────────
+# Darkens the screen periphery during rotation to reduce motion sickness.
+# Parented to xr_camera as a 2m quad at z=-0.3m with depth_test_disabled.
+# Center UV region stays transparent; edges fade to black via smoothstep.
+
+const COMFORT_VIGNETTE_SHADER := """
+shader_type spatial;
+render_mode depth_test_disabled, skip_vertex_transform, unshaded, cull_disabled, blend_mix;
+
+uniform vec4 color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform float radius = 1.0;
+uniform float fade = 0.15;
+
+varying float dist;
+
+void vertex() {
+    vec2 v = VERTEX.xy;
+    dist = length(v);
+
+    if (dist < 1.5) {
+        dist = radius;
+        v *= dist;
+        vec4 eye = PROJECTION_MATRIX * vec4(0.0, 0.0, 100.0, 1.0);
+        v += eye.xy / eye.w;
+    }
+
+    float z = PROJECTION_MATRIX[2][2] < 0.0 ? 0.0 : 1.0;
+    POSITION = vec4(v, z, 1.0);
+}
+
+void fragment() {
+    ALBEDO = color.rgb;
+    ALPHA = clamp((dist - radius) / fade, 0.0, 1.0);
+}
+"""
+
+
 # ── NVG overlay shader ─────────────────────────────────────────────────────
 
 const NVG_OVERLAY_SHADER := """
@@ -3285,6 +3401,8 @@ func _load_config() -> void:
 				use_snap_turn = data["comfort"].get("turn_type", "snap") == "snap"
 				snap_turn_degrees = data["comfort"].get("snap_turn_degrees", 45.0)
 				smooth_turn_speed = data["comfort"].get("smooth_turn_speed", 120.0)
+				_vignette_enabled = data["comfort"].get("vignette_enabled", true)
+				_vignette_strength = data["comfort"].get("vignette_strength", 0.8)
 			if data.has("controls"):
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
@@ -3612,6 +3730,8 @@ func _populate_config_ui() -> void:
 	_add_toggle_row(grid_comfort, "Turn Mode", ["Snap", "Smooth"], 0 if use_snap_turn else 1, "_on_cfg_turn")
 	_add_stepper_row(grid_comfort, "Snap Degrees", snap_turn_degrees, 15.0, 90.0, 5.0, "_on_cfg_snap_deg")
 	_add_stepper_row(grid_comfort, "Smooth Speed", smooth_turn_speed, 30.0, 300.0, 10.0, "_on_cfg_smooth_spd")
+	_add_toggle_row(grid_comfort, "Vignette", ["On", "Off"], 0 if _vignette_enabled else 1, "_on_cfg_vignette")
+	_add_stepper_row(grid_comfort, "Vig. Strength", _vignette_strength, 0.1, 1.0, 0.1, "_on_cfg_vignette_str")
 
 	_mk_sep(vbox)
 
@@ -3895,6 +4015,14 @@ func _on_cfg_snap_deg(val: float) -> void:
 
 func _on_cfg_smooth_spd(val: float) -> void:
 	smooth_turn_speed = val
+
+
+func _on_cfg_vignette(idx: int) -> void:
+	_vignette_enabled = (idx == 0)
+
+
+func _on_cfg_vignette_str(val: float) -> void:
+	_vignette_strength = val
 
 
 func _on_cfg_hud_dist(val: float) -> void:
@@ -4222,7 +4350,9 @@ func _save_full_config() -> void:
 	data["comfort"] = {
 		"turn_type": turn_type,
 		"snap_turn_degrees": snap_turn_degrees,
-		"smooth_turn_speed": smooth_turn_speed
+		"smooth_turn_speed": smooth_turn_speed,
+		"vignette_enabled": _vignette_enabled,
+		"vignette_strength": _vignette_strength
 	}
 
 	# Controls

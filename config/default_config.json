@@ -2,7 +2,9 @@
 	"comfort": {
 		"smooth_turn_speed": 120.0,
 		"snap_turn_degrees": 45.0,
-		"turn_type": "smooth"
+		"turn_type": "smooth",
+		"vignette_enabled": false,
+		"vignette_strength": 0.7
 	},
 	"controls": {
 		"dominant_hand": "right",

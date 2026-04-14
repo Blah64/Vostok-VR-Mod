@@ -163,6 +163,19 @@ scrolls any open menu or inventory panel.
 
 ---
 
+## Comfort Vignette
+
+The mod automatically darkens the edges of your view while you turn — a standard VR comfort
+technique to reduce motion sickness. It fades in when rotation starts and fades out when
+rotation stops.
+
+You can toggle it on/off and adjust the strength in the **F8 config screen → Comfort** section.
+Higher strength values shrink the clear center area further, providing a stronger effect.
+At strength 0.8 (default) the vignette is noticeable but unobtrusive; at 1.0 it covers
+roughly 80% of the peripheral view at peak turn speed.
+
+---
+
 ## Wrist Watch HUD
 
 During gameplay your health, status effects, and other HUD info are displayed on a
@@ -189,7 +202,7 @@ Press **Cancel** to discard changes for this session.
 
 | Section | Settings |
 |---------|---------|
-| **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed |
+| **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed, comfort vignette on/off, vignette strength |
 | **Menu / Inventory** | Distance, size, height, left/right offset, HUD element spread, laser X/Y calibration |
 | **Wrist Watch** | Glance reveal on/off, glance angle, fade speed, watch size, X/Y/Z position on wrist |
 | **Controls** | Dominant hand |
