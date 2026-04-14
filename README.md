@@ -78,7 +78,8 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 | Right stick up / down (weapon drawn, variable scope) | Zoom in / out |
 | B (right, weapon drawn) | Cycle fire mode |
 | B (right, weapon lowered) | Interact with objects |
-| X (left, while weapon drawn) | Enter grip adjust mode |
+| X (left, while weapon drawn, quick tap) | Enter grip adjust mode |
+| X (left, while weapon drawn, hold 0.3 s) | Enter optic rail adjust mode |
 
 > **Note:** All weapon inputs follow the weapon hand dynamically. If you draw with your
 > left hand, left trigger fires and right trigger reloads.
@@ -203,6 +204,35 @@ Dial in weapon grip position and rotation **while in-game** without editing file
 
 Movement and turning are disabled while adjust mode is active. The mode exits
 automatically if you lower or holster the weapon.
+
+---
+
+## Optic Rail Adjust Mode
+
+Slide a mounted optic forward and backward along the weapon rail **while in-game**.
+
+1. Draw a weapon that has a railed optic attached
+2. **Hold X (left) for 0.3 s** → controller buzzes to confirm Rail Mode is on
+3. Move the optic using either method:
+
+**Physical grab (preferred):**
+
+| Input | Action |
+|-------|--------|
+| Support hand trigger | Grab the optic |
+| Move support hand forward / back | Slide optic along rail |
+| Release support hand trigger | Release grab |
+
+**Stick method:**
+
+| Input | Action |
+|-------|--------|
+| Right stick up | Slide optic forward |
+| Right stick down | Slide optic backward |
+
+4. Press **X (left)** again, or holster / lower the weapon, to exit Rail Mode
+
+Both methods can be used interchangeably. A haptic pulse confirms each rail increment.
 
 ---
 
