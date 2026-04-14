@@ -116,6 +116,15 @@ var _scope_zoom_fovs := []               # FOV per zoom level (derived from reti
 var _scope_zoom_reticle_scales := []     # Reticle UV scale per zoom level
 var _scope_zoom_index := 0               # Current zoom level index
 
+# Rail movement (optic slide along rail)
+var _rail_mode := false               # Rail slide mode active (X long-press while DRAWN)
+var _rail_x_press_time := 0.0         # Time when X was pressed (for long-press detection)
+var _rail_x_pending := false           # X pressed, waiting to determine short vs long press
+var _rail_active := false              # Physical rail slide in progress (trigger held)
+var _rail_grab_origin := 0.0           # Off-hand projected position at grab start
+var _rail_scroll_accum := 0.0          # Accumulated movement for physical grab
+var _rail_scroll_cooldown := 0.0       # Cooldown for stick-based scrolling
+
 # Grip adjust mode — tune offsets live with thumbsticks
 var _adjust_mode := false
 var _adjust_saved_offset := Vector3.ZERO  # Backup to discard changes
@@ -338,6 +347,8 @@ func _draw_weapon(hand: String, slot: int) -> void:
 func _lower_weapon() -> void:
 	print("[VR Mod] LOWER weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
+	if _rail_mode:
+		_exit_rail_mode()
 	_holster_state = HolsterState.LOWERED
 	_support_grip_held = false
 	# Set weapon_low to lower the weapon visually
@@ -364,6 +375,8 @@ func _raise_weapon() -> void:
 func _holster_weapon() -> void:
 	print("[VR Mod] HOLSTER weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
+	if _rail_mode:
+		_exit_rail_mode()
 	_cleanup_scope()
 	# Release aim
 	_inject_action("aim", false)
@@ -537,6 +550,15 @@ func _process(delta: float) -> void:
 				# Scroll cooldown tick
 				if _scroll_cooldown > 0:
 					_scroll_cooldown -= delta
+				if _rail_scroll_cooldown > 0:
+					_rail_scroll_cooldown -= delta
+
+				# Rail mode: long-press detection for X button
+				if _rail_x_pending:
+					var elapsed = Time.get_ticks_msec() / 1000.0 - _rail_x_press_time
+					if elapsed >= 0.3:
+						_rail_x_pending = false
+						_enter_rail_mode()
 
 				# Post-scroll delayed debug dump
 				if _post_scroll_timer > 0:
@@ -601,6 +623,7 @@ func _process(delta: float) -> void:
 				_update_interface_state()
 				_sync_origin_to_game()
 				_process_input(delta)
+				_update_rail_slide()
 
 				# Sync weapon AFTER origin/camera so our position override wins
 				if not _decor_mode:
@@ -1343,7 +1366,17 @@ func _process_input(delta: float) -> void:
 	# --- Right thumbstick: Turn / Config scroll ---
 	if right_controller and right_controller.get_is_active():
 		var turn_input = right_controller.get_vector2("primary")
-		if _config_screen_open:
+		if _rail_mode and abs(turn_input.y) > 0.5:
+			# Rail mode: right stick Y = Ctrl+scroll to slide optic along rail
+			if _rail_scroll_cooldown <= 0.0:
+				_inject_key(KEY_CTRL, true)
+				_inject_scroll(1 if turn_input.y > 0 else -1)
+				_inject_key(KEY_CTRL, false)
+				_rail_scroll_cooldown = 0.15
+				var ctrl = _get_controller(_config_dominant_hand)
+				if ctrl:
+					ctrl.trigger_haptic_pulse("haptic", 0.0, 0.15, 0.05, 0.0)
+		elif _config_screen_open:
 			# Y axis scrolls the config panel
 			if abs(turn_input.y) > thumbstick_deadzone:
 				_scroll_config_panel(-turn_input.y * 600.0 * delta)
@@ -1444,8 +1477,10 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_inject_action("left_mouse", true)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				elif is_support_hand and _holster_state in [HolsterState.DRAWN, HolsterState.LOWERED]:
-					# Support hand trigger = reload or laser (drawn or lowered)
-					if _support_grip_held:
+					# Support hand trigger = rail slide / reload / laser (drawn or lowered)
+					if _rail_mode and _holster_state == HolsterState.DRAWN:
+						_start_rail_slide()
+					elif _support_grip_held:
 						_inject_key(KEY_T, true)
 						_inject_key(KEY_T, false)
 						print("[VR Mod] LASER toggled (support trigger + grip)")
@@ -1506,20 +1541,20 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 								_support_grip_held = true
 		"ax_button":  # A on right, X on left (physical mapping)
 			if hand == "left":
-				# X button: adjust mode when weapon drawn
-				if _adjust_mode:
+				# X button: rail mode (long-press) / adjust mode (short press) / flashlight
+				if _rail_mode:
+					# X again while in rail mode = exit rail mode
+					_exit_rail_mode()
+				elif _adjust_mode:
 					# X again = discard changes and exit
 					_slot_grip_offsets[_weapon_slot] = _adjust_saved_offset
 					_slot_grip_rotations[_weapon_slot] = _adjust_saved_rotation
 					_adjust_mode = false
 					print("[VR Mod] === ADJUST MODE OFF (discarded) ===")
 				elif _holster_state == HolsterState.DRAWN:
-					_adjust_mode = true
-					_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
-					_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
-					print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
-					print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
-					print("[VR Mod] A=Save, X=Discard")
+					# Start long-press detection — will resolve on release or timeout
+					_rail_x_pending = true
+					_rail_x_press_time = Time.get_ticks_msec() / 1000.0
 				else:
 					# X button when unarmed/lowered = toggle flashlight
 					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, true)
@@ -1587,7 +1622,10 @@ func _on_button_released(button_name: String, hand: String) -> void:
 					_inject_action("left_mouse", false)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
 				else:
-					_inject_action("reload", false)
+					if _rail_active:
+						_end_rail_slide()
+					else:
+						_inject_action("reload", false)
 		"grip_click":
 			# Grip release tracking already done above (before decor mode block)
 			if _decor_mode and not _interface_open:
@@ -1619,7 +1657,18 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				if _grab_hand == hand:
 					_drop_grabbed()
 		"ax_button":
-			if hand == "right":
+			if hand == "left":
+				if _rail_x_pending:
+					_rail_x_pending = false
+					# Short press — enter adjust mode (original behavior)
+					if _holster_state == HolsterState.DRAWN and not _rail_mode:
+						_adjust_mode = true
+						_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
+						_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
+						print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+						print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
+						print("[VR Mod] A=Save, X=Discard")
+			elif hand == "right":
 				_inject_action("jump", false)
 		"by_button":
 			if hand == "left":
@@ -2796,6 +2845,64 @@ func _cleanup_scope() -> void:
 	# Don't destroy viewport/camera — reuse across weapon changes
 	if _scope_viewport and is_instance_valid(_scope_viewport):
 		_scope_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+
+
+# --- Rail movement (optic slide along weapon rail) ---
+
+func _enter_rail_mode() -> void:
+	_rail_mode = true
+	_adjust_mode = false  # Cancel adjust mode if somehow active
+	var ctrl = _get_controller(_get_support_hand())
+	if ctrl:
+		ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.15, 0.0)
+	print("[VR Mod] === RAIL MODE ON ===")
+
+func _exit_rail_mode() -> void:
+	if _rail_active:
+		_end_rail_slide()
+	_rail_mode = false
+	_rail_x_pending = false
+	print("[VR Mod] === RAIL MODE OFF ===")
+
+func _start_rail_slide() -> void:
+	_rail_active = true
+	_rail_scroll_accum = 0.0
+	# Record off-hand position projected onto weapon forward axis
+	var support_ctrl = _get_controller(_get_support_hand())
+	if support_ctrl and game_camera:
+		var weapon_fwd = -game_camera.global_basis.z
+		_rail_grab_origin = support_ctrl.global_position.dot(weapon_fwd)
+	_inject_key(KEY_CTRL, true)
+	if support_ctrl:
+		support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.1, 0.0)
+	print("[VR Mod] Rail slide started (trigger grab)")
+
+func _end_rail_slide() -> void:
+	_rail_active = false
+	_inject_key(KEY_CTRL, false)
+	_rail_scroll_accum = 0.0
+	print("[VR Mod] Rail slide ended")
+
+func _update_rail_slide() -> void:
+	if not _rail_active:
+		return
+	var support_ctrl = _get_controller(_get_support_hand())
+	if not support_ctrl or not game_camera:
+		return
+	var weapon_fwd = -game_camera.global_basis.z
+	var current_proj = support_ctrl.global_position.dot(weapon_fwd)
+	var delta_proj = current_proj - _rail_grab_origin
+	_rail_scroll_accum += delta_proj
+	_rail_grab_origin = current_proj
+	var threshold = 0.02  # 2cm per scroll tick
+	while _rail_scroll_accum > threshold:
+		_inject_scroll(1)
+		_rail_scroll_accum -= threshold
+		support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.15, 0.05, 0.0)
+	while _rail_scroll_accum < -threshold:
+		_inject_scroll(-1)
+		_rail_scroll_accum += threshold
+		support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.15, 0.05, 0.0)
 
 
 func _force_debug_dump(label: String) -> void:
