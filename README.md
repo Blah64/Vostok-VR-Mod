@@ -175,8 +175,16 @@ Exiting is blocked while a furniture ghost preview is active — place or cancel
 ### Inventory / UI
 
 When a menu or inventory panel is open the laser switches to **blue** and extends to 5 m.
-Point and pull the trigger to click. Grip acts as right-click. **Right stick up/down**
-scrolls any open menu or inventory panel.
+
+| Input | Action |
+|-------|--------|
+| Dominant trigger | Click (left mouse) |
+| Dominant grip | Right-click / context menu |
+| Support grip (hold) + dominant trigger | Fast transfer (Ctrl + click) |
+| Right stick up / down | Scroll |
+
+**Fast transfer:** Hold the **support hand grip** to activate a Ctrl modifier, then
+trigger-click each item you want to move. Release the support grip when done.
 
 ---
 

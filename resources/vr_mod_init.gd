@@ -494,6 +494,7 @@ var _prev_interface_open := false  # For detecting transitions
 var _laser_mesh: MeshInstance3D   # Visual laser pointer line (dual-purpose: grab range + UI pointer)
 var _hover_label: Label3D = null  # Floating item name shown when aiming at interactable/grabbable
 var _menu_open := false           # True while inventory/menu is visible
+var _menu_ctrl_held := false      # True while support grip is held in menus (Ctrl modifier for fast transfer)
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 
 # HUD sizing (vars so config screen can change them at runtime)
@@ -1245,6 +1246,11 @@ func _on_interface_closed() -> void:
 	hud_mesh.visible = false
 	add_child(hud_mesh)
 
+	# Release Ctrl modifier if held (support grip fast transfer)
+	if _menu_ctrl_held:
+		_menu_ctrl_held = false
+		_inject_key(KEY_CTRL, false)
+
 	# Hide laser pointer and return to grab-range mode
 	_menu_open = false
 	if _laser_mesh and not _config_screen_open:
@@ -1872,8 +1878,13 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_support_trigger_press_time = Time.get_ticks_msec() / 1000.0
 		"grip_click":
 			if _interface_open:
-				_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
-				_inject_action("context", true)
+				if is_support_hand:
+					_menu_ctrl_held = true
+					_inject_key(KEY_CTRL, true)
+					print("[VR Mod] MENU: Ctrl held (fast transfer mode)")
+				else:
+					_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
+					_inject_action("context", true)
 			elif _decor_mode:
 				return
 			elif _holster_cooldown > 0.0:
@@ -2028,8 +2039,13 @@ func _on_button_released(button_name: String, hand: String) -> void:
 			if _decor_mode and not _interface_open:
 				return  # Don't process holster/drop while in decor mode
 			if _interface_open:
-				_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
-				_inject_action("context", false)
+				if is_support_hand:
+					_menu_ctrl_held = false
+					_inject_key(KEY_CTRL, false)
+					print("[VR Mod] MENU: Ctrl released")
+				else:
+					_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
+					_inject_action("context", false)
 			elif _decor_mode:
 				return
 			else:
@@ -2129,6 +2145,7 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 	var event = InputEventMouseButton.new()
 	event.button_index = button
 	event.pressed = pressed
+	event.ctrl_pressed = _menu_ctrl_held
 	# Use laser pointer position when in inventory, center of screen otherwise
 	if _interface_open and _laser_screen_pos.x >= 0:
 		event.position = _laser_screen_pos
