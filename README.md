@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod
+# Road to Vostok — VR Mod v1.0.0
 
 A community VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
@@ -15,6 +15,8 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 
 ## Installation
 
+### Option A — Standalone (no other mods)
+
 1. Copy `override.cfg` and `vr_mod_init.gd` into the game root folder:
    ```
    C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\
@@ -25,6 +27,24 @@ virtual reality with full head tracking, motion controllers, and physical weapon
    ```
 3. Put on your headset, start SteamVR (or Meta PC app), then launch Road to Vostok normally through Steam.
 4. The mod activates automatically once the game loads into a map — no launcher needed.
+
+### Option B — Metro Mod Loader (recommended if running multiple mods)
+
+[Metro Mod Loader](https://modworkshop.net/mod/55623) lets you enable and disable mods by moving a
+single file, and handles load order automatically when running multiple mods alongside each other
+(e.g. Mod Configuration Menu).
+
+1. Install Metro Mod Loader by following its instructions — this replaces `override.cfg` in the game
+   root with Metro's own copy. Do **not** also install the standalone `override.cfg` from this mod.
+2. Drop `vr-mod.vmz` into the `mods\` folder in the game root:
+   ```
+   C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\mods\vr-mod.vmz
+   ```
+3. Put on your headset, start SteamVR (or Meta PC app), then launch Road to Vostok normally through Steam.
+
+Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\` in Metro mode.
+
+**To disable the mod:** remove or rename `vr-mod.vmz`. No other files need to be touched.
 
 ---
 
