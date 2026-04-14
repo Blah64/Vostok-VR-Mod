@@ -478,12 +478,19 @@ var _config_dominant_hand := "right"
 var _snap_turn_cooldown := false
 var _last_game_cam_pos := Vector3.ZERO
 
+# Two-hand aim stabilization
+var _two_hand_smooth_enabled := true
+var _two_hand_smooth_speed := 12.0
+var _two_hand_smooth_forward := Vector3.ZERO
+var _two_hand_was_active := false
+
 # Comfort vignette
 var _vignette_enabled := true
 var _vignette_strength := 0.8
 var _vignette_mesh: MeshInstance3D = null
 var _vignette_radius := 1.0   # current inner edge (1.0 = off screen, smaller = more coverage)
 var _vignette_hold := 0.0     # seconds; >0 = vignette active
+
 
 # Timing
 const CAMERA_POLL_INTERVAL := 30
@@ -2663,6 +2670,28 @@ func _sync_weapon_to_controller() -> void:
 		var rot_offset: float = 0.0 if _weapon_slot == 4 else _slot_grip_rotations.get(_weapon_slot, 0.0)
 		aim_basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + rot_offset))
 
+	# Two-hand stabilization: smooth the aim forward direction post-hoc (at function scope, no deep nesting)
+	# aim_basis.z == the raw hand-to-hand forward vector after the 180-deg flip in the block above
+	if use_two_hand and _two_hand_smooth_enabled:
+		var raw_fwd = aim_basis.z
+		if not _two_hand_was_active:
+			_two_hand_smooth_forward = raw_fwd
+		else:
+			_two_hand_smooth_forward = _two_hand_smooth_forward.slerp(raw_fwd, clampf(get_process_delta_time() * _two_hand_smooth_speed, 0.0, 1.0))
+		var smth := _two_hand_smooth_forward
+		var up2 = Vector3.UP
+		var right2 = up2.cross(smth)
+		if right2.length_squared() < 0.01:
+			right2 = controller.global_basis.y.cross(smth)
+		right2 = right2.normalized()
+		var cup2 = smth.cross(right2).normalized()
+		aim_basis = Basis(right2, cup2, -smth) * Basis(Vector3.UP, deg_to_rad(180))
+
+	if use_two_hand:
+		_two_hand_was_active = true
+	else:
+		_two_hand_was_active = false
+
 	# Sample recoil chain and apply delta on top of controller aim
 	var recoil_delta := _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
@@ -3406,6 +3435,8 @@ func _load_config() -> void:
 				smooth_turn_speed = data["comfort"].get("smooth_turn_speed", 120.0)
 				_vignette_enabled = data["comfort"].get("vignette_enabled", true)
 				_vignette_strength = data["comfort"].get("vignette_strength", 0.8)
+				_two_hand_smooth_enabled = data["comfort"].get("two_hand_smooth_enabled", true)
+				_two_hand_smooth_speed = data["comfort"].get("two_hand_smooth_speed", 12.0)
 			if data.has("controls"):
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
@@ -3736,6 +3767,8 @@ func _populate_config_ui() -> void:
 	_add_toggle_row(grid_comfort, "Vignette", ["On", "Off"], 0 if _vignette_enabled else 1, "_on_cfg_vignette")
 	_add_stepper_row(grid_comfort, "Vig. Strength", _vignette_strength, 0.1, 1.0, 0.1, "_on_cfg_vignette_str")
 	_add_stepper_row(grid_comfort, "Render Scale", _render_scale, 0.5, 1.0, 0.05, "_on_cfg_render_scale")
+	_add_toggle_row(grid_comfort, "2H Stabilize", ["On", "Off"], 0 if _two_hand_smooth_enabled else 1, "_on_cfg_2h_smooth")
+	_add_stepper_row(grid_comfort, "2H Smooth", _two_hand_smooth_speed, 2.0, 30.0, 1.0, "_on_cfg_2h_smooth_spd")
 
 	_mk_sep(vbox)
 
@@ -4033,6 +4066,14 @@ func _on_cfg_render_scale(val: float) -> void:
 	_render_scale = val
 	if xr_interface and is_instance_valid(xr_interface):
 		xr_interface.render_target_size_multiplier = _render_scale
+
+
+func _on_cfg_2h_smooth(idx: int) -> void:
+	_two_hand_smooth_enabled = (idx == 0)
+
+
+func _on_cfg_2h_smooth_spd(val: float) -> void:
+	_two_hand_smooth_speed = val
 
 
 func _on_cfg_hud_dist(val: float) -> void:
@@ -4362,7 +4403,9 @@ func _save_full_config() -> void:
 		"snap_turn_degrees": snap_turn_degrees,
 		"smooth_turn_speed": smooth_turn_speed,
 		"vignette_enabled": _vignette_enabled,
-		"vignette_strength": _vignette_strength
+		"vignette_strength": _vignette_strength,
+		"two_hand_smooth_enabled": _two_hand_smooth_enabled,
+		"two_hand_smooth_speed": _two_hand_smooth_speed
 	}
 
 	# Controls
