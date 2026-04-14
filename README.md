@@ -17,16 +17,14 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 
 ### Option A — Standalone (no other mods)
 
-1. Copy `override.cfg` and `vr_mod_init.gd` into the game root folder:
+1. Extract `vr-mod-standalone.zip` directly into the game root folder:
    ```
    C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\
    ```
-2. Copy the `VR Mod\config\` folder into the game root so you have:
-   ```
-   C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\VR Mod\config\default_config.json
-   ```
-3. Put on your headset, start SteamVR (or Meta PC app), then launch Road to Vostok normally through Steam.
-4. The mod activates automatically once the game loads into a map — no launcher needed.
+   You should end up with `override.cfg` and `vr_mod_init.gd` in the game root, and
+   `VR Mod\config\default_config.json` inside it.
+2. Put on your headset, start SteamVR (or Meta PC app), then launch Road to Vostok normally through Steam.
+3. The mod activates automatically once the game loads into a map — no launcher needed.
 
 ### Option B — Metro Mod Loader (recommended if running multiple mods)
 
