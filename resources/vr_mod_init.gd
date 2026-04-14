@@ -492,6 +492,7 @@ var _hud_installed := false
 var _interface_open := false
 var _prev_interface_open := false  # For detecting transitions
 var _laser_mesh: MeshInstance3D   # Visual laser pointer line (dual-purpose: grab range + UI pointer)
+var _hover_label: Label3D = null  # Floating item name shown when aiming at interactable/grabbable
 var _menu_open := false           # True while inventory/menu is visible
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 
@@ -918,6 +919,20 @@ func _install_xr_rig() -> void:
 
 	var pointer_controller = _get_controller(_config_dominant_hand)
 	pointer_controller.add_child(_laser_mesh)
+
+	# Floating hover label — shows item/interactable name when laser aims at it
+	_hover_label = Label3D.new()
+	_hover_label.name = "HoverLabel"
+	_hover_label.font_size = 48
+	_hover_label.pixel_size = 0.001
+	_hover_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_hover_label.no_depth_test = true
+	_hover_label.render_priority = 10
+	_hover_label.outline_size = 6
+	_hover_label.outline_modulate = Color(0.0, 0.0, 0.0, 1.0)
+	_hover_label.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_hover_label.visible = false
+	add_child(_hover_label)
 
 	_setup_comfort_vignette()
 
@@ -2742,6 +2757,8 @@ func _update_hand_visibility() -> void:
 			var pointing_at_grabbable := false
 			var pointing_at_interactable := false
 			var pointing_at_furniture := false
+			var hover_collider: Node3D = null
+			var hover_hit_pos := Vector3.ZERO
 			if _decor_mode and game_camera and is_instance_valid(game_camera):
 				# Use the game's Interactor raycast (driven by game camera we steer)
 				var interactor = game_camera.get_node_or_null("Interactor")
@@ -2768,6 +2785,9 @@ func _update_hand_visibility() -> void:
 				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
 				if not pointing_at_grabbable and c.is_in_group("Interactable"):
 					pointing_at_interactable = true
+				if (pointing_at_grabbable or pointing_at_interactable) and c is Node3D:
+					hover_collider = c as Node3D
+					hover_hit_pos = grab_ray.get_collision_point()
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
 				if _decor_mode and pointing_at_furniture:
@@ -2784,6 +2804,21 @@ func _update_hand_visibility() -> void:
 			if cyl:
 				cyl.height = 1.0
 				_laser_mesh.position.z = -0.5
+
+			# Update hover label with target name
+			if _hover_label:
+				if hover_collider != null:
+					if pointing_at_interactable:
+						_hover_label.text = _find_interactable_display_name(hover_collider)
+					else:
+						_hover_label.text = _format_node_name(hover_collider.name)
+					_hover_label.global_position = hover_hit_pos + Vector3.UP * 0.15
+					_hover_label.visible = true
+				else:
+					_hover_label.visible = false
+		else:
+			if _hover_label:
+				_hover_label.visible = false
 		_laser_mesh.visible = show_laser
 
 
@@ -3074,6 +3109,37 @@ func _sample_recoil_chain(weapon_rig: Node3D) -> Transform3D:
 		composed = composed * child.transform
 		current = child
 	return composed
+
+
+func _format_node_name(raw: String) -> String:
+	# Convert PascalCase to separate words ("AmmoBox" -> "Ammo Box")
+	# and replace underscores with spaces ("ammo_box" -> "ammo box").
+	var result := ""
+	for i in range(raw.length()):
+		var ch := raw[i]
+		if i > 0 and ch >= "A" and ch <= "Z":
+			result += " "
+		result += ch
+	return result.replace("_", " ").strip_edges()
+
+
+func _find_interactable_display_name(collider: Node) -> String:
+	# Walk up the ancestry from the collider to find the first node that has a
+	# game script attached — that is the real object (LootContainer, Trader, Door, etc.).
+	# Intermediate nodes like "Mesh" or "Collider" typically carry no script.
+	var scene_root = get_tree().current_scene
+	var check: Node = collider
+	for _i in range(6):
+		check = check.get_parent()
+		if not check or check == scene_root or check == self:
+			break
+		if check.get_script() != null:
+			return _format_node_name(check.name)
+	# Fallback: direct parent name
+	var p = collider.get_parent()
+	if p and p != scene_root and p != self:
+		return _format_node_name(p.name)
+	return _format_node_name(collider.name)
 
 
 func _log(msg: String) -> void:
