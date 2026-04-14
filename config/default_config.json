@@ -12,6 +12,28 @@
 		"dominant_hand": "right",
 		"thumbstick_deadzone": 0.15
 	},
+	"hand_models": {
+		"left": {
+			"rot": {
+				"x": 0.0,
+				"y": 0.0,
+				"z": 0.0
+			},
+			"x": -0.03,
+			"y": -0.02,
+			"z": 0.17
+		},
+		"right": {
+			"rot": {
+				"x": 0.0,
+				"y": 0.0,
+				"z": 0.0
+			},
+			"x": 0.025,
+			"y": 0.01,
+			"z": 0.165
+		}
+	},
 	"holsters": {
 		"bag": {
 			"radius": 0.35,
@@ -90,8 +112,8 @@
 		"glance_angle": 40.0,
 		"glance_enabled": false,
 		"offset": {
-			"x": -0.02,
-			"y": -0.04,
+			"x": -0.05,
+			"y": -0.08,
 			"z": 0.32
 		},
 		"rot": {
