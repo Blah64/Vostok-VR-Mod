@@ -72,7 +72,8 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 | Input | Action |
 |-------|--------|
 | Weapon hand trigger | Fire |
-| Support hand trigger | Reload |
+| Support hand trigger (quick press) | Reload |
+| Support hand trigger (hold 0.5 s) | Ammo check |
 | Support hand trigger (while gripping) | Toggle laser attachment |
 | Support hand grip | Two-hand grip (stabilised aim, rifles/shotguns only) |
 | Right stick up / down (weapon drawn, variable scope) | Zoom in / out |
