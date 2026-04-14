@@ -421,8 +421,6 @@ func _enter_sling() -> void:
 	_clear_grenade_state()
 	_holster_state = HolsterState.SLING
 	_support_grip_held = false
-	_inject_action("weapon_low", true)
-	get_tree().create_timer(0.1).timeout.connect(func(): _inject_action("weapon_low", false))
 	Input.action_release("fire")
 	Input.action_release("left_mouse")
 	_inject_action("fire", false)
@@ -2983,6 +2981,7 @@ func _sync_weapon_to_controller() -> void:
 func _sync_weapon_to_sling(weapon_rig: Node3D) -> void:
 	if not xr_camera or not is_instance_valid(xr_camera):
 		return
+	weapon_rig.visible = true  # override any game-side visibility flag each frame
 	# Build a yaw-only basis from the camera so the weapon follows the player's turn
 	# but not their head pitch/roll (hangs naturally at chest level)
 	var head_yaw := xr_camera.global_rotation.y
