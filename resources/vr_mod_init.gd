@@ -873,9 +873,11 @@ func _install_xr_rig() -> void:
 	# Ensure mouse is captured so fire input works
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
-	# Ensure user data directory exists for Metro installs
+	# Ensure user data directory and default config exist for Metro installs
 	if _is_metro:
 		DirAccess.make_dir_recursive_absolute("user://vr_mod")
+		if not FileAccess.file_exists(_config_path):
+			_save_full_config()
 
 	# Clear debug log and dump fire-related InputMap bindings
 	var dump_path = _log_path
