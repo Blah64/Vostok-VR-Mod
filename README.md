@@ -41,7 +41,8 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 | Left stick click | Sprint |
 | Right stick click | Crouch |
 | Menu button | Pause / escape |
-| X (left, weapon holstered) | Toggle flashlight |
+| X (left, weapon holstered, quick tap) | Toggle flashlight |
+| X (left, weapon holstered, hold 0.5 s) | Enter shelter decoration mode |
 | Trigger (above head, unarmed) | Toggle night vision goggles |
 
 ### Holster System
@@ -126,14 +127,17 @@ arm motion to throw — velocity is calculated from your last few hand-position 
 
 When inside a shelter you can enter furniture placement mode to arrange your base.
 
-**Enter / exit:** Squeeze **both grips simultaneously** while unarmed and not holding
-anything. The controllers buzz to confirm. You can also exit with the **X button (left)**.
+**Enter:** **Hold X (left) for 0.5 s** while unarmed and not holding anything. The
+controller buzzes to confirm.
+
+**Exit:** Press **X (left)** or squeeze **both grips** while in decor mode.
 Exiting is blocked while a furniture ghost preview is active — place or cancel the item first.
 
 | Input | Action |
 |-------|--------|
-| Both grips (unarmed) | Enter / exit decor mode |
+| X (left, hold 0.5 s, unarmed) | Enter decor mode |
 | X (left) | Exit decor mode |
+| Both grips | Exit decor mode |
 | Controller aim (dominant) | Aim furniture ghost / target placed furniture |
 | Right stick up / down | Adjust distance or rotation amount |
 | Right grip (single) | Toggle between distance and rotation scroll |

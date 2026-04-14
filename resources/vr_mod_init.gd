@@ -85,9 +85,11 @@ var _nvg_overlay_installed := false
 var _decor_mode := false
 var _decor_scroll_mode := 0       # 0 = distance, 1 = rotation
 var _decor_scroll_cooldown := 0.0
-var _left_grip_held := false      # Track individual grips for both-grips detection
+var _left_grip_held := false
 var _right_grip_held := false
-var _both_grips_triggered := false # Edge detection — prevent repeat triggers
+# Long-press X (left, UNARMED/LOWERED) to enter decor mode; short-press = flashlight
+var _decor_x_pending := false
+var _decor_x_press_time := 0.0
 
 # Per-slot grip offsets in aim-local space (up, forward from controller)
 # Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
@@ -618,6 +620,15 @@ func _process(delta: float) -> void:
 					if elapsed >= 0.3:
 						_rail_x_pending = false
 						_enter_rail_mode()
+
+				# Decor mode: long-press X while unarmed/lowered
+				if _decor_x_pending:
+					var elapsed_dx: float = Time.get_ticks_msec() / 1000.0 - _decor_x_press_time
+					if elapsed_dx >= 0.5:
+						_decor_x_pending = false
+						if _holster_state in [HolsterState.UNARMED, HolsterState.LOWERED] and not _interface_open:
+							_toggle_decor_mode()
+							left_controller.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.25, 0.0)
 
 				# Support trigger: long-press = ammo check (KEY_V)
 				if _support_trigger_pending:
@@ -1782,13 +1793,6 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_support_trigger_pending = true
 						_support_trigger_press_time = Time.get_ticks_msec() / 1000.0
 		"grip_click":
-			# Grip tracking already done above (before decor mode block)
-			# Both grips while unarmed and not holding anything = enter decor mode
-			if _left_grip_held and _right_grip_held and _holster_state == HolsterState.UNARMED and _grabbed_object == null and not _interface_open and not _decor_mode:
-				if not _both_grips_triggered:
-					_both_grips_triggered = true
-					_toggle_decor_mode()
-				return
 			if _interface_open:
 				_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
 				_inject_action("context", true)
@@ -1850,10 +1854,9 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_rail_x_pending = true
 					_rail_x_press_time = Time.get_ticks_msec() / 1000.0
 				else:
-					# X button when unarmed/lowered = toggle flashlight
-					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, true)
-					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, false)
-					print("[VR Mod] FLASHLIGHT toggled (X button)")
+					# X button when unarmed/lowered: long-press (0.5s) = decor mode, short-press = flashlight
+					_decor_x_pending = true
+					_decor_x_press_time = Time.get_ticks_msec() / 1000.0
 			else:
 				if _adjust_mode:
 					_save_grip_config()
@@ -1890,8 +1893,6 @@ func _on_button_released(button_name: String, hand: String) -> void:
 			_left_grip_held = false
 		else:
 			_right_grip_held = false
-		if not _left_grip_held and not _right_grip_held:
-			_both_grips_triggered = false
 
 	# Decor mode release handling
 	if _decor_mode and not _interface_open:
@@ -1972,6 +1973,12 @@ func _on_button_released(button_name: String, hand: String) -> void:
 						print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
 						print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
 						print("[VR Mod] A=Save, X=Discard")
+				elif _decor_x_pending:
+					_decor_x_pending = false
+					# Short press — toggle flashlight
+					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, true)
+					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, false)
+					print("[VR Mod] FLASHLIGHT toggled (X short-press)")
 			elif hand == "right":
 				_inject_action("jump", false)
 		"by_button":
