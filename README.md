@@ -62,11 +62,23 @@ Your controller will **buzz** when your hand enters a holster zone.
 | Action | Result |
 |--------|--------|
 | Grip near a holster zone | Draw weapon into that hand |
-| Release grip (away from body) | Lower weapon — still in hand, can re-grip to raise |
+| Release grip (slot 1, away from body) | Sling — weapon hangs at chest height, follows player yaw |
+| Release grip (slots 2–4, away from body) | Auto-holster immediately |
 | Release grip near own holster zone | Holster completely |
 | Grip near a different holster zone | Swap weapon |
 
 If a slot has no weapon equipped, releasing the grip immediately holsters with no effect.
+
+### Sling (Primary Weapon Only)
+
+Releasing the grip on your **primary weapon (slot 1)** away from a holster zone puts it in
+**sling position** — the weapon hangs at chest height in front of you and follows your yaw
+as you turn, just like a rifle on a real sling.
+
+To raise the weapon from sling: grip with either hand (dominant or off-hand).
+To holster from sling: grip near your right-shoulder holster zone.
+
+> Slots 2, 3, and 4 (sidearm, knife, grenade) auto-holster when you release the grip.
 
 ### Weapon
 
@@ -81,6 +93,7 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 | B (right, weapon drawn) | Cycle fire mode |
 | B (right, weapon lowered) | Interact with objects |
 | X (left, while weapon drawn, quick tap) | Enter grip adjust mode |
+| X (left, while weapon drawn, off-hand gripping, quick tap) | Enter foregrip adjust mode |
 | X (left, while weapon drawn, hold 0.3 s) | Enter optic rail adjust mode |
 
 > **Note:** All weapon inputs follow the weapon hand dynamically. If you draw with your
@@ -210,7 +223,7 @@ Press **Cancel** to discard changes for this session.
 | **Menu / Inventory** | Distance, size, height, left/right offset, HUD element spread, laser X/Y calibration |
 | **Wrist Watch** | Glance reveal on/off, glance angle, fade speed, watch size, X/Y/Z position on wrist |
 | **Controls** | Dominant hand |
-| **Holster Zones** | Zone radius, per-slot X/Y/Z position for all 4 holsters |
+| **Holster Zones** | Zone radius, per-slot X/Y/Z position for all 4 holsters, primary weapon sling X/Y/Z position and rotation offsets |
 | **Bag Zone** | Inventory pickup zone radius and X/Y/Z position |
 | **NVG Zone** | Night vision toggle zone radius, height above head, brightness, mono vision |
 
@@ -221,7 +234,7 @@ Press **Cancel** to discard changes for this session.
 Dial in weapon grip position and rotation **while in-game** without editing files manually.
 
 1. Draw a weapon (grip near a holster zone)
-2. Press **X (left)** → controller prints "ADJUST MODE ON" to the debug log
+2. Press **X (left)** *(without the off-hand gripping)* → controller prints "ADJUST MODE ON" to the debug log
 3. Use the sticks to tune:
 
 | Input | Adjusts |
@@ -236,6 +249,29 @@ Dial in weapon grip position and rotation **while in-game** without editing file
 
 Movement and turning are disabled while adjust mode is active. The mode exits
 automatically if you lower or holster the weapon.
+
+---
+
+## Foregrip Adjust Mode
+
+Align the weapon model's foregrip with where your off-hand controller actually sits when
+you use a two-hand grip. This affects **aim direction only** — the dominant-hand grip
+position is unchanged.
+
+1. Draw a weapon and grab with the off-hand (support grip)
+2. Press **X (left)** while the off-hand is gripping → controller prints "FG ADJUST MODE ON"
+3. Use the sticks to tune the foregrip offset:
+
+| Input | Adjusts |
+|-------|---------|
+| Left stick X | Foregrip left / right (X) |
+| Left stick Y | Foregrip up / down (Y) |
+| Right stick Y | Foregrip forward / back (Z) |
+
+4. Press **A (right)** to save to `default_config.json` and exit
+5. Press **X (left)** again to discard changes and exit
+
+The mode also exits automatically if you release the off-hand grip.
 
 ---
 
@@ -306,6 +342,27 @@ the next game launch.
 | `y` | Up / down offset from controller (metres) |
 | `z` | Forward / back offset — negative = back toward body |
 | `rot` | Y-axis rotation in degrees |
+
+### Foregrip Offsets
+
+Offsets that shift the effective off-hand reference point for two-hand aim direction.
+Affects only the aim vector — the dominant-hand grip position is unchanged.
+Tuned live via **Foregrip Adjust Mode** (X while off-hand gripping).
+
+```json
+"foregrip_offsets": {
+    "1": { "x": 0.0, "y": 0.0, "z": 0.0 },
+    "2": { "x": 0.0, "y": 0.0, "z": 0.0 },
+    "3": { "x": 0.0, "y": 0.0, "z": 0.0 },
+    "4": { "x": 0.0, "y": 0.0, "z": 0.0 }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `x` | Left / right shift of the foregrip reference point (metres) |
+| `y` | Up / down shift (metres) |
+| `z` | Forward / back shift (metres) |
 
 ### World Scale
 

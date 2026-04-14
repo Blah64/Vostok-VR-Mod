@@ -179,6 +179,11 @@ var _adjust_saved_rotation := 0.0
 const ADJUST_SPEED := 0.15  # Meters per second for position
 const ADJUST_ROT_SPEED := 45.0  # Degrees per second for rotation
 
+# Foregrip adjust mode — tune two-hand foregrip offset live (X while off-hand gripping)
+var _slot_foregrip_offsets := { 1: Vector3.ZERO, 2: Vector3.ZERO, 3: Vector3.ZERO, 4: Vector3.ZERO }
+var _fg_adjust_mode := false
+var _fg_adjust_saved_offset := Vector3.ZERO
+
 
 func _get_weapon_hand() -> String:
 	if _holster_state != HolsterState.UNARMED and _weapon_hand != "":
@@ -395,6 +400,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 func _lower_weapon() -> void:
 	print("[VR Mod] LOWER weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
+	_fg_adjust_mode = false
 	if _rail_mode:
 		_exit_rail_mode()
 	_clear_grenade_state()
@@ -416,6 +422,7 @@ func _lower_weapon() -> void:
 func _enter_sling() -> void:
 	print("[VR Mod] SLING weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
+	_fg_adjust_mode = false
 	if _rail_mode:
 		_exit_rail_mode()
 	_clear_grenade_state()
@@ -441,6 +448,7 @@ func _raise_weapon() -> void:
 func _holster_weapon() -> void:
 	print("[VR Mod] HOLSTER weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
+	_fg_adjust_mode = false
 	if _rail_mode:
 		_exit_rail_mode()
 	_cleanup_scope()
@@ -1597,6 +1605,30 @@ func _process_input(delta: float) -> void:
 		_inject_key(KEY_D, false)
 		return
 
+	# --- Foregrip adjust mode: thumbsticks slide foregrip offset while off-hand grips ---
+	if _fg_adjust_mode and _weapon_slot > 0:
+		var changed := false
+		var offset: Vector3 = _slot_foregrip_offsets[_weapon_slot]
+		if left_controller and left_controller.get_is_active():
+			var left = left_controller.get_vector2("primary")
+			if left.length() > thumbstick_deadzone:
+				offset.x += left.x * ADJUST_SPEED * delta
+				offset.y += left.y * ADJUST_SPEED * delta
+				changed = true
+		if right_controller and right_controller.get_is_active():
+			var right = right_controller.get_vector2("primary")
+			if right.length() > thumbstick_deadzone:
+				offset.z += right.y * ADJUST_SPEED * delta
+				changed = true
+		if changed:
+			_slot_foregrip_offsets[_weapon_slot] = offset
+			print("[VR Mod] FG ADJUST slot ", _weapon_slot, ": x=", snapped(offset.x, 0.001), " y=", snapped(offset.y, 0.001), " z=", snapped(offset.z, 0.001))
+		_inject_key(KEY_W, false)
+		_inject_key(KEY_S, false)
+		_inject_key(KEY_A, false)
+		_inject_key(KEY_D, false)
+		return
+
 	# --- Decor mode: right stick Y = scroll (distance/rotation), left stick = move, right stick X = turn ---
 	if _decor_mode:
 		# Tick decor scroll cooldown
@@ -1873,6 +1905,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				if _rail_mode:
 					# X again while in rail mode = exit rail mode
 					_exit_rail_mode()
+				elif _fg_adjust_mode:
+					# X while in foregrip adjust = discard and exit
+					_slot_foregrip_offsets[_weapon_slot] = _fg_adjust_saved_offset
+					_fg_adjust_mode = false
+					print("[VR Mod] === FG ADJUST MODE OFF (discarded) ===")
 				elif _adjust_mode:
 					# X again = discard changes and exit
 					_slot_grip_offsets[_weapon_slot] = _adjust_saved_offset
@@ -1888,7 +1925,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_decor_x_pending = true
 					_decor_x_press_time = Time.get_ticks_msec() / 1000.0
 			else:
-				if _adjust_mode:
+				if _fg_adjust_mode:
+					_save_grip_config()
+					_fg_adjust_mode = false
+					print("[VR Mod] === FG ADJUST MODE OFF (saved) ===")
+				elif _adjust_mode:
 					_save_grip_config()
 					_adjust_mode = false
 					print("[VR Mod] === ADJUST MODE OFF (saved) ===")
@@ -1990,6 +2031,9 @@ func _on_button_released(button_name: String, hand: String) -> void:
 								_holster_weapon()
 				elif is_support_hand:
 					_support_grip_held = false
+					if _fg_adjust_mode:
+						_fg_adjust_mode = false
+						print("[VR Mod] === FG ADJUST MODE OFF (support released) ===")
 					print("[VR Mod] Support grip: two-hand aim OFF")
 				# Always try to drop grabbed objects from this hand
 				if _grab_hand == hand:
@@ -1998,14 +2042,21 @@ func _on_button_released(button_name: String, hand: String) -> void:
 			if hand == "left":
 				if _rail_x_pending:
 					_rail_x_pending = false
-					# Short press — enter adjust mode (original behavior)
 					if _holster_state == HolsterState.DRAWN and not _rail_mode:
-						_adjust_mode = true
-						_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
-						_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
-						print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
-						print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
-						print("[VR Mod] A=Save, X=Discard")
+						if _support_grip_held:
+							# Off-hand gripping — enter foregrip adjust mode
+							_fg_adjust_mode = true
+							_fg_adjust_saved_offset = _slot_foregrip_offsets[_weapon_slot]
+							print("[VR Mod] === FG ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+							print("[VR Mod] Left stick=X/Y, Right stick Y=Z | A=Save, X=Discard")
+						else:
+							# Main hand only — enter grip adjust mode
+							_adjust_mode = true
+							_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
+							_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
+							print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+							print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
+							print("[VR Mod] A=Save, X=Discard")
 				elif _decor_x_pending:
 					_decor_x_pending = false
 					# Short press — toggle flashlight
@@ -2912,22 +2963,24 @@ func _sync_weapon_to_controller() -> void:
 	var use_two_hand = false
 	var aim_basis: Basis
 
-	# Single-hand basis and grip offset hoisted here so the two-hand forward vector
-	# originates from the calibrated grip point rather than the raw controller origin.
+	# Single-hand basis computed at function scope so the smooth-init path can also use it.
 	# Grenades (slot 4): ignore grip rotation — throw direction must follow controller forward.
 	var sh_rot_offset: float = 0.0 if _weapon_slot == 4 else _slot_grip_rotations.get(_weapon_slot, 0.0)
 	var single_hand_basis: Basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + sh_rot_offset))
 	var local_offset: Vector3 = _slot_grip_offsets.get(_weapon_slot, Vector3(0, 0.15, -0.20))
+	# Foregrip offset: shifts the effective off-hand reference point to correct for the
+	# weapon model's foregrip not being at the off-hand controller position.
+	# Applied to the aim DIRECTION only — weapon position (dominant grip) is unchanged.
+	var fg_off: Vector3 = _slot_foregrip_offsets.get(_weapon_slot, Vector3.ZERO)
 
 	if _support_grip_held and off_controller and off_controller.get_is_active():
 		var hand_dist = controller.global_position.distance_to(off_controller.global_position)
 		if hand_dist > 0.1:
 			use_two_hand = true
-			# Forward = from calibrated grip point toward off-hand controller.
-			# Using raw controller.global_position ignores the slot grip offset, shifting
-			# the aim origin and misaligning the off-hand model with the foregrip.
-			var grip_origin = controller.global_position + single_hand_basis * local_offset
-			var forward = (off_controller.global_position - grip_origin).normalized()
+			# Effective off-hand: shift by fg_off (in single-hand-aim space) so the weapon's
+			# visual foregrip lands on the off-hand controller without moving the dominant grip.
+			var eff_off = off_controller.global_position + single_hand_basis * fg_off
+			var forward = (eff_off - controller.global_position).normalized()
 			# Use world up; fall back to controller Y when aiming nearly vertical.
 			# Godot is right-handed: right = forward x up (NOT up x forward, which gives LEFT
 			# and produces an improper/mirrored basis). Previous bug flipped aim_basis.x and
@@ -3516,7 +3569,8 @@ func _cleanup_scope() -> void:
 
 func _enter_rail_mode() -> void:
 	_rail_mode = true
-	_adjust_mode = false  # Cancel adjust mode if somehow active
+	_adjust_mode = false      # Cancel adjust mode if somehow active
+	_fg_adjust_mode = false   # Cancel foregrip adjust mode if somehow active
 	var ctrl = _get_controller(_get_support_hand())
 	if ctrl:
 		ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.15, 0.0)
@@ -3757,6 +3811,13 @@ func _load_config() -> void:
 						var o = wo[key]
 						_slot_grip_offsets[slot] = Vector3(o.get("x", 0), o.get("y", 0.15), o.get("z", -0.20))
 						_slot_grip_rotations[slot] = o.get("rot", 0.0)
+			if data.has("foregrip_offsets"):
+				var fg = data["foregrip_offsets"]
+				for slot in [1, 2, 3, 4]:
+					var key = str(slot)
+					if fg.has(key):
+						var o = fg[key]
+						_slot_foregrip_offsets[slot] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
 			if data.has("hud"):
 				var h = data["hud"]
 				_hud_width = h.get("width", 2.0)
@@ -3834,6 +3895,16 @@ func _save_grip_config() -> void:
 		}
 	data["weapon_offsets"] = wo
 
+	var fg := {}
+	for slot in [1, 2, 3, 4]:
+		var fo := _slot_foregrip_offsets[slot] as Vector3
+		fg[str(slot)] = {
+			"x": snapped(fo.x, 0.001),
+			"y": snapped(fo.y, 0.001),
+			"z": snapped(fo.z, 0.001)
+		}
+	data["foregrip_offsets"] = fg
+
 	var out = FileAccess.open(config_path, FileAccess.WRITE)
 	if out:
 		out.store_string(JSON.stringify(data, "\t"))
@@ -3841,7 +3912,8 @@ func _save_grip_config() -> void:
 		print("[VR Mod] Grip config saved to: ", config_path)
 		for slot in [1, 2, 3, 4]:
 			var o = _slot_grip_offsets[slot]
-			print("[VR Mod]   Slot ", slot, ": x=", snapped(o.x, 0.001), " y=", snapped(o.y, 0.001), " z=", snapped(o.z, 0.001), " rot=", snapped(_slot_grip_rotations[slot], 0.1), "°")
+			var fo = _slot_foregrip_offsets[slot]
+			print("[VR Mod]   Slot ", slot, ": grip x=", snapped(o.x, 0.001), " y=", snapped(o.y, 0.001), " z=", snapped(o.z, 0.001), " rot=", snapped(_slot_grip_rotations[slot], 0.1), "°  foregrip x=", snapped(fo.x, 0.001), " y=", snapped(fo.y, 0.001), " z=", snapped(fo.z, 0.001))
 
 
 # ── Smooth HUD follow ──────────────────────────────────────────────────────────
@@ -4945,7 +5017,13 @@ func _save_full_config() -> void:
 		}
 	}
 
-	# Preserve existing weapon_offsets (already in data from the read above)
+	# Preserve weapon_offsets and foregrip_offsets (already in data from the read above)
+	# Re-write foregrip_offsets so Save & Close never drops them
+	var fg2 := {}
+	for slot in [1, 2, 3, 4]:
+		var fo2 := _slot_foregrip_offsets[slot] as Vector3
+		fg2[str(slot)] = { "x": snapped(fo2.x, 0.001), "y": snapped(fo2.y, 0.001), "z": snapped(fo2.z, 0.001) }
+	data["foregrip_offsets"] = fg2
 
 	# Hand models
 	data["hand_models"] = {
