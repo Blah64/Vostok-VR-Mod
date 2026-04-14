@@ -40,7 +40,7 @@ var _pending_holster_key: int = -1  # KEY_N pending delayed injection on holster
 var _holster_cooldown := 0.0        # Seconds remaining before a new draw is allowed after holstering
 
 # Holster system
-enum HolsterState { UNARMED, DRAWN, LOWERED }
+enum HolsterState { UNARMED, DRAWN, LOWERED, SLING }
 var _holster_state: int = HolsterState.UNARMED
 var _weapon_hand := ""  # "left" or "right" — which hand currently holds weapon
 var _weapon_slot := 0   # 1-4 mapped to KEY_1..KEY_4, 0 = none
@@ -59,6 +59,8 @@ var _holster_offsets := {
 	4: Vector3(0.0,  -0.15,  0.10),
 }
 var _holster_zone_radius := 0.20
+var _sling_offset := Vector3(0.0, -0.35, -0.25)    # primary weapon sling pos relative to head (yaw only)
+var _sling_rot_offset := Vector3(0.0, 0.0, 0.0)   # extra pitch/yaw/roll applied on top of slot rotation (degrees)
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
 var _right_in_zone := 0  # Which zone right controller is in (0 = none)
 
@@ -402,6 +404,25 @@ func _lower_weapon() -> void:
 	_inject_action("weapon_low", true)
 	get_tree().create_timer(0.1).timeout.connect(func(): _inject_action("weapon_low", false))
 	# Release fire/aim in case they were held
+	Input.action_release("fire")
+	Input.action_release("left_mouse")
+	_inject_action("fire", false)
+	_inject_action("left_mouse", false)
+	_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
+	_inject_action("aim", false)
+	_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
+
+
+func _enter_sling() -> void:
+	print("[VR Mod] SLING weapon (slot ", _weapon_slot, ")")
+	_adjust_mode = false
+	if _rail_mode:
+		_exit_rail_mode()
+	_clear_grenade_state()
+	_holster_state = HolsterState.SLING
+	_support_grip_held = false
+	_inject_action("weapon_low", true)
+	get_tree().create_timer(0.1).timeout.connect(func(): _inject_action("weapon_low", false))
 	Input.action_release("fire")
 	Input.action_release("left_mouse")
 	_inject_action("fire", false)
@@ -1839,6 +1860,18 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							_raise_weapon()
 							if _weapon_is_long:
 								_support_grip_held = true
+					HolsterState.SLING:
+						if zone > 0 and zone != _weapon_slot:
+							# Near a different holster — holster current, draw new
+							_holster_weapon()
+							_draw_weapon(hand, zone)
+						elif zone == _weapon_slot:
+							# Near own holster zone — holster completely
+							_holster_weapon()
+						else:
+							# Either hand can pick up the sling weapon; that hand becomes weapon hand
+							_weapon_hand = hand
+							_raise_weapon()
 		"ax_button":  # A on right, X on left (physical mapping)
 			if hand == "left":
 				# X button: rail mode (long-press) / adjust mode (short press) / flashlight
@@ -1955,8 +1988,11 @@ func _on_button_released(button_name: String, hand: String) -> void:
 							# Near own holster zone — holster completely
 							_holster_weapon()
 						else:
-							# Not near holster — lower weapon
-							_lower_weapon()
+							# Not near holster — slot 1 (primary) enters sling; all others auto-holster
+							if _weapon_slot == 1:
+								_enter_sling()
+							else:
+								_holster_weapon()
 				elif is_support_hand:
 					_support_grip_held = false
 					print("[VR Mod] Support grip: two-hand aim OFF")
@@ -2867,6 +2903,11 @@ func _sync_weapon_to_controller() -> void:
 	if _holster_state == HolsterState.UNARMED:
 		return
 
+	# SLING: position weapon at chest, not at controller
+	if _holster_state == HolsterState.SLING:
+		_sync_weapon_to_sling(weapon_rig)
+		return
+
 	var controller = _get_controller(_get_weapon_hand())
 	if not controller or not controller.get_is_active():
 		return
@@ -2937,6 +2978,25 @@ func _sync_weapon_to_controller() -> void:
 	# Scope PIP: detect and activate game's scope SubViewport, position camera
 	_setup_scope_pip(weapon_rig)
 	_update_scope_camera()
+
+
+func _sync_weapon_to_sling(weapon_rig: Node3D) -> void:
+	if not xr_camera or not is_instance_valid(xr_camera):
+		return
+	# Build a yaw-only basis from the camera so the weapon follows the player's turn
+	# but not their head pitch/roll (hangs naturally at chest level)
+	var head_yaw := xr_camera.global_rotation.y
+	var yaw_basis := Basis(Vector3.UP, head_yaw)
+	weapon_rig.global_position = xr_camera.global_position + yaw_basis * _sling_offset
+	# Orient weapon to face forward with the same handedness as the drawn single-hand basis,
+	# then apply the per-axis sling rotation offset (pitch/yaw/roll in degrees)
+	var slot_y_rot: float = _slot_grip_rotations.get(_weapon_slot, 0.0)
+	var base_basis := yaw_basis * Basis(Vector3.UP, deg_to_rad(180.0 + slot_y_rot))
+	weapon_rig.global_basis = base_basis * Basis.from_euler(Vector3(
+		deg_to_rad(_sling_rot_offset.x),
+		deg_to_rad(_sling_rot_offset.y),
+		deg_to_rad(_sling_rot_offset.z)))
+	_hide_arms_in_subtree(weapon_rig)
 
 
 const _RECOIL_CHAIN_NAMES: Array = ["Handling", "Sway", "Noise", "Tilt", "Impulse", "Recoil"]
@@ -3727,6 +3787,11 @@ func _load_config() -> void:
 				HAND_GLTF_OFFSET_RIGHT = Vector3(hr.get("x", 0.01), hr.get("y", 0.0), hr.get("z", 0.05))
 				var hrr = hr.get("rot", {})
 				HAND_GLTF_ROTATION_RIGHT = Vector3(hrr.get("x", 0.0), hrr.get("y", 0.0), hrr.get("z", 0.0))
+			if data.has("sling"):
+				var sl = data["sling"]
+				_sling_offset = Vector3(sl.get("x", 0.0), sl.get("y", -0.35), sl.get("z", -0.25))
+				var slr = sl.get("rot", {})
+				_sling_rot_offset = Vector3(slr.get("x", 0.0), slr.get("y", 0.0), slr.get("z", 0.0))
 			if data.has("menu"):
 				var m = data["menu"]
 				_menu_width = m.get("width", 3.0)
@@ -4152,6 +4217,17 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_hand_r, "Rot X", HAND_GLTF_ROTATION_RIGHT.x, -180.0, 180.0, 5.0, "_on_cfg_hand_r_rx")
 	_add_stepper_row(grid_hand_r, "Rot Y", HAND_GLTF_ROTATION_RIGHT.y, -180.0, 180.0, 5.0, "_on_cfg_hand_r_ry")
 	_add_stepper_row(grid_hand_r, "Rot Z", HAND_GLTF_ROTATION_RIGHT.z, -180.0, 180.0, 5.0, "_on_cfg_hand_r_rz")
+
+	_mk_sep(vbox_cal)
+
+	_mk_header(vbox_cal, "Primary Weapon Sling")
+	var grid_sling = _mk_grid(vbox_cal)
+	_add_stepper_row(grid_sling, "X (L/R)", _sling_offset.x, -0.6, 0.6, 0.01, "_on_cfg_sling_x")
+	_add_stepper_row(grid_sling, "Y (U/D)", _sling_offset.y, -0.8, 0.2, 0.01, "_on_cfg_sling_y")
+	_add_stepper_row(grid_sling, "Z (F/B)", _sling_offset.z, -0.6, 0.2, 0.01, "_on_cfg_sling_z")
+	_add_stepper_row(grid_sling, "Rot X", _sling_rot_offset.x, -180.0, 180.0, 5.0, "_on_cfg_sling_rx")
+	_add_stepper_row(grid_sling, "Rot Y", _sling_rot_offset.y, -180.0, 180.0, 5.0, "_on_cfg_sling_ry")
+	_add_stepper_row(grid_sling, "Rot Z", _sling_rot_offset.z, -180.0, 180.0, 5.0, "_on_cfg_sling_rz")
 
 	# ── Save & Close (pinned below tabs — always visible) ──
 	var btn_sep = HSeparator.new()
@@ -4632,6 +4708,24 @@ func _on_cfg_hand_r_rz(val: float) -> void:
 	if _hand_wrapper_right:
 		_hand_wrapper_right.rotation_degrees = HAND_GLTF_ROTATION_RIGHT
 
+func _on_cfg_sling_x(val: float) -> void:
+	_sling_offset.x = val
+
+func _on_cfg_sling_y(val: float) -> void:
+	_sling_offset.y = val
+
+func _on_cfg_sling_z(val: float) -> void:
+	_sling_offset.z = val
+
+func _on_cfg_sling_rx(val: float) -> void:
+	_sling_rot_offset.x = val
+
+func _on_cfg_sling_ry(val: float) -> void:
+	_sling_rot_offset.y = val
+
+func _on_cfg_sling_rz(val: float) -> void:
+	_sling_rot_offset.z = val
+
 func _on_cfg_save_close() -> void:
 	_save_full_config()
 	_close_config_screen()
@@ -4874,6 +4968,18 @@ func _save_full_config() -> void:
 				"y": snapped(HAND_GLTF_ROTATION_RIGHT.y, 0.1),
 				"z": snapped(HAND_GLTF_ROTATION_RIGHT.z, 0.1)
 			}
+		}
+	}
+
+	# Primary weapon sling
+	data["sling"] = {
+		"x": snapped(_sling_offset.x, 0.001),
+		"y": snapped(_sling_offset.y, 0.001),
+		"z": snapped(_sling_offset.z, 0.001),
+		"rot": {
+			"x": snapped(_sling_rot_offset.x, 0.1),
+			"y": snapped(_sling_rot_offset.y, 0.1),
+			"z": snapped(_sling_rot_offset.z, 0.1)
 		}
 	}
 
