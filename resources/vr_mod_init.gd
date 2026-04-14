@@ -100,6 +100,38 @@ var _slot_grip_offsets := {
 # Per-slot Y rotation offset in degrees (added to the 180° flip)
 var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
 
+# VR hand skeletal models (godot-xr-tools lowpoly hands loaded at runtime via GLTFDocument)
+# Each controller gets a Node3D wrapper (required — MeshInstance3D cannot be a direct child
+# of XRController3D in Forward Mobile) containing the .gltf scene with its Skeleton3D.
+# Finger curl is driven procedurally from grip/trigger analog each frame.
+var _hand_wrapper_left: Node3D = null
+var _hand_wrapper_right: Node3D = null
+var _hand_skel_left: Skeleton3D = null
+var _hand_skel_right: Skeleton3D = null
+var _hand_fingers_left: Dictionary = {}   # {"thumb":[bone_idx,..], "index":[...], ...}
+var _hand_fingers_right: Dictionary = {}
+var _hand_bone_rest_left: Dictionary = {}   # {bone_idx: Quaternion (rest rotation)}
+var _hand_bone_rest_right: Dictionary = {}
+var _hand_tex: ImageTexture = null         # shared skin texture (loaded once, reused for both hands)
+# Smoothed per-finger curl values in [0, 1]
+var _hand_curl_left := {"thumb": 0.0, "index": 0.0, "middle": 0.0, "ring": 0.0, "little": 0.0}
+var _hand_curl_right := {"thumb": 0.0, "index": 0.0, "middle": 0.0, "ring": 0.0, "little": 0.0}
+# Curl animation params. Stored as vars (not const) — Godot 4.6 rejects const Vector3(...)
+# literals with a parse error.
+# Thumb bones are oriented with their flexion axis along local X.
+# Finger bones (index/middle/ring/little) are oriented with flexion along local Z
+# (local X is the lateral / spread axis for finger bones).
+# All angles are negated so the rotation curls toward the palm.
+var HAND_CURL_AXIS_THUMB := Vector3(1, 0, 0)   # thumb flexion: local X, negative angle
+var HAND_CURL_AXIS_FINGER := Vector3(0, 0, 1)  # finger flexion: local Z, negative angle
+# Per-joint curl weight (proximal, intermediate, distal). Fingers use all 3; thumb uses [0, 2].
+var HAND_FINGER_JOINT_WEIGHT := [0.9, 1.0, 1.0]
+var HAND_FINGER_MAX_CURL := 1.45  # ~83 degrees per joint at full curl
+var HAND_THUMB_MAX_CURL := 0.9
+var HAND_CURL_SMOOTH_SPEED := 20.0
+var HAND_GLTF_OFFSET_LEFT := Vector3(-0.03, -0.05, 0.15)
+var HAND_GLTF_OFFSET_RIGHT := Vector3(0.01, 0.0, 0.05)
+
 # Reticle parallax fix — patch fragment shader with VR-compatible ray-plane intersection
 var _fixed_reticle_instances := {}  # MeshInstance3D instance_id → true
 
@@ -690,6 +722,7 @@ func _process(delta: float) -> void:
 				if not _decor_mode:
 					_sync_weapon_to_controller()
 				_update_hand_visibility()
+				_update_hand_poses(delta)
 				_update_grabbed()
 
 				_update_smooth_hud(delta)
@@ -2135,48 +2168,229 @@ func _find_meshes_near_to_list(node: Node, pos: Vector3, radius: float, depth: i
 var _post_scroll_timer := -1.0
 
 func _create_hand_model(controller: XRController3D, model_name: String) -> void:
-	var hand = Node3D.new()
+	var is_left := "Left" in model_name
+	var gltf_name := "Hand_Nails_low_L.gltf" if is_left else "Hand_Nails_low_R.gltf"
+	var gltf_path := OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/" + gltf_name
+
+	if not FileAccess.file_exists(gltf_path):
+		_log("hand: .gltf not found at " + gltf_path + " — falling back to box hand")
+		_create_fallback_box_hand(controller, model_name)
+		return
+
+	# Runtime GLTF import — works without the editor-side .import step
+	var gltf_doc := GLTFDocument.new()
+	var gltf_state := GLTFState.new()
+	var err := gltf_doc.append_from_file(gltf_path, gltf_state)
+	if err != OK:
+		_log("hand: GLTFDocument.append_from_file failed err=" + str(err) + " path=" + gltf_path)
+		_create_fallback_box_hand(controller, model_name)
+		return
+	var scene: Node = gltf_doc.generate_scene(gltf_state)
+	if not scene:
+		_log("hand: generate_scene returned null for " + gltf_path)
+		_create_fallback_box_hand(controller, model_name)
+		return
+
+	# CRITICAL (Forward Mobile): never add MeshInstance3D directly to XRController3D.
+	# The wrapper Node3D is the direct child; the gltf scene (which contains meshes) goes
+	# under the wrapper.
+	var wrapper := Node3D.new()
+	wrapper.name = model_name
+	wrapper.position = HAND_GLTF_OFFSET_LEFT if is_left else HAND_GLTF_OFFSET_RIGHT
+	wrapper.add_child(scene)
+	controller.add_child(wrapper)
+	_apply_hand_texture(scene)
+
+	# Cache skeleton and finger bone indices for runtime curl animation
+	var skel: Skeleton3D = _find_node_by_class(scene, "Skeleton3D")
+	if not skel:
+		_log("hand: Skeleton3D not found inside " + gltf_name)
+		return
+
+	var suffix := "_L" if is_left else "_R"
+	# Joint order is always proximal → intermediate → distal (base to tip).
+	# Thumb has no Intermediate joint in anatomical rigs — only Proximal + Distal.
+	var finger_map := {
+		"thumb":  ["Thumb_Proximal",  "Thumb_Distal"],
+		"index":  ["Index_Proximal",  "Index_Intermediate",  "Index_Distal"],
+		"middle": ["Middle_Proximal", "Middle_Intermediate", "Middle_Distal"],
+		"ring":   ["Ring_Proximal",   "Ring_Intermediate",   "Ring_Distal"],
+		"little": ["Little_Proximal", "Little_Intermediate", "Little_Distal"],
+	}
+	var fingers := {}
+	var rest := {}
+	for finger_name in finger_map.keys():
+		var indices: Array[int] = []
+		for bone_base in finger_map[finger_name]:
+			var bi := skel.find_bone(bone_base + suffix)
+			if bi >= 0:
+				indices.append(bi)
+				rest[bi] = skel.get_bone_rest(bi).basis.get_rotation_quaternion()
+			else:
+				_log("hand: bone not found: " + bone_base + suffix)
+		fingers[finger_name] = indices
+
+	if is_left:
+		_hand_wrapper_left = wrapper
+		_hand_skel_left = skel
+		_hand_fingers_left = fingers
+		_hand_bone_rest_left = rest
+	else:
+		_hand_wrapper_right = wrapper
+		_hand_skel_right = skel
+		_hand_fingers_right = fingers
+		_hand_bone_rest_right = rest
+
+	_log("hand: loaded " + gltf_name + " bones=" + str(skel.get_bone_count()) + " fingers=" + str(fingers.keys()))
+
+
+func _create_fallback_box_hand(controller: XRController3D, model_name: String) -> void:
+	# Same simple 3-box hand we used before the skeletal upgrade. Only used if the
+	# .gltf asset is missing or fails to load at runtime.
+	var hand := Node3D.new()
 	hand.name = model_name
 
-	# Palm - flat box
-	var palm_mesh = MeshInstance3D.new()
+	var palm_mesh := MeshInstance3D.new()
 	palm_mesh.name = "Palm"
-	var palm = BoxMesh.new()
+	var palm := BoxMesh.new()
 	palm.size = Vector3(0.08, 0.03, 0.10)
 	palm_mesh.mesh = palm
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.7, 0.55, 0.4)  # Skin tone
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.7, 0.55, 0.4)
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	palm_mesh.material_override = mat
 	palm_mesh.position = Vector3(0, 0, -0.05)
 	hand.add_child(palm_mesh)
 
-	# Fingers - smaller box extending forward
-	var fingers_mesh = MeshInstance3D.new()
+	var fingers_mesh := MeshInstance3D.new()
 	fingers_mesh.name = "Fingers"
-	var fingers = BoxMesh.new()
+	var fingers := BoxMesh.new()
 	fingers.size = Vector3(0.07, 0.02, 0.07)
 	fingers_mesh.mesh = fingers
 	fingers_mesh.material_override = mat
 	fingers_mesh.position = Vector3(0, 0, -0.13)
 	hand.add_child(fingers_mesh)
 
-	# Thumb - small box to the side
-	var thumb_mesh = MeshInstance3D.new()
+	var thumb_mesh := MeshInstance3D.new()
 	thumb_mesh.name = "Thumb"
-	var thumb = BoxMesh.new()
+	var thumb := BoxMesh.new()
 	thumb.size = Vector3(0.025, 0.025, 0.05)
 	thumb_mesh.mesh = thumb
 	thumb_mesh.material_override = mat
-	var side = 1.0 if "Left" in model_name else -1.0
+	var side := 1.0 if "Left" in model_name else -1.0
 	thumb_mesh.position = Vector3(side * 0.045, 0, -0.06)
 	hand.add_child(thumb_mesh)
 
-	# Roll 90° and move back toward controller position
 	hand.rotation.z = deg_to_rad(90)
 	hand.position = Vector3(0, 0, 0.20)
 	controller.add_child(hand)
-	print("[VR Mod] Created hand model: ", model_name)
+	print("[VR Mod] Created fallback box hand model: ", model_name)
+
+
+func _apply_hand_texture(root: Node) -> void:
+	# Load the shared skin texture on first call; reuse for both hands after that.
+	if not _hand_tex:
+		var tex_path := OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/hand_col.png"
+		if FileAccess.file_exists(tex_path):
+			var img := Image.load_from_file(tex_path)
+			if img:
+				_hand_tex = ImageTexture.create_from_image(img)
+				_log("hand: loaded skin texture " + tex_path)
+			else:
+				_log("hand: Image.load_from_file failed for " + tex_path)
+		else:
+			_log("hand: skin texture not found at " + tex_path)
+	# Build a StandardMaterial3D with the skin texture (or plain skin colour as fallback).
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+	mat.roughness = 0.85
+	mat.metallic = 0.0
+	if _hand_tex:
+		mat.albedo_texture = _hand_tex
+	else:
+		mat.albedo_color = Color(0.76, 0.60, 0.46)  # neutral skin fallback
+	# Apply material_override on every MeshInstance3D inside the scene.
+	_hand_apply_mat_recursive(root, mat)
+
+
+func _hand_apply_mat_recursive(node: Node, mat: StandardMaterial3D) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		mi.material_override = mat
+	for child in node.get_children():
+		_hand_apply_mat_recursive(child, mat)
+
+
+func _update_hand_poses(delta: float) -> void:
+	# Procedural finger curl — blends each finger toward its target curl based on the
+	# controller's grip/trigger analog values and thumb button state. This reproduces the
+	# godot-xr-tools pose set (Open / Closed / Point / Thumbs Up) without needing its
+	# AnimationTree machinery. Curl is applied around each bone's local X axis (finger
+	# hinge axis) on top of the resting pose captured at load time.
+	_update_one_hand("left", delta)
+	_update_one_hand("right", delta)
+
+
+func _update_one_hand(hand: String, delta: float) -> void:
+	var skel: Skeleton3D = _hand_skel_left if hand == "left" else _hand_skel_right
+	if not skel or not is_instance_valid(skel):
+		return
+	var ctrl := _get_controller(hand)
+	if not ctrl or not ctrl.get_is_active():
+		return
+
+	# Read analog inputs (0.0–1.0). Quest/OpenXR action map uses these names.
+	var grip_val: float = clampf(ctrl.get_float("grip"), 0.0, 1.0)
+	var trig_val: float = clampf(ctrl.get_float("trigger"), 0.0, 1.0)
+
+	# Thumb: extended (uncurled) only when no thumb-resting button is held. When either
+	# face button is pressed, the thumb rests on the button → curled. Defaults to the
+	# "thumbs up" pose (thumb uncurled) when nothing is pressed — classic xr-tools behavior.
+	var thumb_down := ctrl.is_button_pressed("ax_button") or ctrl.is_button_pressed("by_button")
+	# Touch sensors provide a finer signal on supported runtimes; fall back silently if absent.
+	if not thumb_down:
+		if ctrl.is_button_pressed("ax_touch") or ctrl.is_button_pressed("by_touch"):
+			thumb_down = true
+	var thumb_target: float = 1.0 if thumb_down else 0.0
+
+	# Index tracks trigger; middle/ring/little track grip.
+	var targets := {
+		"thumb": thumb_target,
+		"index": trig_val,
+		"middle": grip_val,
+		"ring": grip_val,
+		"little": grip_val,
+	}
+
+	var curl_state: Dictionary = _hand_curl_left if hand == "left" else _hand_curl_right
+	var fingers: Dictionary = _hand_fingers_left if hand == "left" else _hand_fingers_right
+	var rest: Dictionary = _hand_bone_rest_left if hand == "left" else _hand_bone_rest_right
+	var alpha := clampf(delta * HAND_CURL_SMOOTH_SPEED, 0.0, 1.0)
+	# Right hand finger bones are mirrored so their local Z points opposite to the left hand.
+	var finger_axis: Vector3 = HAND_CURL_AXIS_FINGER if hand == "left" else -HAND_CURL_AXIS_FINGER
+
+	for finger_name in fingers.keys():
+		# Smooth the curl value toward its target so fingers animate continuously instead
+		# of snapping on button events.
+		var cur: float = curl_state[finger_name]
+		cur = lerpf(cur, targets[finger_name], alpha)
+		curl_state[finger_name] = cur
+
+		var bones: Array = fingers[finger_name]
+		if bones.is_empty():
+			continue
+		var is_thumb: bool = (finger_name == "thumb")
+		var max_curl: float = HAND_THUMB_MAX_CURL if is_thumb else HAND_FINGER_MAX_CURL
+		var curl_axis: Vector3 = HAND_CURL_AXIS_THUMB if is_thumb else finger_axis
+
+		for i in bones.size():
+			var bi: int = bones[i]
+			var weight: float = HAND_FINGER_JOINT_WEIGHT[min(i, HAND_FINGER_JOINT_WEIGHT.size() - 1)]
+			# Negative angle so the rotation curls toward the palm.
+			var angle: float = -cur * max_curl * weight
+			var rest_q: Quaternion = rest[bi]
+			var curl_q := Quaternion(curl_axis, angle)
+			skel.set_bone_pose_rotation(bi, rest_q * curl_q)
 
 
 func _create_watch_mesh() -> void:
@@ -2613,9 +2827,13 @@ func _hide_arms_in_subtree(node: Node) -> void:
 			_invis_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			_invis_mat.albedo_color = Color(0, 0, 0, 0)
 		var mesh := node as MeshInstance3D
-		# Hide only surfaces 0 and 1 (left/right arm). Surface 2+ are hands — leave visible.
-		for i in min(2, mesh.mesh.get_surface_count()):
-			mesh.set_surface_override_material(i, _invis_mat)
+		# Hide ALL surfaces — arms (0-1) AND hands (2+). The game's hand surfaces can't be
+		# individually detached so we hide the whole Arms mesh; our skeletal VR hands on the
+		# controllers are visible in all states (including when the support hand releases
+		# the weapon), which is why both need to go together.
+		if mesh.mesh:
+			for i in mesh.mesh.get_surface_count():
+				mesh.set_surface_override_material(i, _invis_mat)
 		return  # Arms found, no need to go deeper
 	for child in node.get_children():
 		_hide_arms_in_subtree(child)
