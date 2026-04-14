@@ -2912,12 +2912,22 @@ func _sync_weapon_to_controller() -> void:
 	var use_two_hand = false
 	var aim_basis: Basis
 
+	# Single-hand basis and grip offset hoisted here so the two-hand forward vector
+	# originates from the calibrated grip point rather than the raw controller origin.
+	# Grenades (slot 4): ignore grip rotation — throw direction must follow controller forward.
+	var sh_rot_offset: float = 0.0 if _weapon_slot == 4 else _slot_grip_rotations.get(_weapon_slot, 0.0)
+	var single_hand_basis: Basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + sh_rot_offset))
+	var local_offset: Vector3 = _slot_grip_offsets.get(_weapon_slot, Vector3(0, 0.15, -0.20))
+
 	if _support_grip_held and off_controller and off_controller.get_is_active():
 		var hand_dist = controller.global_position.distance_to(off_controller.global_position)
 		if hand_dist > 0.1:
 			use_two_hand = true
-			# Forward = from dominant hand toward off-hand
-			var forward = (off_controller.global_position - controller.global_position).normalized()
+			# Forward = from calibrated grip point toward off-hand controller.
+			# Using raw controller.global_position ignores the slot grip offset, shifting
+			# the aim origin and misaligning the off-hand model with the foregrip.
+			var grip_origin = controller.global_position + single_hand_basis * local_offset
+			var forward = (off_controller.global_position - grip_origin).normalized()
 			# Use world up; fall back to controller Y when aiming nearly vertical.
 			# Godot is right-handed: right = forward x up (NOT up x forward, which gives LEFT
 			# and produces an improper/mirrored basis). Previous bug flipped aim_basis.x and
@@ -2931,11 +2941,6 @@ func _sync_weapon_to_controller() -> void:
 			var corrected_up = right_vec.cross(forward).normalized()
 			aim_basis = Basis(right_vec, corrected_up, -forward)
 			aim_basis = aim_basis * Basis(Vector3.UP, deg_to_rad(180))
-
-	# Single-hand basis computed at function scope so the smooth-init path can also use it.
-	# Grenades (slot 4): ignore grip rotation — throw direction must follow controller forward.
-	var sh_rot_offset: float = 0.0 if _weapon_slot == 4 else _slot_grip_rotations.get(_weapon_slot, 0.0)
-	var single_hand_basis: Basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + sh_rot_offset))
 
 	if not use_two_hand:
 		aim_basis = single_hand_basis
@@ -2961,7 +2966,6 @@ func _sync_weapon_to_controller() -> void:
 	# Sample recoil chain and apply delta on top of controller aim
 	var recoil_delta := _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
-	var local_offset: Vector3 = _slot_grip_offsets.get(_weapon_slot, Vector3(0, 0.15, -0.20))
 	weapon_rig.global_position = controller.global_position + aim_basis * (local_offset + recoil_delta.origin)
 
 	# Hide all arm surfaces on every weapon type (guns, knives, grenades)
