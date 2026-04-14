@@ -84,6 +84,20 @@ If a slot has no weapon equipped, releasing the grip immediately holsters with n
 > **Note:** All weapon inputs follow the weapon hand dynamically. If you draw with your
 > left hand, left trigger fires and right trigger reloads.
 
+### Grenades
+
+Grenades (slot 4, chest holster) use a two-step mechanic:
+
+| Input | Action |
+|-------|--------|
+| Weapon hand trigger (pin not pulled) | Pull pin — controller buzzes, grenade is armed |
+| Weapon hand grip release (pin pulled) | Throw — grenade flies in controller aim direction |
+| Weapon hand trigger (pin pulled) | Replace pin — disarms grenade, cancels throw |
+
+The grenade is automatically holstered 0.5 s after throwing. Aim with your controller —
+the throw direction follows wherever the weapon hand is pointing at the moment you release
+the grip. The controller buzzes continuously while the pin is pulled.
+
 ### Scope Zoom
 
 On variable-zoom scopes, push **right stick up** to zoom in and **right stick down** to
