@@ -21,4 +21,4 @@ No attribution is legally required, but credit is given here out of respect for 
 
 **License:** CC0 1.0 Universal (Public Domain)
 
-**Source:** Unknown — if you know the original source, please open an issue or PR.
+**Source:** Unknown
