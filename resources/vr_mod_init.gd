@@ -126,6 +126,10 @@ var _rail_grab_origin := 0.0           # Off-hand projected position at grab sta
 var _rail_scroll_accum := 0.0          # Accumulated movement for physical grab
 var _rail_scroll_cooldown := 0.0       # Cooldown for stick-based scrolling
 
+# Support trigger long-press detection (short = reload, long = ammo check)
+var _support_trigger_pending := false
+var _support_trigger_press_time := 0.0
+
 # Grip adjust mode — tune offsets live with thumbsticks
 var _adjust_mode := false
 var _adjust_saved_offset := Vector3.ZERO  # Backup to discard changes
@@ -563,6 +567,18 @@ func _process(delta: float) -> void:
 					if elapsed >= 0.3:
 						_rail_x_pending = false
 						_enter_rail_mode()
+
+				# Support trigger: long-press = ammo check (KEY_V)
+				if _support_trigger_pending:
+					var elapsed = Time.get_ticks_msec() / 1000.0 - _support_trigger_press_time
+					if elapsed >= 0.5:
+						_support_trigger_pending = false
+						_inject_key(KEY_V, true)
+						_inject_key(KEY_V, false)
+						var support_ctrl = _get_controller(_get_support_hand())
+						if support_ctrl:
+							support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.2, 0.1, 0.0)
+						print("[VR Mod] AMMO CHECK (support trigger long-press)")
 
 				# Post-scroll delayed debug dump
 				if _post_scroll_timer > 0:
@@ -1518,8 +1534,9 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_inject_key(KEY_T, false)
 						print("[VR Mod] LASER toggled (support trigger + grip)")
 					else:
-						_inject_action("reload", true)
-						print("[VR Mod] RELOAD pressed (support trigger)")
+						# Start long-press timer — short = reload, long = ammo check (KEY_V)
+						_support_trigger_pending = true
+						_support_trigger_press_time = Time.get_ticks_msec() / 1000.0
 		"grip_click":
 			# Grip tracking already done above (before decor mode block)
 			# Both grips while unarmed and not holding anything = enter decor mode
@@ -1657,6 +1674,12 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				else:
 					if _rail_active:
 						_end_rail_slide()
+					elif _support_trigger_pending:
+						# Short press: do reload tap now
+						_support_trigger_pending = false
+						_inject_action("reload", true)
+						_inject_action("reload", false)
+						print("[VR Mod] RELOAD (support trigger short-press)")
 					else:
 						_inject_action("reload", false)
 		"grip_click":
