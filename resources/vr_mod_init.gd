@@ -133,6 +133,8 @@ var HAND_THUMB_MAX_CURL := 0.9
 var HAND_CURL_SMOOTH_SPEED := 20.0
 var HAND_GLTF_OFFSET_LEFT := Vector3(-0.03, -0.05, 0.15)
 var HAND_GLTF_OFFSET_RIGHT := Vector3(0.01, 0.0, 0.05)
+var HAND_GLTF_ROTATION_LEFT := Vector3(0.0, 0.0, 0.0)   # extra rotation offset in degrees for left hand wrapper
+var HAND_GLTF_ROTATION_RIGHT := Vector3(0.0, 0.0, 0.0)  # extra rotation offset in degrees for right hand wrapper
 
 # Reticle parallax fix — patch fragment shader with VR-compatible ray-plane intersection
 var _fixed_reticle_instances := {}  # MeshInstance3D instance_id → true
@@ -2204,6 +2206,7 @@ func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 	var wrapper := Node3D.new()
 	wrapper.name = model_name
 	wrapper.position = HAND_GLTF_OFFSET_LEFT if is_left else HAND_GLTF_OFFSET_RIGHT
+	wrapper.rotation_degrees = HAND_GLTF_ROTATION_LEFT if is_left else HAND_GLTF_ROTATION_RIGHT
 	wrapper.add_child(scene)
 	controller.add_child(wrapper)
 	_apply_hand_texture(scene)
@@ -3712,6 +3715,16 @@ func _load_config() -> void:
 				_watch_offset = Vector3(wo.get("x", 0.0), wo.get("y", 0.02), wo.get("z", -0.05))
 				var wr = w.get("rot", {})
 				_watch_rot = Vector3(wr.get("x", 0.0), wr.get("y", 0.0), wr.get("z", 0.0))
+			if data.has("hand_models"):
+				var hm = data["hand_models"]
+				var hl = hm.get("left", {})
+				HAND_GLTF_OFFSET_LEFT = Vector3(hl.get("x", -0.03), hl.get("y", -0.05), hl.get("z", 0.15))
+				var hlr = hl.get("rot", {})
+				HAND_GLTF_ROTATION_LEFT = Vector3(hlr.get("x", 0.0), hlr.get("y", 0.0), hlr.get("z", 0.0))
+				var hr = hm.get("right", {})
+				HAND_GLTF_OFFSET_RIGHT = Vector3(hr.get("x", 0.01), hr.get("y", 0.0), hr.get("z", 0.05))
+				var hrr = hr.get("rot", {})
+				HAND_GLTF_ROTATION_RIGHT = Vector3(hrr.get("x", 0.0), hrr.get("y", 0.0), hrr.get("z", 0.0))
 			if data.has("menu"):
 				var m = data["menu"]
 				_menu_width = m.get("width", 3.0)
@@ -4066,6 +4079,27 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_watch, "Rot X", _watch_rot.x, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_x")
 	_add_stepper_row(grid_watch, "Rot Y", _watch_rot.y, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_y")
 	_add_stepper_row(grid_watch, "Rot Z", _watch_rot.z, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_z")
+
+	_mk_sep(vbox)
+
+	# ── Hand Models ──
+	_mk_header(vbox, "Hand Models")
+	_mk_header(vbox, "Left Hand")
+	var grid_hand_l = _mk_grid(vbox)
+	_add_stepper_row(grid_hand_l, "X (L/R)", HAND_GLTF_OFFSET_LEFT.x, -0.2, 0.2, 0.005, "_on_cfg_hand_l_x")
+	_add_stepper_row(grid_hand_l, "Y (U/D)", HAND_GLTF_OFFSET_LEFT.y, -0.2, 0.2, 0.005, "_on_cfg_hand_l_y")
+	_add_stepper_row(grid_hand_l, "Z (F/B)", HAND_GLTF_OFFSET_LEFT.z, -0.2, 0.2, 0.005, "_on_cfg_hand_l_z")
+	_add_stepper_row(grid_hand_l, "Rot X", HAND_GLTF_ROTATION_LEFT.x, -180.0, 180.0, 5.0, "_on_cfg_hand_l_rx")
+	_add_stepper_row(grid_hand_l, "Rot Y", HAND_GLTF_ROTATION_LEFT.y, -180.0, 180.0, 5.0, "_on_cfg_hand_l_ry")
+	_add_stepper_row(grid_hand_l, "Rot Z", HAND_GLTF_ROTATION_LEFT.z, -180.0, 180.0, 5.0, "_on_cfg_hand_l_rz")
+	_mk_header(vbox, "Right Hand")
+	var grid_hand_r = _mk_grid(vbox)
+	_add_stepper_row(grid_hand_r, "X (L/R)", HAND_GLTF_OFFSET_RIGHT.x, -0.2, 0.2, 0.005, "_on_cfg_hand_r_x")
+	_add_stepper_row(grid_hand_r, "Y (U/D)", HAND_GLTF_OFFSET_RIGHT.y, -0.2, 0.2, 0.005, "_on_cfg_hand_r_y")
+	_add_stepper_row(grid_hand_r, "Z (F/B)", HAND_GLTF_OFFSET_RIGHT.z, -0.2, 0.2, 0.005, "_on_cfg_hand_r_z")
+	_add_stepper_row(grid_hand_r, "Rot X", HAND_GLTF_ROTATION_RIGHT.x, -180.0, 180.0, 5.0, "_on_cfg_hand_r_rx")
+	_add_stepper_row(grid_hand_r, "Rot Y", HAND_GLTF_ROTATION_RIGHT.y, -180.0, 180.0, 5.0, "_on_cfg_hand_r_ry")
+	_add_stepper_row(grid_hand_r, "Rot Z", HAND_GLTF_ROTATION_RIGHT.z, -180.0, 180.0, 5.0, "_on_cfg_hand_r_rz")
 
 	# ── Save & Close (pinned outside scroll — always visible) ──
 	var btn_sep = HSeparator.new()
@@ -4486,6 +4520,66 @@ func _on_cfg_watch_rot_z(val: float) -> void:
 	if _watch_mesh:
 		_watch_mesh.basis = _watch_rot_basis()
 
+func _on_cfg_hand_l_x(val: float) -> void:
+	HAND_GLTF_OFFSET_LEFT.x = val
+	if _hand_wrapper_left:
+		_hand_wrapper_left.position = HAND_GLTF_OFFSET_LEFT
+
+func _on_cfg_hand_l_y(val: float) -> void:
+	HAND_GLTF_OFFSET_LEFT.y = val
+	if _hand_wrapper_left:
+		_hand_wrapper_left.position = HAND_GLTF_OFFSET_LEFT
+
+func _on_cfg_hand_l_z(val: float) -> void:
+	HAND_GLTF_OFFSET_LEFT.z = val
+	if _hand_wrapper_left:
+		_hand_wrapper_left.position = HAND_GLTF_OFFSET_LEFT
+
+func _on_cfg_hand_l_rx(val: float) -> void:
+	HAND_GLTF_ROTATION_LEFT.x = val
+	if _hand_wrapper_left:
+		_hand_wrapper_left.rotation_degrees = HAND_GLTF_ROTATION_LEFT
+
+func _on_cfg_hand_l_ry(val: float) -> void:
+	HAND_GLTF_ROTATION_LEFT.y = val
+	if _hand_wrapper_left:
+		_hand_wrapper_left.rotation_degrees = HAND_GLTF_ROTATION_LEFT
+
+func _on_cfg_hand_l_rz(val: float) -> void:
+	HAND_GLTF_ROTATION_LEFT.z = val
+	if _hand_wrapper_left:
+		_hand_wrapper_left.rotation_degrees = HAND_GLTF_ROTATION_LEFT
+
+func _on_cfg_hand_r_x(val: float) -> void:
+	HAND_GLTF_OFFSET_RIGHT.x = val
+	if _hand_wrapper_right:
+		_hand_wrapper_right.position = HAND_GLTF_OFFSET_RIGHT
+
+func _on_cfg_hand_r_y(val: float) -> void:
+	HAND_GLTF_OFFSET_RIGHT.y = val
+	if _hand_wrapper_right:
+		_hand_wrapper_right.position = HAND_GLTF_OFFSET_RIGHT
+
+func _on_cfg_hand_r_z(val: float) -> void:
+	HAND_GLTF_OFFSET_RIGHT.z = val
+	if _hand_wrapper_right:
+		_hand_wrapper_right.position = HAND_GLTF_OFFSET_RIGHT
+
+func _on_cfg_hand_r_rx(val: float) -> void:
+	HAND_GLTF_ROTATION_RIGHT.x = val
+	if _hand_wrapper_right:
+		_hand_wrapper_right.rotation_degrees = HAND_GLTF_ROTATION_RIGHT
+
+func _on_cfg_hand_r_ry(val: float) -> void:
+	HAND_GLTF_ROTATION_RIGHT.y = val
+	if _hand_wrapper_right:
+		_hand_wrapper_right.rotation_degrees = HAND_GLTF_ROTATION_RIGHT
+
+func _on_cfg_hand_r_rz(val: float) -> void:
+	HAND_GLTF_ROTATION_RIGHT.z = val
+	if _hand_wrapper_right:
+		_hand_wrapper_right.rotation_degrees = HAND_GLTF_ROTATION_RIGHT
+
 func _on_cfg_save_close() -> void:
 	_save_full_config()
 	_close_config_screen()
@@ -4703,6 +4797,30 @@ func _save_full_config() -> void:
 	}
 
 	# Preserve existing weapon_offsets (already in data from the read above)
+
+	# Hand models
+	data["hand_models"] = {
+		"left": {
+			"x": snapped(HAND_GLTF_OFFSET_LEFT.x, 0.001),
+			"y": snapped(HAND_GLTF_OFFSET_LEFT.y, 0.001),
+			"z": snapped(HAND_GLTF_OFFSET_LEFT.z, 0.001),
+			"rot": {
+				"x": snapped(HAND_GLTF_ROTATION_LEFT.x, 0.1),
+				"y": snapped(HAND_GLTF_ROTATION_LEFT.y, 0.1),
+				"z": snapped(HAND_GLTF_ROTATION_LEFT.z, 0.1)
+			}
+		},
+		"right": {
+			"x": snapped(HAND_GLTF_OFFSET_RIGHT.x, 0.001),
+			"y": snapped(HAND_GLTF_OFFSET_RIGHT.y, 0.001),
+			"z": snapped(HAND_GLTF_OFFSET_RIGHT.z, 0.001),
+			"rot": {
+				"x": snapped(HAND_GLTF_ROTATION_RIGHT.x, 0.1),
+				"y": snapped(HAND_GLTF_ROTATION_RIGHT.y, 0.1),
+				"z": snapped(HAND_GLTF_ROTATION_RIGHT.z, 0.1)
+			}
+		}
+	}
 
 	var out = FileAccess.open(config_path, FileAccess.WRITE)
 	if out:
