@@ -202,7 +202,7 @@ Press **Cancel** to discard changes for this session.
 
 | Section | Settings |
 |---------|---------|
-| **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed, comfort vignette on/off, vignette strength |
+| **Comfort** | Turn mode (Snap / Smooth), snap degrees, smooth speed, comfort vignette on/off, vignette strength, render scale |
 | **Menu / Inventory** | Distance, size, height, left/right offset, HUD element spread, laser X/Y calibration |
 | **Wrist Watch** | Glance reveal on/off, glance angle, fade speed, watch size, X/Y/Z position on wrist |
 | **Controls** | Dominant hand |
@@ -311,6 +311,16 @@ the next game launch.
 
 Adjust if the world feels too large or too small. Values above `1.0` make you feel
 taller; below `1.0` makes the world feel bigger.
+
+### Render Scale
+
+```json
+"xr": { "render_scale": 1.0 }
+```
+
+Scales the VR render target resolution. Lower values improve performance at the cost of
+sharpness. `0.75` is a good balance; `0.5` is aggressive but useful on weaker hardware.
+Also tunable live in the **F8 config screen → Comfort** section.
 
 ---
 

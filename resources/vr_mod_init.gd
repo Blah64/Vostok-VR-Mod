@@ -469,6 +469,7 @@ var _config_laser_pos := Vector2.ZERO
 
 # Config
 var world_scale := 1.0
+var _render_scale := 1.0
 var snap_turn_degrees := 45.0
 var smooth_turn_speed := 120.0
 var use_snap_turn := true
@@ -708,6 +709,7 @@ func _install_xr_rig() -> void:
 	xr_origin = XROrigin3D.new()
 	xr_origin.name = "VRModOrigin"
 	xr_origin.world_scale = world_scale
+	xr_interface.render_target_size_multiplier = _render_scale
 
 	xr_camera = XRCamera3D.new()
 	xr_camera.name = "VRModCamera"
@@ -3397,6 +3399,7 @@ func _load_config() -> void:
 		if data is Dictionary:
 			if data.has("xr"):
 				world_scale = data["xr"].get("world_scale", 1.0)
+				_render_scale = data["xr"].get("render_scale", 1.0)
 			if data.has("comfort"):
 				use_snap_turn = data["comfort"].get("turn_type", "snap") == "snap"
 				snap_turn_degrees = data["comfort"].get("snap_turn_degrees", 45.0)
@@ -3732,6 +3735,7 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_comfort, "Smooth Speed", smooth_turn_speed, 30.0, 300.0, 10.0, "_on_cfg_smooth_spd")
 	_add_toggle_row(grid_comfort, "Vignette", ["On", "Off"], 0 if _vignette_enabled else 1, "_on_cfg_vignette")
 	_add_stepper_row(grid_comfort, "Vig. Strength", _vignette_strength, 0.1, 1.0, 0.1, "_on_cfg_vignette_str")
+	_add_stepper_row(grid_comfort, "Render Scale", _render_scale, 0.5, 1.0, 0.05, "_on_cfg_render_scale")
 
 	_mk_sep(vbox)
 
@@ -4023,6 +4027,12 @@ func _on_cfg_vignette(idx: int) -> void:
 
 func _on_cfg_vignette_str(val: float) -> void:
 	_vignette_strength = val
+
+
+func _on_cfg_render_scale(val: float) -> void:
+	_render_scale = val
+	if xr_interface and is_instance_valid(xr_interface):
+		xr_interface.render_target_size_multiplier = _render_scale
 
 
 func _on_cfg_hud_dist(val: float) -> void:
@@ -4341,7 +4351,7 @@ func _save_full_config() -> void:
 			file.close()
 
 	# XR
-	data["xr"] = {"world_scale": world_scale}
+	data["xr"] = {"world_scale": world_scale, "render_scale": _render_scale}
 
 	# Comfort
 	var turn_type = "snap"

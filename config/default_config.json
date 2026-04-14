@@ -138,6 +138,7 @@
 		"two_hand_enabled": true
 	},
 	"xr": {
+		"render_scale": 1.0,
 		"world_scale": 1.0
 	}
 }
