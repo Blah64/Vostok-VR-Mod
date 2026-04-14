@@ -3968,37 +3968,78 @@ func _populate_config_ui() -> void:
 	root.anchor_right = 1.0
 	root.anchor_bottom = 1.0
 
-	# Outer layout: scroll area (expands) + button row (pinned, never scrolls)
+	# Outer layout: title + tabs (expand) + button row (pinned)
 	var outer = VBoxContainer.new()
 	outer.name = "CfgOuter"
 	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	outer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(outer)
 
-	var scroll = ScrollContainer.new()
-	scroll.name = "CfgScroll"
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	outer.add_child(scroll)
-
-	var vbox = VBoxContainer.new()
-	vbox.name = "CfgVBox"
-	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(vbox)
-
-	# Title
+	# Title (pinned above tabs, never scrolls)
 	var title = Label.new()
 	title.text = "VR Mod Settings"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", Color(0.9, 0.85, 0.6))
-	vbox.add_child(title)
+	outer.add_child(title)
 
-	_mk_sep(vbox)
+	_mk_sep(outer)
 
-	# ── Turn Mode ──
-	_mk_header(vbox, "Comfort")
-	var grid_comfort = _mk_grid(vbox)
+	# ── Tab container ──
+	var tabs = TabContainer.new()
+	tabs.name = "CfgTabs"
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_theme_font_size_override("font_size", 22)
+	# Tab selected style
+	var tab_sel = StyleBoxFlat.new()
+	tab_sel.bg_color = Color(0.18, 0.38, 0.65, 1.0)
+	tab_sel.set_corner_radius_all(6)
+	tab_sel.content_margin_left = 18
+	tab_sel.content_margin_right = 18
+	tab_sel.content_margin_top = 12
+	tab_sel.content_margin_bottom = 12
+	tabs.add_theme_stylebox_override("tab_selected", tab_sel)
+	# Tab unselected style
+	var tab_unsel = StyleBoxFlat.new()
+	tab_unsel.bg_color = Color(0.13, 0.13, 0.18, 1.0)
+	tab_unsel.set_corner_radius_all(6)
+	tab_unsel.content_margin_left = 18
+	tab_unsel.content_margin_right = 18
+	tab_unsel.content_margin_top = 12
+	tab_unsel.content_margin_bottom = 12
+	tabs.add_theme_stylebox_override("tab_unselected", tab_unsel)
+	# Tab hovered style
+	var tab_hov = StyleBoxFlat.new()
+	tab_hov.bg_color = Color(0.20, 0.20, 0.28, 1.0)
+	tab_hov.set_corner_radius_all(6)
+	tab_hov.content_margin_left = 18
+	tab_hov.content_margin_right = 18
+	tab_hov.content_margin_top = 12
+	tab_hov.content_margin_bottom = 12
+	tabs.add_theme_stylebox_override("tab_hovered", tab_hov)
+	# Transparent content panel (outer PanelContainer already provides the bg)
+	var tab_panel = StyleBoxFlat.new()
+	tab_panel.bg_color = Color(0.0, 0.0, 0.0, 0.0)
+	tabs.add_theme_stylebox_override("panel", tab_panel)
+	# Tab font colors
+	tabs.add_theme_color_override("font_selected_color", Color(1.0, 1.0, 1.0))
+	tabs.add_theme_color_override("font_unselected_color", Color(0.6, 0.6, 0.7))
+	tabs.add_theme_color_override("font_hovered_color", Color(0.85, 0.85, 0.95))
+	outer.add_child(tabs)
+
+	# ── Tab 0: General ──
+	var scroll_gen = ScrollContainer.new()
+	scroll_gen.name = "General"
+	scroll_gen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_gen.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(scroll_gen)
+	var vbox_gen = VBoxContainer.new()
+	vbox_gen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_gen.add_child(vbox_gen)
+
+	_mk_header(vbox_gen, "Comfort")
+	var grid_comfort = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_comfort, "Turn Mode", ["Snap", "Smooth"], 0 if use_snap_turn else 1, "_on_cfg_turn")
 	_add_stepper_row(grid_comfort, "Snap Degrees", snap_turn_degrees, 15.0, 90.0, 5.0, "_on_cfg_snap_deg")
 	_add_stepper_row(grid_comfort, "Smooth Speed", smooth_turn_speed, 30.0, 300.0, 10.0, "_on_cfg_smooth_spd")
@@ -4008,11 +4049,10 @@ func _populate_config_ui() -> void:
 	_add_toggle_row(grid_comfort, "2H Stabilize", ["On", "Off"], 0 if _two_hand_smooth_enabled else 1, "_on_cfg_2h_smooth")
 	_add_stepper_row(grid_comfort, "2H Smooth", _two_hand_smooth_speed, 2.0, 30.0, 1.0, "_on_cfg_2h_smooth_spd")
 
-	_mk_sep(vbox)
+	_mk_sep(vbox_gen)
 
-	# ── Menu ──
-	_mk_header(vbox, "Menu / Inventory")
-	var grid_menu = _mk_grid(vbox)
+	_mk_header(vbox_gen, "Menu / Inventory")
+	var grid_menu = _mk_grid(vbox_gen)
 	_add_stepper_row(grid_menu, "Distance", _menu_distance, 0.5, 3.0, 0.1, "_on_cfg_menu_dist")
 	_add_stepper_row(grid_menu, "Size", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
 	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
@@ -4021,54 +4061,65 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_menu, "Laser X", _menu_laser_uv_x, -0.2, 0.2, 0.01, "_on_cfg_laser_x")
 	_add_stepper_row(grid_menu, "Laser Y", _menu_laser_uv_y, -0.2, 0.2, 0.01, "_on_cfg_laser_y")
 
-	_mk_sep(vbox)
+	_mk_sep(vbox_gen)
 
-	# ── Controls ──
-	_mk_header(vbox, "Controls")
-	var grid_ctrl = _mk_grid(vbox)
+	_mk_header(vbox_gen, "Controls")
+	var grid_ctrl = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
 
-	_mk_sep(vbox)
+	# ── Tab 1: Zones ──
+	var scroll_zone = ScrollContainer.new()
+	scroll_zone.name = "Zones"
+	scroll_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_zone.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(scroll_zone)
+	var vbox_zone = VBoxContainer.new()
+	vbox_zone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_zone.add_child(vbox_zone)
 
-	# ── Holster Zones ──
-	_mk_header(vbox, "Holster Zones")
-	var grid_holsters = _mk_grid(vbox)
+	_mk_header(vbox_zone, "Holster Zones")
+	var grid_holsters = _mk_grid(vbox_zone)
 	_add_stepper_row(grid_holsters, "Zone Radius", _holster_zone_radius, 0.05, 0.5, 0.01, "_on_cfg_hz_radius")
 	var zone_names := ["1: R.Shoulder", "2: R.Hip", "3: L.Hip", "4: Chest"]
 	for zi in range(4):
 		var slot = zi + 1
 		var o: Vector3 = _holster_offsets[slot]
-		_mk_header(vbox, zone_names[zi])
-		var grid_z = _mk_grid(vbox)
+		_mk_header(vbox_zone, zone_names[zi])
+		var grid_z = _mk_grid(vbox_zone)
 		_add_stepper_row(grid_z, "X (L/R)", o.x, -0.6, 0.6, 0.01, "_on_cfg_hz_x_" + str(slot))
 		_add_stepper_row(grid_z, "Y (U/D)", o.y, -1.0, 0.2, 0.01, "_on_cfg_hz_y_" + str(slot))
 		_add_stepper_row(grid_z, "Z (F/B)", o.z, -0.5, 0.5, 0.01, "_on_cfg_hz_z_" + str(slot))
 
-	_mk_sep(vbox)
+	_mk_sep(vbox_zone)
 
-	# ── Bag Zone (Inventory) ──
-	_mk_header(vbox, "Bag Zone (Inventory)")
-	var grid_bag = _mk_grid(vbox)
+	_mk_header(vbox_zone, "Bag Zone (Inventory)")
+	var grid_bag = _mk_grid(vbox_zone)
 	_add_stepper_row(grid_bag, "Radius", _bag_zone_radius, 0.05, 0.8, 0.01, "_on_cfg_bag_radius")
 	_add_stepper_row(grid_bag, "X (L/R)", _bag_zone_offset.x, -0.5, 0.5, 0.01, "_on_cfg_bag_x")
 	_add_stepper_row(grid_bag, "Y (U/D)", _bag_zone_offset.y, -0.5, 0.5, 0.01, "_on_cfg_bag_y")
 	_add_stepper_row(grid_bag, "Z (F/B)", _bag_zone_offset.z, 0.0, 0.8, 0.01, "_on_cfg_bag_z")
 
-	_mk_sep(vbox)
+	_mk_sep(vbox_zone)
 
-	# ── NVG Zone (Above Head) ──
-	_mk_header(vbox, "NVG Zone (Above Head)")
-	var grid_nvg = _mk_grid(vbox)
+	_mk_header(vbox_zone, "NVG Zone (Above Head)")
+	var grid_nvg = _mk_grid(vbox_zone)
 	_add_stepper_row(grid_nvg, "Radius", _nvg_zone_radius, 0.05, 0.5, 0.01, "_on_cfg_nvg_radius")
 	_add_stepper_row(grid_nvg, "Y (Height)", _nvg_zone_offset.y, 0.0, 0.6, 0.01, "_on_cfg_nvg_y")
 	_add_stepper_row(grid_nvg, "Brightness", _nvg_brightness, 1.0, 5.0, 0.25, "_on_cfg_nvg_brightness")
 	_add_toggle_row(grid_nvg, "Mono Vision", ["Off", "On"], 1 if _nvg_mono else 0, "_on_cfg_nvg_mono")
 
-	_mk_sep(vbox)
+	# ── Tab 2: Calibrate ──
+	var scroll_cal = ScrollContainer.new()
+	scroll_cal.name = "Calibrate"
+	scroll_cal.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_cal.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(scroll_cal)
+	var vbox_cal = VBoxContainer.new()
+	vbox_cal.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_cal.add_child(vbox_cal)
 
-	# ── Wrist Watch ──
-	_mk_header(vbox, "Wrist Watch")
-	var grid_watch = _mk_grid(vbox)
+	_mk_header(vbox_cal, "Wrist Watch")
+	var grid_watch = _mk_grid(vbox_cal)
 	_add_toggle_row(grid_watch, "Glance Reveal", ["Off", "On"], 1 if _watch_glance_enabled else 0, "_on_cfg_watch_glance")
 	_add_stepper_row(grid_watch, "Glance Angle", _watch_glance_angle, 20.0, 70.0, 5.0, "_on_cfg_watch_angle")
 	_add_stepper_row(grid_watch, "Glance Fade", _watch_fade_speed, 2.0, 20.0, 1.0, "_on_cfg_watch_fade")
@@ -4080,20 +4131,19 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_watch, "Rot Y", _watch_rot.y, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_y")
 	_add_stepper_row(grid_watch, "Rot Z", _watch_rot.z, -180.0, 180.0, 5.0, "_on_cfg_watch_rot_z")
 
-	_mk_sep(vbox)
+	_mk_sep(vbox_cal)
 
-	# ── Hand Models ──
-	_mk_header(vbox, "Hand Models")
-	_mk_header(vbox, "Left Hand")
-	var grid_hand_l = _mk_grid(vbox)
+	_mk_header(vbox_cal, "Hand Models")
+	_mk_header(vbox_cal, "Left Hand")
+	var grid_hand_l = _mk_grid(vbox_cal)
 	_add_stepper_row(grid_hand_l, "X (L/R)", HAND_GLTF_OFFSET_LEFT.x, -0.2, 0.2, 0.005, "_on_cfg_hand_l_x")
 	_add_stepper_row(grid_hand_l, "Y (U/D)", HAND_GLTF_OFFSET_LEFT.y, -0.2, 0.2, 0.005, "_on_cfg_hand_l_y")
 	_add_stepper_row(grid_hand_l, "Z (F/B)", HAND_GLTF_OFFSET_LEFT.z, -0.2, 0.2, 0.005, "_on_cfg_hand_l_z")
 	_add_stepper_row(grid_hand_l, "Rot X", HAND_GLTF_ROTATION_LEFT.x, -180.0, 180.0, 5.0, "_on_cfg_hand_l_rx")
 	_add_stepper_row(grid_hand_l, "Rot Y", HAND_GLTF_ROTATION_LEFT.y, -180.0, 180.0, 5.0, "_on_cfg_hand_l_ry")
 	_add_stepper_row(grid_hand_l, "Rot Z", HAND_GLTF_ROTATION_LEFT.z, -180.0, 180.0, 5.0, "_on_cfg_hand_l_rz")
-	_mk_header(vbox, "Right Hand")
-	var grid_hand_r = _mk_grid(vbox)
+	_mk_header(vbox_cal, "Right Hand")
+	var grid_hand_r = _mk_grid(vbox_cal)
 	_add_stepper_row(grid_hand_r, "X (L/R)", HAND_GLTF_OFFSET_RIGHT.x, -0.2, 0.2, 0.005, "_on_cfg_hand_r_x")
 	_add_stepper_row(grid_hand_r, "Y (U/D)", HAND_GLTF_OFFSET_RIGHT.y, -0.2, 0.2, 0.005, "_on_cfg_hand_r_y")
 	_add_stepper_row(grid_hand_r, "Z (F/B)", HAND_GLTF_OFFSET_RIGHT.z, -0.2, 0.2, 0.005, "_on_cfg_hand_r_z")
@@ -4101,7 +4151,7 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_hand_r, "Rot Y", HAND_GLTF_ROTATION_RIGHT.y, -180.0, 180.0, 5.0, "_on_cfg_hand_r_ry")
 	_add_stepper_row(grid_hand_r, "Rot Z", HAND_GLTF_ROTATION_RIGHT.z, -180.0, 180.0, 5.0, "_on_cfg_hand_r_rz")
 
-	# ── Save & Close (pinned outside scroll — always visible) ──
+	# ── Save & Close (pinned below tabs — always visible) ──
 	var btn_sep = HSeparator.new()
 	btn_sep.add_theme_constant_override("separation", 10)
 	outer.add_child(btn_sep)
@@ -4689,9 +4739,12 @@ func _inject_config_click(pressed: bool) -> void:
 func _scroll_config_panel(amount: float) -> void:
 	if not _config_panel_vp:
 		return
-	var scroll = _config_panel_vp.get_node_or_null("CfgRoot/CfgOuter/CfgScroll")
-	if scroll and scroll is ScrollContainer:
-		scroll.scroll_vertical += int(amount)
+	var tabs = _config_panel_vp.get_node_or_null("CfgRoot/CfgOuter/CfgTabs")
+	if not tabs or not (tabs is TabContainer):
+		return
+	var active_tab = (tabs as TabContainer).get_current_tab_control()
+	if active_tab and active_tab is ScrollContainer:
+		(active_tab as ScrollContainer).scroll_vertical += int(amount)
 
 
 # ── Save full config ────────────────────────────────────────────────────────
