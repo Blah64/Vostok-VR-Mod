@@ -2314,10 +2314,9 @@ func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 	var gltf_name := "Hand_Nails_low_L.gltf" if is_left else "Hand_Nails_low_R.gltf"
 	var gltf_path := _assets_base + gltf_name
 
-	if not FileAccess.file_exists(gltf_path):
-		_log("hand: .gltf not found at " + gltf_path + " — falling back to box hand")
-		_create_fallback_box_hand(controller, model_name)
-		return
+	# Note: FileAccess.file_exists() returns false for res:// paths inside a mounted
+	# resource pack (VMZ) — skip the existence check and let append_from_file fail
+	# if the asset is genuinely missing.
 
 	# Runtime GLTF import — works without the editor-side .import step
 	var gltf_doc := GLTFDocument.new()
