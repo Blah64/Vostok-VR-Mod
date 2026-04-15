@@ -41,10 +41,6 @@ Road to Vostok\
       rtv_vr_mod.gdextension
 ```
 
-> **Upgrading from a previous version?** Older releases deployed `vr_mod_init.gd` directly to the
-> game root. Delete `Road to Vostok\vr_mod_init.gd` if it exists before launching, otherwise the
-> old script will override the one in the VMZ.
-
 ### Step 3 — Launch
 
 Put on your headset, start SteamVR (or Meta PC app), then launch using **`launch_vr.bat`** in the game root — do **not** use Steam's Play button directly.
