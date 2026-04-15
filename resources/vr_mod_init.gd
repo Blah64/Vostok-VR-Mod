@@ -665,12 +665,11 @@ func _process(delta: float) -> void:
 							_attach_rig_to_camera()
 							_on_level_transition()
 							_camera_lost_frames = 0
-							get_viewport().use_xr = true
-							print("[VR Mod] Camera found again, VR re-enabled")
-					# After ~2 seconds without a camera (e.g., at main menu), disable VR
+							print("[VR Mod] Camera found again")
+					# After ~2 seconds without a camera (main menu), gracefully quit
 					elif _camera_lost_frames > 120 and get_viewport().use_xr:
-						print("[VR Mod] Camera lost for 2+ seconds, disabling VR (main menu?)")
-						get_viewport().use_xr = false
+						print("[VR Mod] Camera lost for 2+ seconds (main menu detected) — quitting game")
+						get_tree().quit()
 
 				if not _hud_installed and _frames_waited >= HUD_SETUP_DELAY:
 					_setup_vr_hud()
