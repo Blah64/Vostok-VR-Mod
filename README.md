@@ -25,6 +25,9 @@ Extract `vr-mod-full.zip` directly into the game root. You should end up with:
 
 ```
 Road to Vostok\
+  README.md
+  LICENSE
+  THIRD_PARTY.md
   launch_vr.bat
   rtv_vr_bootstrap.dll
   librtv_vr_mod.windows.x86_64.dll
@@ -37,6 +40,10 @@ Road to Vostok\
       override.cfg
       vr_mod_init.gd
       rtv_vr_mod.gdextension
+      hands\
+        Hand_Nails_low_L.gltf
+        Hand_Nails_low_R.gltf
+        hand_col.png
 ```
 
 ### Step 3 — Launch
