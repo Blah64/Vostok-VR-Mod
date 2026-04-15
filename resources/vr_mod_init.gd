@@ -502,6 +502,7 @@ var _hover_label: Label3D = null  # Floating item name shown when aiming at inte
 var _menu_open := false           # True while inventory/menu is visible
 var _menu_ctrl_held := false      # True while support grip is held in menus (Ctrl modifier for fast transfer)
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
+var _laser_diag_logged := false  # One-shot diagnostic log on first laser update per menu open
 
 # HUD sizing (vars so config screen can change them at runtime)
 var _hud_width := 2.3
@@ -1025,14 +1026,16 @@ func _setup_vr_hud() -> void:
 	print("[VR Mod] Setting up VR HUD (World2D sharing)...")
 
 	var main_vp = get_viewport()
-	# Use OS window size (not XR render target size) so that the viewport's pixel
-	# coordinates match Input.warp_mouse() which operates in window space.
-	# get_visible_rect().size in XR mode returns the eye-buffer render resolution
-	# (e.g. ~2064x2208 on Quest 3) which is unrelated to the OS window.
-	var win_size_i = DisplayServer.window_get_size()
-	var vp_size = Vector2(win_size_i.x, win_size_i.y)
-
-	_log("HUD win_size=" + str(vp_size) + " xr_rect=" + str(main_vp.get_visible_rect().size))
+	# Use the main viewport's visible rect as the canvas design size. This is the
+	# coordinate space the game's 2D Controls are laid out in, and it's what we
+	# need the SubViewport to match so UVs map 1:1 to Control positions.
+	# Mouse-event positions are then mapped to the actual window pixel space via
+	# the viewport's canvas_transform in _update_laser_pointer.
+	var vp_size = main_vp.get_visible_rect().size
+	var win_size_for_log = DisplayServer.window_get_size()
+	var win := get_window()
+	var cs_size = win.content_scale_size if win else Vector2i.ZERO
+	_log("HUD sizes: visible_rect=" + str(vp_size) + " win=" + str(win_size_for_log) + " content_scale=" + str(cs_size) + " canvas_xform=" + str(main_vp.canvas_transform) + " global_canvas_xform=" + str(main_vp.global_canvas_transform))
 	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
 	if ui_node:
 		print("[VR Mod] UI node: ", ui_node.get_path(), " vis=", ui_node.visible)
@@ -1277,6 +1280,7 @@ func _on_interface_opened() -> void:
 	print("[VR Mod] Interface OPENED - switching to world-fixed mode")
 	_ammo_check_timer = 0.0
 	_cleanup_ammo_panel()
+	_laser_diag_logged = false
 	if not hud_mesh:
 		return
 
@@ -1499,24 +1503,32 @@ func _update_laser_pointer() -> void:
 
 		# Range check on raw UV (did the ray actually hit the quad?)
 		if uv_x >= 0 and uv_x <= 1 and uv_y >= 0 and uv_y <= 1:
-			# Apply controller-alignment offset in screen space, after hit detection.
-			# Keeping the offset out of the range check ensures edge buttons remain
-			# reachable regardless of calibration value (fixes 16:9 side-click issue).
-			var screen_pos = Vector2(
+			# The SubViewport renders canvas coords 0..hud_viewport.size with
+			# canvas_transform=Identity, so UV directly gives us a viewport-local
+			# position in the main viewport too (both share world_2d).
+			# Apply the controller-alignment offset in canvas space, after hit detection.
+			var vp_pos = Vector2(
 				(uv_x + _menu_laser_uv_x) * hud_viewport.size.x,
 				(uv_y + _menu_laser_uv_y) * hud_viewport.size.y
 			)
-			_laser_screen_pos = screen_pos
+			_laser_screen_pos = vp_pos
 
-			# Actually move the OS mouse cursor to the laser position.
-			# This triggers hover effects in the game's UI system, which checks
-			# Input.get_mouse_position() / Viewport.get_mouse_position().
-			Input.warp_mouse(screen_pos)
+			# Move the cursor via the Viewport (not Input) so Godot applies the
+			# viewport->window stretch transform internally. The game uses stretch
+			# mode "viewport", so the Window is larger than visible_rect and a
+			# plain Input.warp_mouse(vp_pos) would undershoot by the stretch factor.
+			var main_vp = get_viewport()
+			main_vp.warp_mouse(vp_pos)
 
-			# Also inject mouse motion event for drag support
+			if not _laser_diag_logged:
+				_laser_diag_logged = true
+				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " vp_pos=" + str(vp_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size) + " win=" + str(DisplayServer.window_get_size()) + " mouse_after_warp=" + str(main_vp.get_mouse_position()))
+
+			# Also inject mouse motion event for drag support.
+			# event.position is in the target viewport's pixel space.
 			var motion = InputEventMouseMotion.new()
-			motion.position = screen_pos
-			motion.global_position = screen_pos
+			motion.position = vp_pos
+			motion.global_position = vp_pos
 			motion.relative = Vector2.ZERO
 			var mask := 0
 			if _mouse_states.get(MOUSE_BUTTON_LEFT, false):
@@ -2265,11 +2277,13 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 	event.button_index = button
 	event.pressed = pressed
 	event.ctrl_pressed = _menu_ctrl_held
-	# Use laser pointer position when in inventory, center of screen otherwise
+	# Use laser pointer position when in inventory, center of screen otherwise.
+	# Center-of-screen for non-menu events (weapon firing etc.) uses the main
+	# viewport's own center in its pixel space.
 	if _interface_open and _laser_screen_pos.x >= 0:
 		event.position = _laser_screen_pos
 	else:
-		event.position = Vector2(DisplayServer.window_get_size()) / 2
+		event.position = get_viewport().get_visible_rect().size / 2
 	# Set button_mask - required for proper mouse event processing
 	var mask := 0
 	for btn in _mouse_states:
@@ -2293,7 +2307,7 @@ func _inject_scroll(direction: int) -> void:
 	if _interface_open and _laser_screen_pos.x >= 0:
 		event.position = _laser_screen_pos
 	else:
-		event.position = Vector2(DisplayServer.window_get_size()) / 2
+		event.position = get_viewport().get_visible_rect().size / 2
 	Input.parse_input_event(event)
 	get_viewport().push_input(event, false)
 	# Scroll events need immediate release
