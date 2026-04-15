@@ -515,8 +515,8 @@ var _hud_smooth_speed := 2.0
 var _hud_yaw := 0.0         # Lagged yaw for smooth follow — tracked separately, never read from mesh
 var _hud_spread := 0.5      # HUD element spread (1.0 = default, <1 = closer together)
 var _hud_spread_active := 1.0  # Spread value actually used by _apply_hud_spread (watch vs menu)
-var _menu_laser_uv_x := 0.03  # Horizontal laser offset for menu/inventory (UV units)
-var _menu_laser_uv_y := 0.06  # Vertical laser offset for menu/inventory (UV units)
+var _menu_laser_uv_x := 0.0  # Horizontal laser offset for menu/inventory (UV units)
+var _menu_laser_uv_y := 0.0  # Vertical laser offset for menu/inventory (UV units)
 
 # Wrist watch HUD
 var _watch_mesh: MeshInstance3D       # Watch face quad, child of hand model Node3D
@@ -1407,15 +1407,15 @@ func _update_laser_pointer() -> void:
 		# QuadMesh goes from -size/2 to +size/2
 		var uv_x = (local_pos.x + quad_size.x / 2.0) / quad_size.x
 		var uv_y = (-local_pos.y + quad_size.y / 2.0) / quad_size.y
-		# Offset to compensate for controller alignment (tunable in config screen)
-		uv_y += _menu_laser_uv_y
-		uv_x += _menu_laser_uv_x
 
+		# Range check on raw UV (did the ray actually hit the quad?)
 		if uv_x >= 0 and uv_x <= 1 and uv_y >= 0 and uv_y <= 1:
-			# Map UV to screen coordinates
+			# Apply controller-alignment offset in screen space, after hit detection.
+			# Keeping the offset out of the range check ensures edge buttons remain
+			# reachable regardless of calibration value (fixes 16:9 side-click issue).
 			var screen_pos = Vector2(
-				uv_x * hud_viewport.size.x,
-				uv_y * hud_viewport.size.y
+				(uv_x + _menu_laser_uv_x) * hud_viewport.size.x,
+				(uv_y + _menu_laser_uv_y) * hud_viewport.size.y
 			)
 			_laser_screen_pos = screen_pos
 
@@ -4028,8 +4028,8 @@ func _load_config() -> void:
 				_menu_width = m.get("width", 3.0)
 				_menu_distance = m.get("distance", 1.0)
 				_menu_lr_offset = m.get("lr_offset", 0.0)
-				_menu_laser_uv_x = m.get("laser_uv_x", 0.03)
-				_menu_laser_uv_y = m.get("laser_uv_y", 0.06)
+				_menu_laser_uv_x = m.get("laser_uv_x", 0.0)
+				_menu_laser_uv_y = m.get("laser_uv_y", 0.0)
 			print("[VR Mod] Config loaded successfully")
 	file.close()
 
@@ -4367,8 +4367,8 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
 	_add_stepper_row(grid_menu, "Height", _hud_height_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_hgt")
 	_add_stepper_row(grid_menu, "HUD Spread", _hud_spread, 0.1, 2.0, 0.1, "_on_cfg_hud_spread")
-	_add_stepper_row(grid_menu, "Laser X", _menu_laser_uv_x, -0.2, 0.2, 0.01, "_on_cfg_laser_x")
-	_add_stepper_row(grid_menu, "Laser Y", _menu_laser_uv_y, -0.2, 0.2, 0.01, "_on_cfg_laser_y")
+	_add_stepper_row(grid_menu, "Laser X", _menu_laser_uv_x, -5.0, 5.0, 0.01, "_on_cfg_laser_x")
+	_add_stepper_row(grid_menu, "Laser Y", _menu_laser_uv_y, -5.0, 5.0, 0.01, "_on_cfg_laser_y")
 
 	_mk_sep(vbox_gen)
 

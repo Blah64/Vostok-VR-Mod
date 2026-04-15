@@ -105,8 +105,8 @@
 	},
 	"menu": {
 		"distance": 1.0,
-		"laser_uv_x": 0.03,
-		"laser_uv_y": 0.06,
+		"laser_uv_x": 0.0,
+		"laser_uv_y": 0.0,
 		"lr_offset": 0.0,
 		"width": 3.0
 	},
