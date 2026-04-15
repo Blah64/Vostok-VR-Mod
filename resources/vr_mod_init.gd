@@ -57,14 +57,14 @@ const HOLSTER_ZONES := {
 }
 # Per-slot offsets (runtime-tunable, loaded from config)
 var _holster_offsets := {
-	1: Vector3(0.25, -0.15,  0.20),
+	1: Vector3(0.25, -0.15,  0.0),
 	2: Vector3(0.25, -0.55,  0.0),
 	3: Vector3(-0.25, -0.55, 0.0),
 	4: Vector3(0.0,  -0.15,  0.10),
 }
-var _holster_zone_radius := 0.20
-var _sling_offset := Vector3(0.0, -0.35, -0.25)    # primary weapon sling pos relative to head (yaw only)
-var _sling_rot_offset := Vector3(0.0, 0.0, 0.0)   # extra pitch/yaw/roll applied on top of slot rotation (degrees)
+var _holster_zone_radius := 0.27
+var _sling_offset := Vector3(0.2, -0.31, -0.06)    # primary weapon sling pos relative to head (yaw only)
+var _sling_rot_offset := Vector3(0.0, 60.0, 0.0)   # extra pitch/yaw/roll applied on top of slot rotation (degrees)
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
 var _right_in_zone := 0  # Which zone right controller is in (0 = none)
 
@@ -81,10 +81,10 @@ var _hand_in_nvg_zone := {"left": false, "right": false}  # Edge-detection for h
 # NVG overlay system
 var _nvg_active := false                # tracks game's NVG Overlay.visible
 var _nvg_overlay_mesh: MeshInstance3D   # fullscreen quad parented to xr_camera
-var _nvg_mono := false                  # config: mono vision (same image both eyes)
+var _nvg_mono := true                   # config: mono vision (same image both eyes)
 var _nvg_mono_viewport: SubViewport     # mono render SubViewport (created on demand)
 var _nvg_mono_camera: Camera3D          # mono render camera (centered between eyes)
-var _nvg_brightness := 2.0             # config: brightness multiplier
+var _nvg_brightness := 5.0             # config: brightness multiplier
 var _nvg_overlay_installed := false
 
 # Decor mode (shelter furniture placement)
@@ -100,13 +100,13 @@ var _decor_x_press_time := 0.0
 # Per-slot grip offsets in aim-local space (up, forward from controller)
 # Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
 var _slot_grip_offsets := {
-	1: Vector3(0, 0.15, -0.20),   # Primary / long gun
-	2: Vector3(0, 0.10, -0.13),   # Sidearm / pistol
-	3: Vector3(0, 0.05, -0.10),   # Knife
-	4: Vector3(0, 0.08, -0.10),   # Grenade
+	1: Vector3(0.122, -0.233, -0.876),   # Primary / long gun
+	2: Vector3(0.102, -0.301, -1.121),   # Sidearm / pistol
+	3: Vector3(0.105,  0.087, -0.327),   # Knife
+	4: Vector3(0.09,  -0.302, -0.958),   # Grenade
 }
 # Per-slot Y rotation offset in degrees (added to the 180° flip)
-var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
+var _slot_grip_rotations := { 1: 1.1, 2: 3.0, 3: -94.7, 4: -69.7 }
 
 # VR hand skeletal models (godot-xr-tools lowpoly hands loaded at runtime via GLTFDocument)
 # Each controller gets a Node3D wrapper (required — MeshInstance3D cannot be a direct child
@@ -138,8 +138,8 @@ var HAND_FINGER_JOINT_WEIGHT := [0.9, 1.0, 1.0]
 var HAND_FINGER_MAX_CURL := 1.45  # ~83 degrees per joint at full curl
 var HAND_THUMB_MAX_CURL := 0.9
 var HAND_CURL_SMOOTH_SPEED := 20.0
-var HAND_GLTF_OFFSET_LEFT := Vector3(-0.03, -0.05, 0.15)
-var HAND_GLTF_OFFSET_RIGHT := Vector3(0.01, 0.0, 0.05)
+var HAND_GLTF_OFFSET_LEFT := Vector3(-0.03, -0.015, 0.195)
+var HAND_GLTF_OFFSET_RIGHT := Vector3(0.025, 0.01, 0.195)
 var HAND_GLTF_ROTATION_LEFT := Vector3(0.0, 0.0, 0.0)   # extra rotation offset in degrees for left hand wrapper
 var HAND_GLTF_ROTATION_RIGHT := Vector3(0.0, 0.0, 0.0)  # extra rotation offset in degrees for right hand wrapper
 
@@ -185,7 +185,7 @@ const ADJUST_SPEED := 0.15  # Meters per second for position
 const ADJUST_ROT_SPEED := 45.0  # Degrees per second for rotation
 
 # Foregrip adjust mode — tune two-hand foregrip offset live (X while off-hand gripping)
-var _slot_foregrip_offsets := { 1: Vector3.ZERO, 2: Vector3.ZERO, 3: Vector3.ZERO, 4: Vector3.ZERO }
+var _slot_foregrip_offsets := { 1: Vector3(-0.11, 0.038, -0.108), 2: Vector3.ZERO, 3: Vector3.ZERO, 4: Vector3.ZERO }
 var _fg_adjust_mode := false
 var _fg_adjust_saved_offset := Vector3.ZERO
 
@@ -503,31 +503,31 @@ var _menu_ctrl_held := false      # True while support grip is held in menus (Ct
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 
 # HUD sizing (vars so config screen can change them at runtime)
-var _hud_width := 2.0
-var _hud_distance := 1.5
-var _hud_height_offset := -0.1
+var _hud_width := 2.3
+var _hud_distance := 0.9
+var _hud_height_offset := -0.05
 var _menu_width := 3.0
-var _menu_distance := 1.3
+var _menu_distance := 1.0
 var _hud_lr_offset := 0.0
 var _menu_lr_offset := 0.0
-var _hud_smooth_follow := false
-var _hud_smooth_speed := 3.0
+var _hud_smooth_follow := true
+var _hud_smooth_speed := 2.0
 var _hud_yaw := 0.0         # Lagged yaw for smooth follow — tracked separately, never read from mesh
-var _hud_spread := 1.0      # HUD element spread (1.0 = default, <1 = closer together)
+var _hud_spread := 0.5      # HUD element spread (1.0 = default, <1 = closer together)
 var _hud_spread_active := 1.0  # Spread value actually used by _apply_hud_spread (watch vs menu)
-var _menu_laser_uv_x := 0.02  # Horizontal laser offset for menu/inventory (UV units)
+var _menu_laser_uv_x := 0.03  # Horizontal laser offset for menu/inventory (UV units)
 var _menu_laser_uv_y := 0.06  # Vertical laser offset for menu/inventory (UV units)
 
 # Wrist watch HUD
 var _watch_mesh: MeshInstance3D       # Watch face quad, child of hand model Node3D
 var _watch_alpha := 0.0               # Fade alpha (0=hidden, 1=visible)
-var _watch_size := 0.12               # Watch quad side length (metres)
+var _watch_size := 0.15               # Watch quad side length (metres)
 var _watch_glance_enabled := false    # Glance-to-reveal on/off (off = always visible)
 var _watch_glance_angle := 40.0       # Max gaze angle (degrees) for reveal
 var _watch_fade_speed := 8.0          # Alpha lerp speed (units/sec)
 var _watch_spread := 0.15             # Compact spread for watch mode
-var _watch_offset := Vector3(0.0, 0.02, -0.05)  # X/Y/Z offset on hand model
-var _watch_rot := Vector3(0.0, 0.0, 0.0)         # Extra rotation offset in degrees (base -90 X is always applied)
+var _watch_offset := Vector3(-0.06, -0.08, 0.34)  # X/Y/Z offset on hand model
+var _watch_rot := Vector3(180.0, 90.0, -90.0)     # Extra rotation offset in degrees (base -90 X is always applied)
 var _vitals_node: Control = null             # Reference only — stays in game HUD tree
 var _medical_node: Control = null            # Reference only — stays in game HUD tree
 var _watch_crop_delay := 0                   # Countdown frames before reading node rects
@@ -545,7 +545,7 @@ var world_scale := 1.0
 var _render_scale := 1.0
 var snap_turn_degrees := 45.0
 var smooth_turn_speed := 120.0
-var use_snap_turn := true
+var use_snap_turn := false
 var thumbstick_deadzone := 0.15
 var _config_dominant_hand := "right"
 var _snap_turn_cooldown := false
@@ -553,13 +553,13 @@ var _last_game_cam_pos := Vector3.ZERO
 
 # Two-hand aim stabilization
 var _two_hand_smooth_enabled := true
-var _two_hand_smooth_speed := 12.0
+var _two_hand_smooth_speed := 14.0
 var _two_hand_smooth_basis := Basis.IDENTITY
 var _two_hand_was_active := false
 
 # Comfort vignette
-var _vignette_enabled := true
-var _vignette_strength := 0.8
+var _vignette_enabled := false
+var _vignette_strength := 0.7
 var _vignette_mesh: MeshInstance3D = null
 var _vignette_radius := 1.0   # current inner edge (1.0 = off screen, smaller = more coverage)
 var _vignette_hold := 0.0     # seconds; >0 = vignette active
@@ -3944,18 +3944,18 @@ func _load_config() -> void:
 				world_scale = data["xr"].get("world_scale", 1.0)
 				_render_scale = data["xr"].get("render_scale", 1.0)
 			if data.has("comfort"):
-				use_snap_turn = data["comfort"].get("turn_type", "snap") == "snap"
+				use_snap_turn = data["comfort"].get("turn_type", "smooth") == "snap"
 				snap_turn_degrees = data["comfort"].get("snap_turn_degrees", 45.0)
 				smooth_turn_speed = data["comfort"].get("smooth_turn_speed", 120.0)
-				_vignette_enabled = data["comfort"].get("vignette_enabled", true)
-				_vignette_strength = data["comfort"].get("vignette_strength", 0.8)
+				_vignette_enabled = data["comfort"].get("vignette_enabled", false)
+				_vignette_strength = data["comfort"].get("vignette_strength", 0.7)
 				_two_hand_smooth_enabled = data["comfort"].get("two_hand_smooth_enabled", true)
-				_two_hand_smooth_speed = data["comfort"].get("two_hand_smooth_speed", 12.0)
+				_two_hand_smooth_speed = data["comfort"].get("two_hand_smooth_speed", 14.0)
 			if data.has("controls"):
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
 			if data.has("holsters"):
-				_holster_zone_radius = data["holsters"].get("zone_radius", 0.20)
+				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
 				for slot in [1, 2, 3, 4]:
 					var key = str(slot)
 					var def = _holster_offsets[slot]
@@ -3971,8 +3971,8 @@ func _load_config() -> void:
 				var nz = data["nvg_zone"]
 				_nvg_zone_offset.y = nz.get("y", 0.30)
 				_nvg_zone_radius = nz.get("radius", 0.25)
-				_nvg_brightness = nz.get("brightness", 2.0)
-				_nvg_mono = nz.get("mono", false)
+				_nvg_brightness = nz.get("brightness", 5.0)
+				_nvg_mono = nz.get("mono", true)
 			if data.has("weapon_offsets"):
 				var wo = data["weapon_offsets"]
 				for slot in [1, 2, 3, 4]:
@@ -3990,45 +3990,45 @@ func _load_config() -> void:
 						_slot_foregrip_offsets[slot] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
 			if data.has("hud"):
 				var h = data["hud"]
-				_hud_width = h.get("width", 2.0)
-				_hud_distance = h.get("distance", 1.5)
-				_hud_height_offset = h.get("height_offset", -0.1)
+				_hud_width = h.get("width", 2.3)
+				_hud_distance = h.get("distance", 0.9)
+				_hud_height_offset = h.get("height_offset", -0.05)
 				_hud_lr_offset = h.get("lr_offset", 0.0)
-				_hud_smooth_follow = h.get("smooth_follow", false)
-				_hud_smooth_speed = h.get("smooth_speed", 3.0)
-				_hud_spread = h.get("spread", 1.0)
+				_hud_smooth_follow = h.get("smooth_follow", true)
+				_hud_smooth_speed = h.get("smooth_speed", 2.0)
+				_hud_spread = h.get("spread", 0.5)
 			if data.has("watch"):
 				var w = data["watch"]
-				_watch_size = w.get("size", 0.12)
+				_watch_size = w.get("size", 0.15)
 				_watch_glance_enabled = w.get("glance_enabled", false)
 				_watch_glance_angle = w.get("glance_angle", 40.0)
 				_watch_fade_speed = w.get("fade_speed", 8.0)
 				_watch_spread = w.get("spread", 0.15)
 				var wo = w.get("offset", {})
-				_watch_offset = Vector3(wo.get("x", 0.0), wo.get("y", 0.02), wo.get("z", -0.05))
+				_watch_offset = Vector3(wo.get("x", -0.06), wo.get("y", -0.08), wo.get("z", 0.34))
 				var wr = w.get("rot", {})
-				_watch_rot = Vector3(wr.get("x", 0.0), wr.get("y", 0.0), wr.get("z", 0.0))
+				_watch_rot = Vector3(wr.get("x", 180.0), wr.get("y", 90.0), wr.get("z", -90.0))
 			if data.has("hand_models"):
 				var hm = data["hand_models"]
 				var hl = hm.get("left", {})
-				HAND_GLTF_OFFSET_LEFT = Vector3(hl.get("x", -0.03), hl.get("y", -0.05), hl.get("z", 0.15))
+				HAND_GLTF_OFFSET_LEFT = Vector3(hl.get("x", -0.03), hl.get("y", -0.015), hl.get("z", 0.195))
 				var hlr = hl.get("rot", {})
 				HAND_GLTF_ROTATION_LEFT = Vector3(hlr.get("x", 0.0), hlr.get("y", 0.0), hlr.get("z", 0.0))
 				var hr = hm.get("right", {})
-				HAND_GLTF_OFFSET_RIGHT = Vector3(hr.get("x", 0.01), hr.get("y", 0.0), hr.get("z", 0.05))
+				HAND_GLTF_OFFSET_RIGHT = Vector3(hr.get("x", 0.025), hr.get("y", 0.01), hr.get("z", 0.195))
 				var hrr = hr.get("rot", {})
 				HAND_GLTF_ROTATION_RIGHT = Vector3(hrr.get("x", 0.0), hrr.get("y", 0.0), hrr.get("z", 0.0))
 			if data.has("sling"):
 				var sl = data["sling"]
-				_sling_offset = Vector3(sl.get("x", 0.0), sl.get("y", -0.35), sl.get("z", -0.25))
+				_sling_offset = Vector3(sl.get("x", 0.2), sl.get("y", -0.31), sl.get("z", -0.06))
 				var slr = sl.get("rot", {})
-				_sling_rot_offset = Vector3(slr.get("x", 0.0), slr.get("y", 0.0), slr.get("z", 0.0))
+				_sling_rot_offset = Vector3(slr.get("x", 0.0), slr.get("y", 60.0), slr.get("z", 0.0))
 			if data.has("menu"):
 				var m = data["menu"]
 				_menu_width = m.get("width", 3.0)
-				_menu_distance = m.get("distance", 1.3)
+				_menu_distance = m.get("distance", 1.0)
 				_menu_lr_offset = m.get("lr_offset", 0.0)
-				_menu_laser_uv_x = m.get("laser_uv_x", 0.02)
+				_menu_laser_uv_x = m.get("laser_uv_x", 0.03)
 				_menu_laser_uv_y = m.get("laser_uv_y", 0.06)
 			print("[VR Mod] Config loaded successfully")
 	file.close()
