@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod v1.0.0
+# Road to Vostok — VR Mod v0.9.0
 
 A community VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
@@ -25,15 +25,15 @@ Extract `vr-mod-full.zip` directly into the game root. You should end up with:
 
 ```
 Road to Vostok\
-  README.md
-  LICENSE
-  THIRD_PARTY.md
   launch_vr.bat
   rtv_vr_bootstrap.dll
   librtv_vr_mod.windows.x86_64.dll
   mods\
     vr-mod.vmz
   VR Mod\
+    README.md
+    LICENSE
+    THIRD_PARTY.md
     bin\
       rtv_vr_injector.exe
     resources\

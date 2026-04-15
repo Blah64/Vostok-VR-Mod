@@ -48,9 +48,9 @@ mkdir "%STAGE%\full\mods"
 mkdir "%STAGE%\full\VR Mod\bin"
 mkdir "%STAGE%\full\VR Mod\resources"
 
-copy "%ROOT%\README.md"                                                  "%STAGE%\full\README.md"                                       >nul || goto :error
-copy "%ROOT%\LICENSE"                                                    "%STAGE%\full\LICENSE"                                         >nul || goto :error
-copy "%ROOT%\THIRD_PARTY.md"                                             "%STAGE%\full\THIRD_PARTY.md"                                  >nul || goto :error
+copy "%ROOT%\README.md"                                                  "%STAGE%\full\VR Mod\README.md"                                >nul || goto :error
+copy "%ROOT%\LICENSE"                                                    "%STAGE%\full\VR Mod\LICENSE"                                  >nul || goto :error
+copy "%ROOT%\THIRD_PARTY.md"                                             "%STAGE%\full\VR Mod\THIRD_PARTY.md"                          >nul || goto :error
 copy "%ROOT%\launch_vr.bat"                                              "%STAGE%\full\launch_vr.bat"                                   >nul || goto :error
 copy "%BUILD%\src\bootstrap\Release\rtv_vr_bootstrap.dll"                "%STAGE%\full\rtv_vr_bootstrap.dll"                            >nul || goto :error
 copy "%BUILD%\src\gdextension\Release\librtv_vr_mod.windows.x86_64.dll"  "%STAGE%\full\librtv_vr_mod.windows.x86_64.dll"               >nul || goto :error
