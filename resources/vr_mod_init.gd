@@ -550,6 +550,10 @@ var thumbstick_deadzone := 0.15
 var _config_dominant_hand := "right"
 var _standing_mode := false          # false = sitting (fixed height), true = standing (physical height)
 var _standing_mode_resnap := 0       # frames remaining before re-snapping origin after mode change
+var _standing_height_ref := 0.0      # xr_camera.position.y captured at full upright height (STAGE space)
+var _physical_crouch_threshold := 0.4  # metres below standing height to trigger game crouch
+var _physical_crouch_active := false
+var _physical_crouch_resnap := 0      # frames to freeze Y + wait before re-snapping after release
 var _snap_turn_cooldown := false
 var _last_game_cam_pos := Vector3.ZERO
 
@@ -772,11 +776,27 @@ func _process(delta: float) -> void:
 					if _standing_mode_resnap == 0:
 						_attach_rig_to_camera()
 						print("[VR Mod] Origin re-snapped after tracking mode change")
+						if _standing_mode and xr_camera:
+							_standing_height_ref = xr_camera.position.y
+							if _standing_height_ref < 0.3:
+								_standing_height_ref = 1.6
+							print("[VR Mod] Standing height reference: ", _standing_height_ref, "m")
+
+				if _physical_crouch_resnap > 0:
+					_physical_crouch_resnap -= 1
+					if _physical_crouch_resnap == 0:
+						_attach_rig_to_camera()
+						if _standing_mode and xr_camera:
+							_standing_height_ref = xr_camera.position.y
+							if _standing_height_ref < 0.3:
+								_standing_height_ref = 1.6
+						print("[VR Mod] Origin re-snapped after physical crouch release")
 
 				# Holster zone haptic feedback
 				_update_holster_zone_haptics()
 				_update_nvg_overlay(delta)
 				_update_comfort_vignette(delta)
+				_update_physical_crouch()
 
 				# Keep game camera from reclaiming "current" (causes blur/glow artifacts)
 				if game_camera and is_instance_valid(game_camera) and game_camera.current:
@@ -885,6 +905,8 @@ func _install_xr_rig() -> void:
 		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - actual_head_height, cam_pos.z)
 		xr_origin.global_rotation = Vector3.ZERO
 		_last_game_cam_pos = cam_pos
+		if _standing_mode:
+			_standing_height_ref = actual_head_height
 
 		# Copy game camera's cull mask to XR camera so we can see
 		# weapon viewmodels rendered on special visual layers
@@ -1157,6 +1179,32 @@ func _update_comfort_vignette(delta: float) -> void:
 	_vignette_mesh.visible = show
 	if show:
 		(_vignette_mesh.material_override as ShaderMaterial).set_shader_parameter("radius", _vignette_radius)
+
+
+func _release_physical_crouch() -> void:
+	# Clear state only — no injection. Used on level transitions where the new
+	# character spawns standing (injecting here would crouch the fresh character).
+	_physical_crouch_active = false
+	_physical_crouch_resnap = 0
+
+
+func _update_physical_crouch() -> void:
+	if not _standing_mode or _standing_height_ref < 0.3 or not xr_camera:
+		return
+	var drop := _standing_height_ref - xr_camera.position.y
+	if not _physical_crouch_active:
+		if drop >= _physical_crouch_threshold:
+			_physical_crouch_active = true
+			_inject_action("crouch", true)   # toggle ON
+			_inject_action("crouch", false)  # clear held state
+			print("[VR Mod] Physical crouch: start (drop=", drop, "m)")
+	else:
+		if drop < _physical_crouch_threshold * 0.6:
+			_physical_crouch_active = false
+			_physical_crouch_resnap = 8
+			_inject_action("crouch", true)   # toggle OFF
+			_inject_action("crouch", false)  # clear held state
+			print("[VR Mod] Physical crouch: end (drop=", drop, "m)")
 
 
 func _create_nvg_mono_viewport() -> void:
@@ -1527,6 +1575,7 @@ func _on_level_transition() -> void:
 	_nvg_active = false
 	if _nvg_overlay_mesh:
 		_nvg_overlay_mesh.visible = false
+	_release_physical_crouch()
 
 	# Re-assert XR camera ownership — the new level's camera sets current=true,
 	# which makes Godot apply its Environment/CameraAttributes (glow, DOF, etc.)
@@ -1546,6 +1595,10 @@ func _sync_origin_to_game() -> void:
 		var current_pos = game_camera.global_position
 		var delta_pos = current_pos - _last_game_cam_pos
 		if delta_pos.length() > 0.001:
+			# Freeze Y while physically crouched: the game camera drops due to the
+			# crouch animation, but the VR height is already handled by physical tracking.
+			if _physical_crouch_active or _physical_crouch_resnap > 0:
+				delta_pos.y = 0.0
 			xr_origin.global_position += delta_pos
 			_last_game_cam_pos = current_pos
 
@@ -2039,7 +2092,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", true)
-			else:
+			elif not _physical_crouch_active:
 				_inject_action("crouch", true)
 
 
@@ -2170,7 +2223,7 @@ func _on_button_released(button_name: String, hand: String) -> void:
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", false)
-			else:
+			elif not _physical_crouch_active:
 				_inject_action("crouch", false)
 
 
@@ -4808,6 +4861,13 @@ func _on_cfg_standing_mode(idx: int) -> void:
 			xr_interface.play_area_mode = XRInterface.XR_PLAY_AREA_ROOMSCALE
 		else:
 			xr_interface.play_area_mode = XRInterface.XR_PLAY_AREA_SITTING
+	if not _standing_mode:
+		if _physical_crouch_active:
+			_inject_action("crouch", true)
+			_inject_action("crouch", false)
+		_physical_crouch_active = false
+		_physical_crouch_resnap = 0
+		_standing_height_ref = 0.0
 	# Re-snap origin after a few frames so the new reference space has settled
 	_standing_mode_resnap = 3
 	print("[VR Mod] Tracking mode: ", "standing" if _standing_mode else "sitting")
@@ -5554,6 +5614,27 @@ func _dump_nvg_and_environment() -> void:
 	f.seek_end(0)
 	f.store_line("")
 	f.store_line("=== NVG & ENVIRONMENT DUMP (" + str(Time.get_datetime_string_from_system()) + ") ===")
+
+	# ── -1. Character/player node search ──
+	f.store_line("")
+	f.store_line("-- Core subtree: all scripted nodes + CharacterBody3D --")
+	var core_node = get_tree().root.get_node_or_null("Map/Core")
+	if core_node:
+		var stack: Array = core_node.get_children()
+		while stack.size() > 0:
+			var n: Node = stack.pop_front()
+			for c in n.get_children():
+				stack.push_back(c)
+			var ns = n.get_script()
+			var is_char = n.get_class() == "CharacterBody3D"
+			if ns or is_char:
+				f.store_line("  " + str(n.get_path()) + " (" + n.get_class() + ")" + (" [script=" + str(ns.resource_path) + "]" if ns else ""))
+				if ns:
+					for prop in n.get_property_list():
+						if prop["usage"] & 4096:
+							f.store_line("    " + prop["name"] + " = " + str(n.get(prop["name"])))
+	else:
+		f.store_line("  /root/Map/Core not found")
 
 	# ── 0. Decor mode state ──
 	f.store_line("")
