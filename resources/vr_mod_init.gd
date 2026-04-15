@@ -8,10 +8,9 @@ extends Node
 # When inventory is OPEN: quad detaches, scales up, stays in world space
 # Controller pointing + trigger click for inventory interaction.
 
-var _is_metro := not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf")
-var _log_path := "user://vr_mod/vr_mod_debug.log" if not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf") else OS.get_executable_path().get_base_dir() + "/vr_mod_debug.log"
-var _config_path := "user://vr_mod/default_config.json" if not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf") else OS.get_executable_path().get_base_dir() + "/VR Mod/config/default_config.json"
-var _assets_base := "res://resources/hands/" if not FileAccess.file_exists(OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/Hand_Nails_low_L.gltf") else OS.get_executable_path().get_base_dir() + "/VR Mod/resources/hands/"
+var _log_path    := "user://vr_mod/vr_mod_debug.log"
+var _config_path := "user://vr_mod/default_config.json"
+var _assets_base := "res://resources/hands/"
 
 var xr_interface: XRInterface
 var xr_origin: XROrigin3D
@@ -873,11 +872,10 @@ func _install_xr_rig() -> void:
 	# Ensure mouse is captured so fire input works
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
-	# Ensure user data directory and default config exist for Metro installs
-	if _is_metro:
-		DirAccess.make_dir_recursive_absolute("user://vr_mod")
-		if not FileAccess.file_exists(_config_path):
-			_save_full_config()
+	# Ensure user data directory and default config exist
+	DirAccess.make_dir_recursive_absolute("user://vr_mod")
+	if not FileAccess.file_exists(_config_path):
+		_save_full_config()
 
 	# Clear debug log and dump fire-related InputMap bindings
 	var dump_path = _log_path
