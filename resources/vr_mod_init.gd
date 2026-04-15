@@ -23,6 +23,7 @@ var _frames_waited := 0
 var _level_transition_count := 0
 var _xr_ready := false
 var _weapons_reparented := false
+var _camera_lost_frames := 0  # Frames since camera was lost; disables use_xr if > 120
 
 # Weapon debug
 var _weapon_debug_timer := 0.0
@@ -655,6 +656,7 @@ func _process(delta: float) -> void:
 			if xr_origin and is_instance_valid(xr_origin):
 				if not game_camera or not is_instance_valid(game_camera):
 					# Camera lost or freed (level transition). Poll for new one.
+					_camera_lost_frames += 1
 					if _frames_waited % CAMERA_POLL_INTERVAL == 0:
 						if game_camera:
 							print("[VR Mod] Game camera lost (level transition?) — searching...")
@@ -662,6 +664,13 @@ func _process(delta: float) -> void:
 						if game_camera:
 							_attach_rig_to_camera()
 							_on_level_transition()
+							_camera_lost_frames = 0
+							get_viewport().use_xr = true
+							print("[VR Mod] Camera found again, VR re-enabled")
+					# After ~2 seconds without a camera (e.g., at main menu), disable VR
+					elif _camera_lost_frames > 120 and get_viewport().use_xr:
+						print("[VR Mod] Camera lost for 2+ seconds, disabling VR (main menu?)")
+						get_viewport().use_xr = false
 
 				if not _hud_installed and _frames_waited >= HUD_SETUP_DELAY:
 					_setup_vr_hud()
@@ -1017,9 +1026,14 @@ func _setup_vr_hud() -> void:
 	print("[VR Mod] Setting up VR HUD (World2D sharing)...")
 
 	var main_vp = get_viewport()
-	var vp_size = main_vp.get_visible_rect().size
+	# Use OS window size (not XR render target size) so that the viewport's pixel
+	# coordinates match Input.warp_mouse() which operates in window space.
+	# get_visible_rect().size in XR mode returns the eye-buffer render resolution
+	# (e.g. ~2064x2208 on Quest 3) which is unrelated to the OS window.
+	var win_size_i = DisplayServer.window_get_size()
+	var vp_size = Vector2(win_size_i.x, win_size_i.y)
 
-	_log("HUD vp_size=" + str(vp_size))
+	_log("HUD win_size=" + str(vp_size) + " xr_rect=" + str(main_vp.get_visible_rect().size))
 	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
 	if ui_node:
 		print("[VR Mod] UI node: ", ui_node.get_path(), " vis=", ui_node.visible)
@@ -2256,7 +2270,7 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 	if _interface_open and _laser_screen_pos.x >= 0:
 		event.position = _laser_screen_pos
 	else:
-		event.position = get_viewport().get_visible_rect().size / 2
+		event.position = Vector2(DisplayServer.window_get_size()) / 2
 	# Set button_mask - required for proper mouse event processing
 	var mask := 0
 	for btn in _mouse_states:
@@ -2280,7 +2294,7 @@ func _inject_scroll(direction: int) -> void:
 	if _interface_open and _laser_screen_pos.x >= 0:
 		event.position = _laser_screen_pos
 	else:
-		event.position = get_viewport().get_visible_rect().size / 2
+		event.position = Vector2(DisplayServer.window_get_size()) / 2
 	Input.parse_input_event(event)
 	get_viewport().push_input(event, false)
 	# Scroll events need immediate release
