@@ -56,7 +56,6 @@ copy "%BUILD%\src\bootstrap\Release\rtv_vr_bootstrap.dll"                "%STAGE
 copy "%BUILD%\src\gdextension\Release\librtv_vr_mod.windows.x86_64.dll"  "%STAGE%\full\librtv_vr_mod.windows.x86_64.dll"               >nul || goto :error
 copy "%BUILD%\src\injector\Release\rtv_vr_injector.exe"                  "%STAGE%\full\VR Mod\bin\rtv_vr_injector.exe"                  >nul || goto :error
 copy "%ROOT%\resources\override.cfg"                                     "%STAGE%\full\VR Mod\resources\override.cfg"                   >nul || goto :error
-copy "%ROOT%\resources\vr_mod_init.gd"                                   "%STAGE%\full\VR Mod\resources\vr_mod_init.gd"                 >nul || goto :error
 copy "%ROOT%\resources\rtv_vr_mod.gdextension"                           "%STAGE%\full\VR Mod\resources\rtv_vr_mod.gdextension"         >nul || goto :error
 copy "%STAGE%\vr-mod.vmz"                                                "%STAGE%\full\mods\vr-mod.vmz"                                >nul || goto :error
 
