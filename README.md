@@ -38,13 +38,8 @@ Road to Vostok\
       rtv_vr_injector.exe
     resources\
       override.cfg
-      vr_mod_init.gd
       rtv_vr_mod.gdextension
 ```
-
-> **Note:** The active mod script is loaded by Metro Mod Loader directly from `mods\vr-mod.vmz`.
-> `VR Mod\resources\vr_mod_init.gd` is a reference copy only — do **not** copy it to the game root,
-> as a loose `vr_mod_init.gd` in the game root will shadow the VMZ version and run stale code.
 
 > **Upgrading from a previous version?** Older releases deployed `vr_mod_init.gd` directly to the
 > game root. Delete `Road to Vostok\vr_mod_init.gd` if it exists before launching, otherwise the
