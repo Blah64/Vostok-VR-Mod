@@ -15,44 +15,19 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 
 ## Installation
 
-### Option A — Standalone (no other mods)
+This mod requires [Metro Mod Loader](https://modworkshop.net/mod/55623) and the VR injector
+(`launch_vr.bat`). Metro handles mod distribution; the injector wires Godot's renderer into
+OpenXR so VR actually works.
 
-1. Extract `vr-mod-standalone.zip` directly into the game root folder:
-   ```
-   C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\
-   ```
-   You should end up with the following layout:
-   ```
-   Road to Vostok\
-     override.cfg
-     vr_mod_init.gd
-     VR Mod\
-       config\
-         default_config.json
-       resources\
-         hands\
-           Hand_Nails_low_L.gltf
-           Hand_Nails_low_R.gltf
-           hand_col.png
-   ```
-2. Put on your headset, start SteamVR (or Meta PC app), then launch Road to Vostok normally through Steam.
-3. The mod activates automatically once the game loads into a map — no launcher needed.
-
-### Option B — Metro Mod Loader (recommended if running multiple mods)
-
-[Metro Mod Loader](https://modworkshop.net/mod/55623) lets you enable and disable mods by moving a
-single file, and handles load order automatically when running multiple mods alongside each other
-(e.g. Mod Configuration Menu).
-
-1. Install Metro Mod Loader by following its instructions — this replaces `override.cfg` in the game
-   root with Metro's own copy. Do **not** also install the standalone `override.cfg` from this mod.
+1. Install [Metro Mod Loader](https://modworkshop.net/mod/55623) by following its instructions.
 2. Drop `vr-mod.vmz` into the `mods\` folder in the game root:
    ```
    C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\mods\vr-mod.vmz
    ```
-3. Put on your headset, start SteamVR (or Meta PC app), then launch Road to Vostok normally through Steam.
+3. Put on your headset and start SteamVR (or Meta PC app).
+4. Launch the game using **`launch_vr.bat`** in the game root — do **not** use Steam's Play button directly.
 
-Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\` in Metro mode.
+Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\`.
 
 **To disable the mod:** remove or rename `vr-mod.vmz`. No other files need to be touched.
 
@@ -320,4 +295,4 @@ The Main Menu launches VR into a black screen, but a VR camera is not started un
 
 **Weapon floats at wrong position**
 Use Grip Adjust Mode (X button while weapon drawn) to tune the grip offset live.
-If the issue persists across sessions, check `vr_mod_debug.log` in the game root.
+If the issue persists across sessions, check `vr_mod_debug.log` in `%APPDATA%\Road to Vostok\vr_mod\`.
