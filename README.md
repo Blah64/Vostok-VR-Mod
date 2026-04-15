@@ -42,6 +42,14 @@ Road to Vostok\
       rtv_vr_mod.gdextension
 ```
 
+> **Note:** The active mod script is loaded by Metro Mod Loader directly from `mods\vr-mod.vmz`.
+> `VR Mod\resources\vr_mod_init.gd` is a reference copy only — do **not** copy it to the game root,
+> as a loose `vr_mod_init.gd` in the game root will shadow the VMZ version and run stale code.
+
+> **Upgrading from a previous version?** Older releases deployed `vr_mod_init.gd` directly to the
+> game root. Delete `Road to Vostok\vr_mod_init.gd` if it exists before launching, otherwise the
+> old script will override the one in the VMZ.
+
 ### Step 3 — Launch
 
 Put on your headset, start SteamVR (or Meta PC app), then launch using **`launch_vr.bat`** in the game root — do **not** use Steam's Play button directly.
@@ -315,6 +323,10 @@ Both methods can be used interchangeably. A haptic pulse confirms each rail incr
 **Black screen in headset after launch**
 Make sure SteamVR or the Meta PC app is running *before* you start the game.
 The Main Menu launches VR into a black screen, but a VR camera is not started until the world actually loads in.
+
+**Mod behaves like an older version / changes have no effect**
+A stale `vr_mod_init.gd` in the game root (`Road to Vostok\vr_mod_init.gd`) overrides the
+script inside the VMZ. Delete that file — Metro loads the correct version from `mods\vr-mod.vmz`.
 
 **Weapon floats at wrong position**
 Use Grip Adjust Mode (X button while weapon drawn) to tune the grip offset live.
