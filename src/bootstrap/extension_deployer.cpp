@@ -14,9 +14,12 @@ namespace rtv_vr::bootstrap {
 namespace {
 
 /// Files that we deploy into the exe directory.
+/// Note: vr_mod_init.gd is intentionally absent — Metro Mod Loader loads it
+/// from the VMZ resource pack (res://resources/vr_mod_init.gd). The game root
+/// copy served no purpose once override.cfg was changed to use the ModLoader
+/// autoload instead of VRModInit.
 const std::vector<std::pair<fs::path, fs::path>> k_deploy_manifest = {
     { "resources/override.cfg",              "override.cfg" },
-    { "resources/vr_mod_init.gd",            "vr_mod_init.gd" },
     { "resources/rtv_vr_mod.gdextension",    "rtv_vr_mod.gdextension" },
 };
 

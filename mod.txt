@@ -5,4 +5,4 @@ version="1.0.0"
 priority=100
 
 [autoload]
-VRModInit="res://vr_mod_init.gd"
+VRModInit="res://resources/vr_mod_init.gd"
