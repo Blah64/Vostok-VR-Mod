@@ -9,7 +9,6 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 
 - Road to Vostok installed via Steam
 - A PC VR headset supported by OpenXR (Meta Quest via Link/AirLink, Valve Index, HTC Vive, WMR, etc.)
-- SteamVR or Meta PC app running before launching the game
 
 ---
 
@@ -305,7 +304,6 @@ Both methods can be used interchangeably. A haptic pulse confirms each rail incr
 
 ## Known Issues
 
-- **Crouching** uses the game's toggle and does not track physical crouch height.
 
 ---
 
