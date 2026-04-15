@@ -305,8 +305,6 @@ Both methods can be used interchangeably. A haptic pulse confirms each rail incr
 
 ## Known Issues
 
-- **Crouching** uses the game's toggle and does not track physical crouch height.
-
 ---
 
 ## Troubleshooting
