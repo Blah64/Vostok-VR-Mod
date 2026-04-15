@@ -15,17 +15,43 @@ virtual reality with full head tracking, motion controllers, and physical weapon
 
 ## Installation
 
-This mod requires [Metro Mod Loader](https://modworkshop.net/mod/55623) and the VR injector
-(`launch_vr.bat`). Metro handles mod distribution; the injector wires Godot's renderer into
-OpenXR so VR actually works.
+Two packages are required: the **native release** (injector + GDExtension) and the **VMZ** (GDScript mod for Metro).
 
-1. Install [Metro Mod Loader](https://modworkshop.net/mod/55623) by following its instructions.
-2. Drop `vr-mod.vmz` into the `mods\` folder in the game root:
-   ```
-   C:\Program Files (x86)\Steam\steamapps\common\Road to Vostok\mods\vr-mod.vmz
-   ```
-3. Put on your headset and start SteamVR (or Meta PC app).
-4. Launch the game using **`launch_vr.bat`** in the game root — do **not** use Steam's Play button directly.
+### Step 1 — Install Metro Mod Loader
+
+Install [Metro Mod Loader](https://modworkshop.net/mod/55623) by following its instructions.
+
+### Step 2 — Extract the native release
+
+Extract `vr-mod-native.zip` directly into the game root. You should end up with:
+
+```
+Road to Vostok\
+  launch_vr.bat
+  rtv_vr_bootstrap.dll
+  librtv_vr_mod.windows.x86_64.dll
+  VR Mod\
+    bin\
+      rtv_vr_injector.exe
+    resources\
+      override.cfg
+      vr_mod_init.gd
+      rtv_vr_mod.gdextension
+```
+
+### Step 3 — Install the VMZ
+
+Drop `vr-mod.vmz` into the `mods\` folder in the game root:
+
+```
+Road to Vostok\
+  mods\
+    vr-mod.vmz
+```
+
+### Step 4 — Launch
+
+Put on your headset, start SteamVR (or Meta PC app), then launch using **`launch_vr.bat`** in the game root — do **not** use Steam's Play button directly.
 
 Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\`.
 
