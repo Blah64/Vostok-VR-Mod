@@ -39,6 +39,7 @@ var _throw_samples: Array = []  # Recent [position, time] pairs for throw veloci
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_is_long := false  # True for rifles/shotguns that support two-hand aim
 var _recoil_rest_xform := Transform3D.IDENTITY  # Cached rest pose of recoil chain
+var _disable_walk_sway := false  # Skip Sway node contribution in chain delta (walk/movement bob); keeps Noise stamina wobble intact
 var _grenade_pin_pulled := false   # True after pin pulled; grip release = throw
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
 var _pending_holster_key: int = -1  # KEY_N pending delayed injection on holster; -1 = none
@@ -396,6 +397,10 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_walk_sway_captured = false
+	_walk_sway_logged = false
+	_rest_capture_pending = false
+	_walk_sway_capture_delay = 0.0
 	_clear_grenade_state()
 	_weapon_raise_timer = 3.0
 	_scroll_cooldown = 1.0
@@ -485,6 +490,10 @@ func _holster_weapon() -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_walk_sway_captured = false
+	_walk_sway_logged = false
+	_rest_capture_pending = false
+	_walk_sway_capture_delay = 0.0
 	_clear_grenade_state()
 	_support_grip_held = false
 	_holster_cooldown = 0.8  # Block re-draw until animation completes
@@ -744,7 +753,17 @@ func _process(delta: float) -> void:
 						var wep = mgr.get_child(0)
 						print("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
 						_weapon_is_long = _classify_weapon_is_long(wep)
-						_recoil_rest_xform = _sample_recoil_chain(wep)
+						# Defer rest capture until Handling.gd has animated the
+						# weapon from pre-raise offset to its aimed position, so
+						# _recoil_rest_xform and _walk_sway_rest agree on the
+						# steady-state aimed pose. Capturing at load time locks
+						# _recoil_rest_xform at (0,-0.5,-0.5) which creates a ~0.7m
+						# jump whenever walk-sway is toggled.
+						_recoil_rest_xform = Transform3D.IDENTITY
+						_walk_sway_captured = false
+						_walk_sway_logged = false
+						_rest_capture_pending = true
+						_walk_sway_capture_delay = _WALK_SWAY_CAPTURE_DELAY_LOAD
 						# Auto-raise weapon after short delay
 						_weapon_raise_timer = 0.5
 						print("[VR Mod] Will auto-raise weapon in 0.5s")
@@ -1589,6 +1608,10 @@ func _on_level_transition() -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_walk_sway_captured = false
+	_walk_sway_logged = false
+	_rest_capture_pending = false
+	_walk_sway_capture_delay = 0.0
 	_clear_grenade_state()
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
@@ -3265,8 +3288,36 @@ func _sync_weapon_to_controller() -> void:
 	else:
 		_two_hand_was_active = false
 
-	# Sample recoil chain and apply delta on top of controller aim
-	var recoil_delta := _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
+	# Handle deferred rest capture: wait for Handling.gd to animate the weapon
+	# into its aimed steady state before sampling, so _recoil_rest_xform and
+	# _walk_sway_rest both reflect the same calibrated pose. This avoids a ~0.7m
+	# position jump when the walk-sway toggle is flipped.
+	if _rest_capture_pending:
+		_walk_sway_capture_delay -= get_process_delta_time()
+		if _walk_sway_capture_delay <= 0.0:
+			_rest_capture_pending = false
+			_walk_sway_capture_delay = 0.0
+			_recoil_rest_xform = _sample_recoil_chain(weapon_rig)
+			_walk_sway_rest.clear()
+			for node_name in _WALK_SWAY_NODES:
+				var wn := _walk_chain_node(weapon_rig, node_name)
+				if wn:
+					_walk_sway_rest[node_name] = wn.transform
+			_walk_sway_captured = true
+			_walk_sway_logged = false
+
+	# Suppress walk bob at the chain nodes (forced rest pose each frame) so they
+	# neither contribute to the chain sample below nor to the mesh parent chain.
+	# Only active once rest has been captured; otherwise we'd clamp to stale rest.
+	if _disable_walk_sway and not _rest_capture_pending:
+		_suppress_walk_sway(weapon_rig)
+
+	# Sample recoil chain and apply delta on top of controller aim. While still
+	# waiting for the first capture, force identity so the weapon sits at
+	# controller+local_offset (matches the post-capture steady state).
+	var recoil_delta := Transform3D.IDENTITY
+	if not _rest_capture_pending:
+		recoil_delta = _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
 	weapon_rig.global_position = controller.global_position + aim_basis * (local_offset + recoil_delta.origin)
 
@@ -3313,6 +3364,72 @@ func _sample_recoil_chain(weapon_rig: Node3D) -> Transform3D:
 		composed = composed * child.transform
 		current = child
 	return composed
+
+
+# Walk-sway suppression: force specific chain nodes to their captured rest pose
+# every frame so their walk-bob + stamina output is clamped. Rest is captured
+# per-node on first suppression after a weapon load. Impulse/Recoil are left
+# intact so hit reactions and firing recoil still work.
+const _WALK_SWAY_NODES: Array = ["Handling", "Sway", "Noise", "Tilt"]
+var _walk_sway_rest: Dictionary = {}   # name -> Transform3D
+var _walk_sway_captured := false
+var _walk_sway_logged := false
+# Delay before we first capture + start clamping. At weapon load, the game's
+# Handling.gd has not yet animated the weapon into its aimed position — capturing
+# at that moment would lock the weapon at its pre-raise offset and create a
+# visible jump between sway-on / sway-off modes. Waiting ~1s lets the chain
+# settle so we capture the steady-state (calibrated) values instead.
+var _walk_sway_capture_delay := 0.0
+var _rest_capture_pending := false  # Waiting for Handling.gd to settle before capturing
+const _WALK_SWAY_CAPTURE_DELAY_LOAD := 1.0
+const _WALK_SWAY_CAPTURE_DELAY_TOGGLE := 0.1
+
+func _walk_chain_node(weapon_rig: Node3D, node_name: String) -> Node3D:
+	# Walk the chain parent-to-child until we hit node_name. Returns null if
+	# the chain terminates early.
+	var current: Node3D = weapon_rig
+	for chain_name in _RECOIL_CHAIN_NAMES:
+		var child = current.get_node_or_null(chain_name)
+		if not child or not child is Node3D:
+			return null
+		if chain_name == node_name:
+			return child
+		current = child
+	return null
+
+func _suppress_walk_sway(weapon_rig: Node3D) -> void:
+	# Capture rest poses once per weapon load, then slam the named nodes back
+	# to rest each frame AFTER the game's scripts have updated them.
+	if not _walk_sway_captured:
+		_walk_sway_rest.clear()
+		for node_name in _WALK_SWAY_NODES:
+			var n := _walk_chain_node(weapon_rig, node_name)
+			if n:
+				_walk_sway_rest[node_name] = n.transform
+		_walk_sway_captured = true
+		_walk_sway_logged = false
+	for node_name in _WALK_SWAY_NODES:
+		if not _walk_sway_rest.has(node_name):
+			continue
+		var n := _walk_chain_node(weapon_rig, node_name)
+		if n:
+			n.transform = _walk_sway_rest[node_name]
+	# One-time diagnostic so we can verify the override is actually landing.
+	if not _walk_sway_logged:
+		_walk_sway_logged = true
+		var f = FileAccess.open(_log_path, FileAccess.READ_WRITE)
+		if not f:
+			f = FileAccess.open(_log_path, FileAccess.WRITE)
+		if f:
+			f.seek_end(0)
+			f.store_line("[walk_sway] captured rest poses:")
+			for node_name in _WALK_SWAY_NODES:
+				if _walk_sway_rest.has(node_name):
+					var t: Transform3D = _walk_sway_rest[node_name]
+					f.store_line("  " + node_name + " origin=" + str(t.origin) + " basis_x=" + str(t.basis.x) + " basis_y=" + str(t.basis.y) + " basis_z=" + str(t.basis.z))
+				else:
+					f.store_line("  " + node_name + " NOT FOUND in chain")
+			f.close()
 
 
 func _format_node_name(raw: String) -> String:
@@ -4061,6 +4178,7 @@ func _load_config() -> void:
 				_vignette_strength = data["comfort"].get("vignette_strength", 0.7)
 				_two_hand_smooth_enabled = data["comfort"].get("two_hand_smooth_enabled", true)
 				_two_hand_smooth_speed = data["comfort"].get("two_hand_smooth_speed", 14.0)
+				_disable_walk_sway = not data["comfort"].get("walk_sway_enabled", true)
 			if data.has("controls"):
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
@@ -4468,6 +4586,7 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_comfort, "Render Scale", _render_scale, 0.5, 1.0, 0.05, "_on_cfg_render_scale")
 	_add_toggle_row(grid_comfort, "2H Stabilize", ["On", "Off"], 0 if _two_hand_smooth_enabled else 1, "_on_cfg_2h_smooth")
 	_add_stepper_row(grid_comfort, "2H Smooth", _two_hand_smooth_speed, 2.0, 30.0, 1.0, "_on_cfg_2h_smooth_spd")
+	_add_toggle_row(grid_comfort, "Weapon Sway", ["On", "Off"], 1 if _disable_walk_sway else 0, "_on_cfg_walk_sway")
 
 	_mk_sep(vbox_gen)
 
@@ -4815,6 +4934,10 @@ func _on_cfg_2h_smooth(idx: int) -> void:
 
 func _on_cfg_2h_smooth_spd(val: float) -> void:
 	_two_hand_smooth_speed = val
+
+
+func _on_cfg_walk_sway(idx: int) -> void:
+	_disable_walk_sway = (idx == 1)
 
 
 func _on_cfg_hud_dist(val: float) -> void:
@@ -5246,7 +5369,8 @@ func _save_full_config() -> void:
 		"vignette_enabled": _vignette_enabled,
 		"vignette_strength": _vignette_strength,
 		"two_hand_smooth_enabled": _two_hand_smooth_enabled,
-		"two_hand_smooth_speed": _two_hand_smooth_speed
+		"two_hand_smooth_speed": _two_hand_smooth_speed,
+		"walk_sway_enabled": not _disable_walk_sway
 	}
 
 	# Controls
