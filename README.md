@@ -40,10 +40,6 @@ Road to Vostok\
       override.cfg
       vr_mod_init.gd
       rtv_vr_mod.gdextension
-      hands\
-        Hand_Nails_low_L.gltf
-        Hand_Nails_low_R.gltf
-        hand_col.png
 ```
 
 ### Step 3 — Launch
