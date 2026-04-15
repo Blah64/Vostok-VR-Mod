@@ -8,7 +8,5 @@ logs/
 *.pdb
 *.obj
 *.vcxproj.user
-CLAUDE.md
-HANDOVER.md
 build.bat
 releases/
