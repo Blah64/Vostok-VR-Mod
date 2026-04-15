@@ -113,6 +113,7 @@ var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
 # of XRController3D in Forward Mobile) containing the .gltf scene with its Skeleton3D.
 # Finger curl is driven procedurally from grip/trigger analog each frame.
 var _hand_wrapper_left: Node3D = null
+var _hand_load_errors: Array = []   # buffered across the log reset in _install_xr_rig
 var _hand_wrapper_right: Node3D = null
 var _hand_skel_left: Skeleton3D = null
 var _hand_skel_right: Skeleton3D = null
@@ -819,6 +820,13 @@ func _install_xr_rig() -> void:
 	right_controller.button_pressed.connect(_on_button_pressed.bind("right"))
 	right_controller.button_released.connect(_on_button_released.bind("right"))
 
+	# Extract hand GLTF assets from Metro's VMZ cache to user:// so GLTFDocument
+	# can read them (res://resources/hands/ is not mounted into Godot's VFS).
+	if _extract_hand_assets_from_vmz():
+		_assets_base = "user://vr_mod/hands/"
+	else:
+		_hand_load_errors.append("hand: VMZ extraction failed — hands will use box fallback")
+
 	# Create simple controller hand models (visible when no weapon equipped)
 	print("[VR Mod] Creating hand models...")
 	_create_hand_model(left_controller, "LeftHandModel")
@@ -877,7 +885,8 @@ func _install_xr_rig() -> void:
 	if not FileAccess.file_exists(_config_path):
 		_save_full_config()
 
-	# Clear debug log and dump fire-related InputMap bindings
+	# Reset debug log — MUST stay here; hand creation above logs to the old file,
+	# those messages are erased. _hand_load_errors buffers them across this reset.
 	var dump_path = _log_path
 	var f = FileAccess.open(dump_path, FileAccess.WRITE)
 	if f:
@@ -904,7 +913,12 @@ func _install_xr_rig() -> void:
 			else:
 				f.store_line(action_name + " (NOT FOUND)")
 		f.close()
-		print("[VR Mod] Debug log with InputMap bindings: ", dump_path)
+		print("[VR Mod] Debug log reset: ", dump_path)
+
+	# Flush buffered hand load messages (written before the reset above)
+	for msg in _hand_load_errors:
+		_log(msg)
+	_hand_load_errors.clear()
 
 	# Create laser pointer mesh (hidden by default)
 	_laser_mesh = MeshInstance3D.new()
@@ -2309,26 +2323,81 @@ func _find_meshes_near_to_list(node: Node, pos: Vector3, radius: float, depth: i
 
 var _post_scroll_timer := -1.0
 
+
+func _extract_hand_assets_from_vmz() -> bool:
+	# Metro Mod Loader caches the VMZ as a zip at user://vmz_mount_cache/vr-mod.zip.
+	# Godot's res:// VFS does not expose the VMZ contents, so we extract the hand
+	# assets to user://vr_mod/hands/ where FileAccess and GLTFDocument can read them.
+	var zip_path := "user://vmz_mount_cache/vr-mod.zip"
+
+	var reader := ZIPReader.new()
+	var open_err := reader.open(zip_path)
+	if open_err != OK:
+		_hand_load_errors.append("hand: ZIPReader.open failed for " + zip_path + " err=" + str(open_err))
+		return false
+
+	# Ensure destination directory exists.
+	var da := DirAccess.open("user://")
+	if da:
+		da.make_dir_recursive("vr_mod/hands")
+
+	# Assets to extract (stored in VMZ with backslash paths on Windows).
+	var want := [
+		"resources/hands/Hand_Nails_low_L.gltf",
+		"resources/hands/Hand_Nails_low_R.gltf",
+		"resources/hands/hand_col.png",
+	]
+	var all_entries := reader.get_files()
+
+	for asset in want:
+		var filename := (asset as String).get_file()
+		# Match zip entry regardless of slash style.
+		var entry := ""
+		for f in all_entries:
+			if (f as String).replace("\\", "/") == asset:
+				entry = f
+				break
+		if entry.is_empty():
+			_hand_load_errors.append("hand: entry not found in VMZ: " + asset)
+			reader.close()
+			return false
+		var bytes := reader.read_file(entry)
+		if bytes.is_empty():
+			_hand_load_errors.append("hand: read_file empty for " + entry)
+			reader.close()
+			return false
+		var dest_path := "user://vr_mod/hands/" + filename
+		var wf := FileAccess.open(dest_path, FileAccess.WRITE)
+		if not wf:
+			_hand_load_errors.append("hand: cannot write " + dest_path + " err=" + str(FileAccess.get_open_error()))
+			reader.close()
+			return false
+		wf.store_buffer(bytes)
+		wf.close()
+
+	reader.close()
+	_hand_load_errors.append("hand: extracted assets to user://vr_mod/hands/")
+	return true
+
+
 func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 	var is_left := "Left" in model_name
 	var gltf_name := "Hand_Nails_low_L.gltf" if is_left else "Hand_Nails_low_R.gltf"
 	var gltf_path := _assets_base + gltf_name
 
-	# Note: FileAccess.file_exists() returns false for res:// paths inside a mounted
-	# resource pack (VMZ) — skip the existence check and let append_from_file fail
-	# if the asset is genuinely missing.
-
-	# Runtime GLTF import — works without the editor-side .import step
+	# Runtime GLTF import — append_from_file resolves relative texture references
+	# (hand_col.png) automatically from the same directory. Assets are pre-extracted
+	# from the VMZ cache to user://vr_mod/hands/ by _extract_hand_assets_from_vmz().
 	var gltf_doc := GLTFDocument.new()
 	var gltf_state := GLTFState.new()
 	var err := gltf_doc.append_from_file(gltf_path, gltf_state)
 	if err != OK:
-		_log("hand: GLTFDocument.append_from_file failed err=" + str(err) + " path=" + gltf_path)
+		_hand_load_errors.append("hand: append_from_file failed err=" + str(err) + " path=" + gltf_path)
 		_create_fallback_box_hand(controller, model_name)
 		return
 	var scene: Node = gltf_doc.generate_scene(gltf_state)
 	if not scene:
-		_log("hand: generate_scene returned null for " + gltf_path)
+		_hand_load_errors.append("hand: generate_scene returned null for " + gltf_path)
 		_create_fallback_box_hand(controller, model_name)
 		return
 
@@ -2346,7 +2415,7 @@ func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 	# Cache skeleton and finger bone indices for runtime curl animation
 	var skel: Skeleton3D = _find_node_by_class(scene, "Skeleton3D")
 	if not skel:
-		_log("hand: Skeleton3D not found inside " + gltf_name)
+		_hand_load_errors.append("hand: Skeleton3D not found inside " + gltf_name)
 		return
 
 	var suffix := "_L" if is_left else "_R"
@@ -2369,7 +2438,7 @@ func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 				indices.append(bi)
 				rest[bi] = skel.get_bone_rest(bi).basis.get_rotation_quaternion()
 			else:
-				_log("hand: bone not found: " + bone_base + suffix)
+				_hand_load_errors.append("hand: bone not found: " + bone_base + suffix)
 		fingers[finger_name] = indices
 
 	if is_left:
@@ -2437,11 +2506,11 @@ func _apply_hand_texture(root: Node) -> void:
 			var img := Image.load_from_file(tex_path)
 			if img:
 				_hand_tex = ImageTexture.create_from_image(img)
-				_log("hand: loaded skin texture " + tex_path)
+				_hand_load_errors.append("hand: loaded skin texture " + tex_path)
 			else:
-				_log("hand: Image.load_from_file failed for " + tex_path)
+				_hand_load_errors.append("hand: Image.load_from_file failed for " + tex_path)
 		else:
-			_log("hand: skin texture not found at " + tex_path)
+			_hand_load_errors.append("hand: skin texture not found at " + tex_path)
 	# Build a StandardMaterial3D with the skin texture (or plain skin colour as fallback).
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
