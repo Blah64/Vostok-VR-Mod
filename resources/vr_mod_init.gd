@@ -548,6 +548,8 @@ var smooth_turn_speed := 120.0
 var use_snap_turn := false
 var thumbstick_deadzone := 0.15
 var _config_dominant_hand := "right"
+var _standing_mode := false          # false = sitting (fixed height), true = standing (physical height)
+var _standing_mode_resnap := 0       # frames remaining before re-snapping origin after mode change
 var _snap_turn_cooldown := false
 var _last_game_cam_pos := Vector3.ZERO
 
@@ -602,6 +604,23 @@ func _ready() -> void:
 		return
 
 	_load_config()
+
+	# Create XR rig early so head tracking accumulates before _install_xr_rig() runs.
+	# xr_camera.position.y is valid once the node is in the tree — no need for current=true.
+	# use_xr stays false until the game camera is found (avoids gray screen during loading).
+	xr_origin = XROrigin3D.new()
+	xr_origin.name = "VRModOrigin"
+	xr_origin.world_scale = world_scale
+	add_child(xr_origin)
+	xr_camera = XRCamera3D.new()
+	xr_camera.name = "VRModCamera"
+	xr_origin.add_child(xr_camera)
+	# Apply tracking mode from config now that the interface is ready.
+	if _standing_mode and xr_interface:
+		xr_interface.play_area_mode = XRInterface.XR_PLAY_AREA_ROOMSCALE
+		print("[VR Mod] Tracking: standing (roomscale)")
+	else:
+		print("[VR Mod] Tracking: sitting (local)")
 	print("[VR Mod] Waiting for 3D camera (gameplay start)...")
 
 
@@ -747,6 +766,13 @@ func _process(delta: float) -> void:
 				if _holster_cooldown > 0.0:
 					_holster_cooldown -= delta
 
+				# Re-snap origin a few frames after tracking mode switch (reference space settles)
+				if _standing_mode_resnap > 0:
+					_standing_mode_resnap -= 1
+					if _standing_mode_resnap == 0:
+						_attach_rig_to_camera()
+						print("[VR Mod] Origin re-snapped after tracking mode change")
+
 				# Holster zone haptic feedback
 				_update_holster_zone_haptics()
 				_update_nvg_overlay(delta)
@@ -796,14 +822,10 @@ func _process(delta: float) -> void:
 func _install_xr_rig() -> void:
 	print("[VR Mod] Installing XR rig...")
 
-	xr_origin = XROrigin3D.new()
-	xr_origin.name = "VRModOrigin"
+	# xr_origin and xr_camera were created in _ready() for early HMD output.
+	# Just update settings and add controllers to the existing rig.
 	xr_origin.world_scale = world_scale
 	xr_interface.render_target_size_multiplier = _render_scale
-
-	xr_camera = XRCamera3D.new()
-	xr_camera.name = "VRModCamera"
-	xr_origin.add_child(xr_camera)
 
 	left_controller = XRController3D.new()
 	left_controller.name = "LeftHand"
@@ -847,14 +869,20 @@ func _install_xr_rig() -> void:
 	print("[VR Mod] Grab raycasts added to both controllers")
 
 
-	# Parent xr_origin to self (autoload) so it survives level/scene changes.
-	# Position sync is done via _sync_origin_to_game() using global coords.
-	add_child(xr_origin)
+	# xr_origin is already parented to self (done in _ready()).
 
 	if game_camera and is_instance_valid(game_camera):
-		var approx_head_height := 1.6
+		# Use the actual tracked head height instead of a hardcoded constant.
+		# xr_camera.position.y is the local Y relative to xr_origin (currently at 0,0,0),
+		# which equals the runtime-reported head height above the tracking floor.
+		var actual_head_height := xr_camera.position.y
+		if actual_head_height < 0.3:
+			actual_head_height = 1.6  # fallback: tracking not yet settled
+			print("[VR Mod] Head tracking not ready, using fallback 1.6m")
+		else:
+			print("[VR Mod] Tracked head height: ", actual_head_height, "m")
 		var cam_pos = game_camera.global_position
-		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - approx_head_height, cam_pos.z)
+		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - actual_head_height, cam_pos.z)
 		xr_origin.global_rotation = Vector3.ZERO
 		_last_game_cam_pos = cam_pos
 
@@ -1470,9 +1498,11 @@ func _attach_rig_to_camera() -> void:
 	if not game_camera or not xr_origin:
 		return
 	# xr_origin stays parented to self (autoload). Just snap position to new camera.
-	var approx_head_height := 1.6
+	var actual_head_height := xr_camera.position.y if xr_camera else 1.6
+	if actual_head_height < 0.3:
+		actual_head_height = 1.6
 	var cam_pos = game_camera.global_position
-	xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - approx_head_height, cam_pos.z)
+	xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - actual_head_height, cam_pos.z)
 	_last_game_cam_pos = cam_pos
 	xr_camera.cull_mask = game_camera.cull_mask
 	print("[VR Mod] Rig snapped to new camera at ", cam_pos)
@@ -3954,6 +3984,7 @@ func _load_config() -> void:
 			if data.has("controls"):
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
+				_standing_mode = data["controls"].get("standing_mode", false)
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
 				for slot in [1, 2, 3, 4]:
@@ -4375,6 +4406,7 @@ func _populate_config_ui() -> void:
 	_mk_header(vbox_gen, "Controls")
 	var grid_ctrl = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
+	_add_toggle_row(grid_ctrl, "Tracking Mode", ["Sitting", "Standing"], 1 if _standing_mode else 0, "_on_cfg_standing_mode")
 
 	# ── Tab 1: Zones ──
 	var scroll_zone = ScrollContainer.new()
@@ -4769,6 +4801,18 @@ func _on_cfg_hand(idx: int) -> void:
 	_create_watch_mesh()
 
 
+func _on_cfg_standing_mode(idx: int) -> void:
+	_standing_mode = (idx == 1)
+	if xr_interface and is_instance_valid(xr_interface):
+		if _standing_mode:
+			xr_interface.play_area_mode = XRInterface.XR_PLAY_AREA_ROOMSCALE
+		else:
+			xr_interface.play_area_mode = XRInterface.XR_PLAY_AREA_SITTING
+	# Re-snap origin after a few frames so the new reference space has settled
+	_standing_mode_resnap = 3
+	print("[VR Mod] Tracking mode: ", "standing" if _standing_mode else "sitting")
+
+
 func _on_cfg_hz_radius(val: float) -> void:
 	_holster_zone_radius = val
 
@@ -5121,7 +5165,8 @@ func _save_full_config() -> void:
 	# Controls
 	data["controls"] = {
 		"thumbstick_deadzone": thumbstick_deadzone,
-		"dominant_hand": _config_dominant_hand
+		"dominant_hand": _config_dominant_hand,
+		"standing_mode": _standing_mode
 	}
 
 	# HUD
