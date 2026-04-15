@@ -43,6 +43,8 @@ Road to Vostok\
 
 Put on your headset, start SteamVR (or Meta PC app), then launch using **`launch_vr.bat`** in the game root — do **not** use Steam's Play button directly.
 
+The Headset will have a black screen at the main menu.  It won't display anything until the world loads in.
+
 Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\`.
 
 **To update the mod** (no native changes): replace `mods\vr-mod.vmz` with the new version — no other files need to be touched.
