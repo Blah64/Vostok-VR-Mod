@@ -2956,6 +2956,17 @@ func _update_hand_visibility() -> void:
 	if left_hand: left_hand.visible = true
 	if right_hand: right_hand.visible = true
 
+	# Reset hand wrappers to their canonical GLTF position/rotation when no weapon
+	# sway is active (UNARMED / SLING), so a stale sway displacement from the last
+	# DRAWN frame does not persist after holstering.
+	if _holster_state == HolsterState.UNARMED or _holster_state == HolsterState.SLING:
+		if _hand_wrapper_left:
+			_hand_wrapper_left.position = HAND_GLTF_OFFSET_LEFT
+			_hand_wrapper_left.rotation_degrees = HAND_GLTF_ROTATION_LEFT
+		if _hand_wrapper_right:
+			_hand_wrapper_right.position = HAND_GLTF_OFFSET_RIGHT
+			_hand_wrapper_right.rotation_degrees = HAND_GLTF_ROTATION_RIGHT
+
 	# Laser pointer: grab range when UNARMED, interact range when LOWERED (weapon hand)
 	if _laser_mesh and not _menu_open and not _config_screen_open:
 		var show_laser := false
@@ -3321,6 +3332,9 @@ func _sync_weapon_to_controller() -> void:
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
 	weapon_rig.global_position = controller.global_position + aim_basis * (local_offset + recoil_delta.origin)
 
+	# Displace hand models so they visually follow weapon sway / recoil.
+	_apply_sway_to_hands(controller, off_controller, aim_basis, local_offset, recoil_delta, use_two_hand)
+
 	# Hide all arm surfaces on every weapon type (guns, knives, grenades)
 	_hide_arms_in_subtree(weapon_rig)
 
@@ -3330,6 +3344,61 @@ func _sync_weapon_to_controller() -> void:
 	# Scope PIP: detect and activate game's scope SubViewport, position camera
 	_setup_scope_pip(weapon_rig)
 	_update_scope_camera()
+
+
+func _apply_sway_to_hands(
+		dom_ctrl: XRController3D, sup_ctrl: XRController3D,
+		aim_basis: Basis, local_offset: Vector3,
+		recoil_delta: Transform3D, use_two_hand: bool) -> void:
+	# Displace each hand wrapper so the hand appears to grip the gun rather than
+	# floating at the raw controller position while the weapon bobs from sway/recoil.
+	#
+	# Displacement formula for a point P in weapon_rig-no-sway local space:
+	#   world_disp(P) = aim_basis * (recoil_delta.origin + recoil_delta.basis * P - P)
+	# Dominant grip: P_dom = -local_offset  (weapon_rig placed at ctrl + aim * local_offset)
+	# Support grip: P_sup computed from off-hand controller world position
+	#
+	# Displacement is applied as a controller-LOCAL offset so the configurable
+	# HAND_GLTF_OFFSET_* is preserved (adding to it, not overwriting it).
+	# Rotation is intentionally NOT changed — sway rotation is small (1-3 deg) and
+	# overriding global_basis would bake in a stale rotation on frames where we skip.
+	#
+	# Both wrappers are reset to their canonical GLTF position/rotation every call
+	# so stale displacement from a previous frame never persists.
+
+	var weapon_hand := _get_weapon_hand()
+	var is_right_weapon := weapon_hand == "right"
+	var dom_wrapper := _hand_wrapper_right if is_right_weapon else _hand_wrapper_left
+	var sup_wrapper := _hand_wrapper_left  if is_right_weapon else _hand_wrapper_right
+	var dom_off := HAND_GLTF_OFFSET_RIGHT    if is_right_weapon else HAND_GLTF_OFFSET_LEFT
+	var dom_rot := HAND_GLTF_ROTATION_RIGHT  if is_right_weapon else HAND_GLTF_ROTATION_LEFT
+	var sup_off := HAND_GLTF_OFFSET_LEFT     if is_right_weapon else HAND_GLTF_OFFSET_RIGHT
+	var sup_rot := HAND_GLTF_ROTATION_LEFT   if is_right_weapon else HAND_GLTF_ROTATION_RIGHT
+
+	# Always reset both wrappers to canonical pose first; sway is then additive
+	if dom_wrapper:
+		dom_wrapper.position = dom_off
+		dom_wrapper.rotation_degrees = dom_rot
+	if sup_wrapper:
+		sup_wrapper.position = sup_off
+		sup_wrapper.rotation_degrees = sup_rot
+
+	if recoil_delta == Transform3D.IDENTITY:
+		return
+
+	# Dominant hand displacement
+	if dom_wrapper:
+		var p_dom := -local_offset
+		var world_disp := aim_basis * (recoil_delta.origin + recoil_delta.basis * p_dom - p_dom)
+		# Convert to controller-local space so GLTF offset is preserved additively
+		dom_wrapper.position = dom_off + dom_ctrl.global_basis.inverse() * world_disp
+
+	# Support hand displacement (two-hand only)
+	if use_two_hand and sup_ctrl and sup_ctrl.get_is_active() and sup_wrapper:
+		var weapon_rig_no_sway_origin := dom_ctrl.global_position + aim_basis * local_offset
+		var p_sup := aim_basis.inverse() * (sup_ctrl.global_position - weapon_rig_no_sway_origin)
+		var world_disp_sup := aim_basis * (recoil_delta.origin + recoil_delta.basis * p_sup - p_sup)
+		sup_wrapper.position = sup_off + sup_ctrl.global_basis.inverse() * world_disp_sup
 
 
 func _sync_weapon_to_sling(weapon_rig: Node3D) -> void:
@@ -3381,7 +3450,7 @@ var _walk_sway_logged := false
 # settle so we capture the steady-state (calibrated) values instead.
 var _walk_sway_capture_delay := 0.0
 var _rest_capture_pending := false  # Waiting for Handling.gd to settle before capturing
-const _WALK_SWAY_CAPTURE_DELAY_LOAD := 1.0
+const _WALK_SWAY_CAPTURE_DELAY_LOAD := 2.0
 const _WALK_SWAY_CAPTURE_DELAY_TOGGLE := 0.1
 
 func _walk_chain_node(weapon_rig: Node3D, node_name: String) -> Node3D:
