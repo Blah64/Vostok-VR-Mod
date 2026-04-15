@@ -1,6 +1,6 @@
 # Road to Vostok — VR Mod v1.0.0
 
-A community VR mod for **Road to Vostok** (Early Access). Play the full game in
+A VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
 
 ---
@@ -50,7 +50,7 @@ Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\`.
 
 **To update the mod** (no native changes): replace `mods\vr-mod.vmz` with the new version — no other files need to be touched.
 
-**To disable the mod:** remove or rename `mods\vr-mod.vmz`.
+**To disable the mod:** remove or rename `mods\vr-mod.vmz` and replace override.cfg with Metro Mod Loader's version.
 
 ---
 
