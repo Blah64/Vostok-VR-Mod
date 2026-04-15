@@ -1513,8 +1513,8 @@ func _update_laser_pointer() -> void:
 			motion.button_mask = mask
 			Input.parse_input_event(motion)
 
-			# Update laser length - stop 15cm before the quad to avoid clipping
-			var dist = ray_origin.distance_to(hit_pos) - 0.15
+			# Laser tip flush with quad surface. no_depth_test=true prevents clipping.
+			var dist = ray_origin.distance_to(hit_pos) - 0.01
 			if dist > 0.1:
 				(_laser_mesh.mesh as CylinderMesh).height = dist
 				_laser_mesh.position.z = -dist / 2.0
@@ -5160,7 +5160,7 @@ func _update_config_laser() -> void:
 		motion.global_position = _config_laser_pos
 		_config_panel_vp.push_input(motion)
 		# Update laser visual
-		var dist = ray_origin.distance_to(hit_pos) - 0.15
+		var dist = ray_origin.distance_to(hit_pos) - 0.01
 		if dist > 0.1:
 			(_laser_mesh.mesh as CylinderMesh).height = dist
 			_laser_mesh.position.z = -dist / 2.0
