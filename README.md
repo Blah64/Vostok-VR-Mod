@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod v1.1.0
+# Road to Vostok — VR Mod v1.1.1
 
 A VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
@@ -62,7 +62,7 @@ Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\`.
 |-------|--------|
 | Left stick | Move (forward / strafe) |
 | Right stick left / right | Turn |
-| A (right) | Jump |
+| A (right) | Jump / click UI button (when menu open) |
 | Y (left) | Open / close inventory |
 | Left stick click | Sprint |
 | Right stick click | Crouch |
@@ -197,13 +197,17 @@ When a menu or inventory panel is open the laser switches to **blue** and extend
 
 | Input | Action |
 |-------|--------|
-| Dominant trigger | Click (left mouse) |
+| A (right) | Click button under laser |
+| Dominant trigger (hold + move) | Drag item |
 | Dominant grip | Right-click / context menu |
-| Support grip (hold) + dominant trigger | Fast transfer (Ctrl + click) |
+| Support grip (hold) + A | Fast transfer (Ctrl + click) |
 | Right stick up / down | Scroll |
 
-**Fast transfer:** Hold the **support hand grip** to activate a Ctrl modifier, then
-trigger-click each item you want to move. Release the support grip when done.
+**Clicking buttons:** Point the laser at a button and press **A** — the click is instantaneous so the cursor cannot drift between press and release.
+
+**Dragging items:** Point at an item, **hold the trigger** to pick it up, move the controller to the destination, then release.
+
+**Fast transfer:** Hold the **support hand grip** to activate a Ctrl modifier, then press **A** on each item you want to move. Release the support grip when done.
 
 ---
 
@@ -297,9 +301,6 @@ Both methods can be used interchangeably. A haptic pulse confirms each rail incr
 
 ---
 
-## Known Issues
-
-Esc menu opens, but can't be interacted.
 ---
 
 ## Troubleshooting
