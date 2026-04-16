@@ -521,6 +521,8 @@ var _menu_open := false           # True while inventory/menu is visible
 var _menu_ctrl_held := false      # True while support grip is held in menus (Ctrl modifier for fast transfer)
 var _esc_menu_active := false     # True while ESC menu is open (toggled by menu button; forces _interface_open)
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
+var _menu_click_pos := Vector2(-1, -1)    # Cursor position snapshotted at mouse-down for button release
+var _menu_dragging := false               # True once cursor moved far enough from press to be a drag
 var _laser_diag_logged := false  # One-shot diagnostic log on first laser update per menu open
 var _esc_hovered_control: Control = null  # Currently hovered ESC menu control (for manual hover)
 
@@ -1590,9 +1592,7 @@ func _update_laser_pointer() -> void:
 				var main_vp: Viewport = get_viewport()
 				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " vp_pos=" + str(vp_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size) + " win=" + str(DisplayServer.window_get_size()))
 
-			# warp_mouse generates a real OS mouse event that drives both button hover
-			# and loot pool item mouse_entered. Don't also push_input a motion event —
-			# the two together produce conflicting GUI states and break button clicking.
+			# warp_mouse always — keeps cursor at laser position for hover and drag.
 			get_viewport().warp_mouse(vp_pos)
 
 			# Laser tip flush with quad surface. no_depth_test=true prevents clipping.
@@ -2175,6 +2175,23 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_save_grip_config()
 					_adjust_mode = false
 					print("[VR Mod] === ADJUST MODE OFF (saved) ===")
+				elif _interface_open and _laser_screen_pos.x >= 0:
+					# A = instant button click while menu/inventory is open.
+					# Atomic press+release in the same frame — cursor can't drift between them.
+					var ev_dn := InputEventMouseButton.new()
+					ev_dn.button_index = MOUSE_BUTTON_LEFT
+					ev_dn.pressed = true
+					ev_dn.position = _laser_screen_pos
+					ev_dn.global_position = _laser_screen_pos
+					ev_dn.button_mask = MOUSE_BUTTON_MASK_LEFT
+					get_viewport().push_input(ev_dn, true)
+					var ev_up := InputEventMouseButton.new()
+					ev_up.button_index = MOUSE_BUTTON_LEFT
+					ev_up.pressed = false
+					ev_up.position = _laser_screen_pos
+					ev_up.global_position = _laser_screen_pos
+					ev_up.button_mask = 0
+					get_viewport().push_input(ev_up, true)
 				else:
 					_inject_action("jump", true)
 		"by_button":  # B on right, Y on left (physical mapping)
@@ -2361,7 +2378,7 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 	event.pressed = pressed
 	event.ctrl_pressed = _menu_ctrl_held
 	if _interface_open and _laser_screen_pos.x >= 0:
-		event.position = _laser_screen_pos
+		event.position = get_viewport().get_mouse_position()
 	else:
 		event.position = get_viewport().get_visible_rect().size / 2.0
 	event.global_position = event.position
@@ -2374,7 +2391,7 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 				MOUSE_BUTTON_MIDDLE: mask |= MOUSE_BUTTON_MASK_MIDDLE
 	event.button_mask = mask
 	Input.parse_input_event(event)
-	get_viewport().push_input(event, false)
+	get_viewport().push_input(event, true)
 
 
 func _inject_scroll(direction: int) -> void:
@@ -2382,20 +2399,19 @@ func _inject_scroll(direction: int) -> void:
 	var event = InputEventMouseButton.new()
 	event.button_index = MOUSE_BUTTON_WHEEL_UP if direction > 0 else MOUSE_BUTTON_WHEEL_DOWN
 	event.pressed = true
-	# _laser_screen_pos is in canvas coords; push_input(true) uses canvas/local coords.
 	if _interface_open and _laser_screen_pos.x >= 0:
-		event.position = _laser_screen_pos
+		event.position = get_viewport().get_mouse_position()
 	else:
 		event.position = get_viewport().get_visible_rect().size / 2.0
 	Input.parse_input_event(event)
-	get_viewport().push_input(event, false)
+	get_viewport().push_input(event, true)
 	# Scroll events need immediate release
 	var release = InputEventMouseButton.new()
 	release.button_index = event.button_index
 	release.pressed = false
 	release.position = event.position
 	Input.parse_input_event(release)
-	get_viewport().push_input(release, false)
+	get_viewport().push_input(release, true)
 
 
 func _inject_action(action_name: String, pressed: bool, strength: float = 1.0) -> void:
