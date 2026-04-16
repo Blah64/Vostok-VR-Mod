@@ -3263,7 +3263,8 @@ func _sync_weapon_to_controller() -> void:
 			# Effective off-hand: shift by fg_off (in single-hand-aim space) so the weapon's
 			# visual foregrip lands on the off-hand controller without moving the dominant grip.
 			var eff_off = off_controller.global_position + single_hand_basis * fg_off
-			var forward = (eff_off - controller.global_position).normalized()
+			var dom_hand_off = HAND_GLTF_OFFSET_RIGHT if _get_weapon_hand() == "right" else HAND_GLTF_OFFSET_LEFT
+			var forward = (eff_off - controller.global_position - controller.global_basis * dom_hand_off).normalized()
 			# Use world up; fall back to controller Y when aiming nearly vertical.
 			# Godot is right-handed: right = forward x up (NOT up x forward, which gives LEFT
 			# and produces an improper/mirrored basis). Previous bug flipped aim_basis.x and
