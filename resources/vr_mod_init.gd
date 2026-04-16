@@ -50,6 +50,8 @@ enum HolsterState { UNARMED, DRAWN, LOWERED, SLING }
 var _holster_state: int = HolsterState.UNARMED
 var _weapon_hand := ""  # "left" or "right" — which hand currently holds weapon
 var _weapon_slot := 0   # 1-4 mapped to KEY_1..KEY_4, 0 = none
+var _transition_slot := 0   # slot saved across level transition (0 = was unarmed)
+var _transition_hand := ""  # hand saved across level transition
 
 const HOLSTER_ZONES := {
 	1: {"name": "right_shoulder", "key": KEY_1},
@@ -779,6 +781,16 @@ func _process(delta: float) -> void:
 						_walk_sway_logged = false
 						_rest_capture_pending = true
 						_walk_sway_capture_delay = _WALK_SWAY_CAPTURE_DELAY_LOAD
+						# After a level transition with a weapon equipped, restore DRAWN
+						# state so the mod resumes controlling weapon position/arm hiding.
+						# The raise timer below will then inject weapon_high correctly.
+						if _transition_slot > 0:
+							_holster_state = HolsterState.DRAWN
+							_weapon_slot = _transition_slot
+							_weapon_hand = _transition_hand
+							print("[VR Mod] Restoring DRAWN state: slot=", _weapon_slot, " hand=", _weapon_hand)
+							_transition_slot = 0
+							_transition_hand = ""
 						# Auto-raise weapon after short delay
 						_weapon_raise_timer = 0.5
 						print("[VR Mod] Will auto-raise weapon in 0.5s")
@@ -1647,6 +1659,14 @@ func _on_level_transition() -> void:
 	# Reset state that depends on game scene nodes (freed during level change).
 	_level_transition_count += 1
 	print("[VR Mod] Level transition #", _level_transition_count, " — resetting scene-dependent state")
+	# Save weapon slot/hand so we can re-take control after the new scene loads.
+	if _holster_state != HolsterState.UNARMED and _weapon_slot > 0:
+		_transition_slot = _weapon_slot
+		_transition_hand = _weapon_hand if _weapon_hand != "" else _config_dominant_hand
+		print("[VR Mod] Saving pre-transition state: slot=", _transition_slot, " hand=", _transition_hand)
+	else:
+		_transition_slot = 0
+		_transition_hand = ""
 	_weapons_reparented = false
 	_weapon_loaded = false
 	_weapon_is_long = false
