@@ -582,6 +582,7 @@ var _two_hand_smooth_enabled := true
 var _two_hand_smooth_speed := 14.0
 var _two_hand_smooth_basis := Basis.IDENTITY
 var _two_hand_was_active := false
+var _arc_raw_aim_basis := Basis.IDENTITY  # unsmoothed raw aim for arc_comp; seeded on two-hand start to prevent position jump
 
 # Comfort vignette
 var _vignette_enabled := false
@@ -3312,14 +3313,23 @@ func _sync_weapon_to_controller() -> void:
 			# First frame: seed from the exact single-hand basis so the weapon stays
 			# exactly where it was the moment the off-hand grabs.
 			_two_hand_smooth_basis = single_hand_basis
+			# Also seed raw aim basis — arc_comp on first frame will be ZERO (no jump).
+			_arc_raw_aim_basis = single_hand_basis
+		else:
+			# Subsequent frames: record unsmoothed raw aim for arc_comp (no lag).
+			_arc_raw_aim_basis = target_basis
 		_two_hand_smooth_basis = _two_hand_smooth_basis.slerp(target_basis, clampf(get_process_delta_time() * _two_hand_smooth_speed, 0.0, 1.0))
 		aim_basis = _two_hand_smooth_basis
 
 	if use_two_hand:
 		_two_hand_was_active = true
+		if not _two_hand_smooth_enabled:
+			# Smooth disabled: aim_basis IS raw aim.
+			_arc_raw_aim_basis = aim_basis
 	else:
 		_two_hand_was_active = false
 		_fg_grip_captured = false
+		_arc_raw_aim_basis = single_hand_basis  # reset so next grab starts clean
 
 	# Handle deferred rest capture: wait for Handling.gd to animate the weapon
 	# into its aimed steady state before sampling, so _recoil_rest_xform and
@@ -3353,10 +3363,12 @@ func _sync_weapon_to_controller() -> void:
 		recoil_delta = _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
 
-	# Pivot compensation: during two-hand aiming, shift the weapon so its grip
-	# aligns with the hand model center (dom_off from controller) instead of the
-	# controller origin. This keeps the hand anchored to the physical controller
-	# while the weapon pivots around the hand's position.
+	# Pivot compensation: keep the weapon grip at the dominant hand model center.
+	# Without this, aim_basis * local_offset shifts the weapon toward the off-hand as
+	# the aim direction changes, making the weapon appear glued to the off-hand.
+	# Uses _arc_raw_aim_basis (unsmoothed) to avoid lag on the dominant hand.
+	# On the first frame of two-hand, _arc_raw_aim_basis == single_hand_basis so
+	# arc_r_delta = Identity and arc_comp = 0 — no position jump at transition.
 	var arc_comp := Vector3.ZERO
 	var arc_is_right := _get_weapon_hand() == "right"
 	var arc_dom_off := HAND_GLTF_OFFSET_RIGHT if arc_is_right else HAND_GLTF_OFFSET_LEFT
@@ -3366,7 +3378,7 @@ func _sync_weapon_to_controller() -> void:
 	var arc_w2h := Basis(Vector3.UP, deg_to_rad(-(180.0 + arc_sh_rot))) * arc_rot_b
 	var arc_r_delta := Basis.IDENTITY
 	if use_two_hand:
-		arc_r_delta = controller.global_basis.inverse() * weapon_rig.global_basis * arc_w2h * arc_rot_b.inverse()
+		arc_r_delta = controller.global_basis.inverse() * _arc_raw_aim_basis * arc_w2h * arc_rot_b.inverse()
 		arc_comp = controller.global_basis * (arc_dom_off - arc_r_delta * arc_dom_off)
 	weapon_rig.global_position = controller.global_position + arc_comp + aim_basis * (local_offset + recoil_delta.origin)
 
@@ -3454,8 +3466,6 @@ func _apply_sway_to_hands(
 	if dom_wrapper:
 		var grip_world := weapon_rig.global_transform * (-local_offset)
 		var grip_disp := dom_ctrl.global_basis.inverse() * (grip_world - dom_ctrl.global_position)
-		# Subtract arc_comp contribution so the hand tracks recoil/sway but not
-		# the pivot shift (arc_comp shifts the weapon, not the hand).
 		var arc_local := dom_ctrl.global_basis.inverse() * arc_comp
 		dom_wrapper.position = dom_off + grip_disp - arc_local
 

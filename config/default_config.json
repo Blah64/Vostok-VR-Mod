@@ -4,19 +4,21 @@
 		"snap_turn_degrees": 45.0,
 		"turn_type": "smooth",
 		"two_hand_smooth_enabled": true,
-		"two_hand_smooth_speed": 14.0,
+		"two_hand_smooth_speed": 15.0,
 		"vignette_enabled": false,
-		"vignette_strength": 0.7
+		"vignette_strength": 0.7,
+		"walk_sway_enabled": true
 	},
 	"controls": {
 		"dominant_hand": "right",
+		"standing_mode": false,
 		"thumbstick_deadzone": 0.15
 	},
 	"foregrip_offsets": {
 		"1": {
-			"x": -0.11,
-			"y": 0.038,
-			"z": -0.108
+			"x": -0.116,
+			"y": 0.014,
+			"z": -0.03
 		},
 		"2": {
 			"x": 0.0,
@@ -32,6 +34,21 @@
 			"x": 0.0,
 			"y": 0.0,
 			"z": 0.0
+		}
+	},
+	"foregrip_p_local": {
+		"1": {
+			"x": -0.1281,
+			"y": -0.1435,
+			"z": 0.5118
+		}
+	},
+	"foregrip_r_local": {
+		"1": {
+			"w": 0.6865,
+			"x": 0.3148,
+			"y": -0.6237,
+			"z": -0.2018
 		}
 	},
 	"hand_models": {
@@ -144,9 +161,9 @@
 		"glance_angle": 40.0,
 		"glance_enabled": false,
 		"offset": {
-			"x": -0.05,
+			"x": -0.06,
 			"y": -0.08,
-			"z": 0.32
+			"z": 0.34
 		},
 		"rot": {
 			"x": 180.0,
@@ -158,28 +175,28 @@
 	},
 	"weapon_offsets": {
 		"1": {
-			"rot": 1.1,
-			"x": 0.122,
-			"y": -0.233,
-			"z": -0.876
+			"rot": 0.1,
+			"x": 0.059,
+			"y": 0.157,
+			"z": -0.309
 		},
 		"2": {
-			"rot": 3.0,
-			"x": 0.102,
-			"y": -0.301,
-			"z": -1.121
+			"rot": 6.6,
+			"x": 0.042,
+			"y": 0.146,
+			"z": -0.409
 		},
 		"3": {
-			"rot": -94.7,
-			"x": 0.105,
-			"y": 0.087,
-			"z": -0.327
+			"rot": -107.1,
+			"x": 0.076,
+			"y": 0.167,
+			"z": -0.227
 		},
 		"4": {
-			"rot": -69.7,
-			"x": 0.09,
-			"y": -0.302,
-			"z": -0.958
+			"rot": -59.3,
+			"x": 0.125,
+			"y": 0.134,
+			"z": -0.399
 		}
 	},
 	"weapons": {
