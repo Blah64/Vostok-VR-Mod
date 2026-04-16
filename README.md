@@ -200,7 +200,7 @@ When a menu or inventory panel is open the laser switches to **blue** and extend
 | A (right) | Click button under laser |
 | Dominant trigger (hold + move) | Drag item |
 | Dominant grip | Right-click / context menu |
-| Support grip (hold) + A | Fast transfer (Ctrl + click) |
+| Support grip (hold) + Trigger | Fast transfer (Ctrl + click) |
 | Right stick up / down | Scroll |
 
 **Clicking buttons:** Point the laser at a button and press **A** — the click is instantaneous so the cursor cannot drift between press and release.
