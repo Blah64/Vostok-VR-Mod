@@ -387,9 +387,10 @@ var _decor_x_press_time := 0.0
 `_sync_weapon_to_controller()` runs every frame in phase 2 **after** `_sync_origin_to_game()`:
 - Gets `weapon_rig = game_camera/Manager/<child 0>`
 - Sets `weapon_rig.global_basis` from controller basis + 180° Y flip + slot rotation offset (slot 4 uses 0° rotation — see Grenade System)
-- Sets `weapon_rig.global_position = controller.global_position + aim_basis * slot_grip_offset`
-- Two-hand mode: when `_support_grip_held`, aims toward off-hand controller
-- **Two-hand stabilization:** after the nested two-hand block computes `aim_basis`, a post-hoc smoothing pass at function scope slerps `aim_basis.z` (the raw hand-to-hand forward vector) toward a stored `_two_hand_smooth_forward`. Basis is then reconstructed from the smoothed forward. Kept outside the nested block deliberately — adding variable declarations inside deeply nested blocks causes GDScript parse errors (black HMD) in Godot 4.6.
+- Sets `weapon_rig.global_position = controller.global_position + arc_comp + aim_basis * (local_offset + recoil_delta.origin)`
+- Two-hand mode: when `_support_grip_held`, aims from dominant hand model centre (`controller.global_position + controller.global_basis * HAND_GLTF_OFFSET`) toward the raw off-hand controller position. Only the dominant side uses the GLTF offset — adding the off-hand GLTF offset to the aim target skews aim when the off-hand controller is rotated.
+- **Two-hand stabilization:** `_two_hand_smooth_basis` (full `Basis`) is slerped toward the raw two-hand `aim_basis` each frame at `_two_hand_smooth_speed`. Seeded to `single_hand_basis` on the first two-hand frame so there is no jump at transition. The smoothed result replaces `aim_basis`.
+- **`_arc_raw_aim_basis` (pivot compensation):** stores the unsmoothed raw two-hand aim each frame. Seeded to `single_hand_basis` on the first two-hand frame so `arc_comp = 0` at transition (no position jump). Used in the `arc_comp` formula instead of `weapon_rig.global_basis` (which lagged behind the smoothed aim and made the dominant hand feel dampened). Single-hand: `arc_comp = 0` always.
 - Calls `_hide_arms_in_subtree(weapon_rig)` every frame to hide game arm meshes (surfaces 0-1 of "Arms" node only; hand meshes surfaces 2+ stay visible)
 
 **Execution order matters:** `_sync_origin_to_game()` → `_process_input()` → `_sync_weapon_to_controller()` → `_update_hand_visibility()` → `_update_grabbed()`
@@ -405,6 +406,38 @@ var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
 
 Loaded from `config/default_config.json` under `weapon_offsets.{slot}.{x,y,z,rot}`.
 Tuned live in-game via **grip adjust mode** (X button when DRAWN).
+
+## Foregrip Lock System
+
+Locks the support hand visual to a calibrated weapon-local position during two-hand aiming.
+
+- **Arc 1 — visual lock:** `_apply_sway_to_hands` positions `sup_wrapper` at `weapon_rig.global_transform * _fg_p_sup_local` each frame, so the support hand model stays on the foregrip regardless of where the off-hand controller physically is.
+- **Arc 2 — adjust mode:** X + off-hand grip while DRAWN → gun freezes at `_fg_adjust_frozen_xform`; player physically moves support hand to the foregrip location; A saves the sampled position to `_slot_fg_p_local[slot]`, X discards.
+- **Arc 3 — load on grab:** `_fg_grip_captured` is false on the first frame of two-hand. `_apply_sway_to_hands` loads `_slot_fg_p_local[slot]` into `_fg_p_sup_local` and sets `_fg_grip_captured = true`. Subsequent frames skip the load.
+
+**State variables:**
+```gdscript
+var _slot_fg_p_local := {}               # weapon-local foregrip position per slot
+var _slot_fg_r_local := {}               # weapon-local foregrip rotation (Basis) per slot
+var _fg_p_sup_local := Vector3.ZERO      # active foregrip world pos in weapon_rig local space
+var _fg_r_sup_local := Basis.IDENTITY    # active foregrip rotation in weapon_rig local space
+var _fg_grip_captured := false           # true once foregrip loaded for current grab
+var _cached_weapon_rig: Node3D = null    # last weapon_rig ref; used at adjust entry/save
+var _fg_adjust_mode := false             # gun frozen; support hand physically moved to foregrip
+var _fg_adjust_frozen_xform := Transform3D.IDENTITY  # weapon transform at adjust entry
+var _fg_adjust_saved_p := Vector3.ZERO   # pre-adjust p for discard
+var _fg_adjust_saved_r := Basis.IDENTITY # pre-adjust r for discard
+var _arc_raw_aim_basis := Basis.IDENTITY # unsmoothed raw aim for arc_comp; seeded on two-hand start
+```
+
+**Adjust mode flow:**
+1. X pressed while DRAWN + off-hand gripping → `_fg_adjust_mode = true`, weapon frozen, `_fg_grip_captured = false`.
+2. Each frame while in adjust mode: `_apply_sway_to_hands` skips the foregrip lock — support hand model follows the raw controller (live preview).
+3. A pressed → sample support hand controller position/basis, convert to weapon-local space, write to `_slot_fg_p_local[slot]` / `_slot_fg_r_local[slot]`, call `_save_grip_config()`, exit.
+4. X pressed → restore `_fg_adjust_saved_p/_r`, exit without saving.
+5. Off-hand grip released → exit without saving.
+
+**Config keys:** `foregrip_p_local.{slot}.{x,y,z}` and `foregrip_r_local.{slot}.{w,x,y,z}`.
 
 ## Grab System
 

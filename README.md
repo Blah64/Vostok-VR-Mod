@@ -252,24 +252,19 @@ automatically if you lower or holster the weapon.
 
 ## Foregrip Adjust Mode
 
-Align the weapon model's foregrip with where your off-hand controller actually sits when
-you use a two-hand grip. This affects **aim direction only** — the dominant-hand grip
-position is unchanged.
+Calibrate exactly where the support hand visually grips the weapon during two-hand aiming.
+The weapon model is frozen in place so you can position your hand precisely.
 
 1. Draw a weapon and grab with the off-hand (support grip)
-2. Press **X (left)** while the off-hand is gripping → controller prints "FG ADJUST MODE ON"
-3. Use the sticks to tune the foregrip offset:
-
-| Input | Adjusts |
-|-------|---------|
-| Left stick X | Foregrip left / right (X) |
-| Left stick Y | Foregrip up / down (Y) |
-| Right stick Y | Foregrip forward / back (Z) |
-
-4. Press **A (right)** to save to `default_config.json` and exit
-5. Press **X (left)** again to discard changes and exit
+2. Press **X (left)** while the off-hand is gripping → the gun freezes in place
+3. **Physically move your support hand** to the foregrip position on the frozen weapon
+4. Press **A (right)** to save the current hand position as the foregrip point
+5. Press **X (left)** to discard and exit without saving
 
 The mode also exits automatically if you release the off-hand grip.
+
+Once saved, the support hand visual will lock to that exact point on the weapon every time
+you use a two-hand grip — regardless of where your controller physically is.
 
 ---
 
