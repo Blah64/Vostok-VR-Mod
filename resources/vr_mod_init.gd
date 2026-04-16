@@ -1625,7 +1625,8 @@ func _on_level_transition() -> void:
 	_clear_grenade_state()
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
-	_watch_crop_computed = false
+	_teardown_watch_content()
+	_setup_watch_content()
 	_cleanup_scope()
 	if _grabbed_object and not is_instance_valid(_grabbed_object):
 		_grabbed_object = null
