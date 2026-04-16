@@ -39,6 +39,8 @@ var _throw_samples: Array = []  # Recent [position, time] pairs for throw veloci
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_is_long := false  # True for rifles/shotguns that support two-hand aim
 var _recoil_rest_xform := Transform3D.IDENTITY  # Cached rest pose of recoil chain
+var _prev_recoil_mag := 0.0         # recoil chain origin magnitude last frame; rising edge = shot
+var _fire_haptic_cooldown := 0.0    # seconds until next fire haptic allowed
 var _disable_walk_sway := false  # Skip Sway node contribution in chain delta (walk/movement bob); keeps Noise stamina wobble intact
 var _grenade_pin_pulled := false   # True after pin pulled; grip release = throw
 var _weapon_raise_timer := -1.0  # Timer to auto-raise weapon after equip
@@ -416,6 +418,8 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_prev_recoil_mag = 0.0
+	_fire_haptic_cooldown = 0.0
 	_walk_sway_captured = false
 	_walk_sway_logged = false
 	_rest_capture_pending = false
@@ -515,6 +519,8 @@ func _holster_weapon() -> void:
 	_pump_prev_pos = Vector3.ZERO
 	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_prev_recoil_mag = 0.0
+	_fire_haptic_cooldown = 0.0
 	_walk_sway_captured = false
 	_walk_sway_logged = false
 	_rest_capture_pending = false
@@ -1700,6 +1706,8 @@ func _on_level_transition() -> void:
 	_pump_prev_pos = Vector3.ZERO
 	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_prev_recoil_mag = 0.0
+	_fire_haptic_cooldown = 0.0
 	_walk_sway_captured = false
 	_walk_sway_logged = false
 	_rest_capture_pending = false
@@ -2104,13 +2112,6 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_inject_action("fire", true)
 						_inject_action("left_mouse", true)
 						_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
-						var fire_ctrl = _get_controller(hand)
-						if fire_ctrl:
-							fire_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.08, 0.0)
-						if _support_grip_held:
-							var sup_fire_ctrl = _get_controller(_get_support_hand())
-							if sup_fire_ctrl:
-								sup_fire_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.08, 0.0)
 				elif is_weapon_hand and _holster_state == HolsterState.LOWERED and _weapon_subtype == "Bolt":
 					# Bolt-action: trigger while weapon lowered cycles the bolt (R)
 					_inject_action("reload", true)
@@ -3652,6 +3653,21 @@ func _sync_weapon_to_controller() -> void:
 	if not _rest_capture_pending:
 		recoil_delta = _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
+
+	# Fire haptics: rising recoil_delta magnitude = shot actually fired.
+	# Works for empty chamber (no recoil) and full-auto (one pulse per shot).
+	_fire_haptic_cooldown -= get_process_delta_time()
+	var cur_recoil_mag := recoil_delta.origin.length()
+	if cur_recoil_mag - _prev_recoil_mag > 0.003 and _fire_haptic_cooldown <= 0.0:
+		var hap_dom := _get_controller(_weapon_hand)
+		if hap_dom:
+			hap_dom.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.08, 0.0)
+		if _support_grip_held:
+			var hap_sup := _get_controller(_get_support_hand())
+			if hap_sup:
+				hap_sup.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.08, 0.0)
+		_fire_haptic_cooldown = 0.08
+	_prev_recoil_mag = cur_recoil_mag
 
 	# Pivot compensation: keep the weapon grip at the dominant hand model center.
 	# Without this, aim_basis * local_offset shifts the weapon toward the off-hand as

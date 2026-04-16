@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod v1.1.1
+# Road to Vostok — VR Mod v1.1.2
 
 A VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
@@ -116,7 +116,7 @@ To holster from sling: grip near your right-shoulder holster zone.
 | Support hand trigger (while gripping) | Toggle laser attachment |
 | Support hand grip | Two-hand grip (stabilised aim, rifles/shotguns only) |
 | Right stick up / down (weapon drawn, variable scope) | Zoom in / out |
-| B (right, weapon drawn) | Cycle fire mode |
+| B (right, weapon drawn) | Cycle fire mode (standard weapons) / Open or close action (bolt-action & shotgun) |
 | B (right, weapon lowered) | Interact with objects |
 | X (left, while weapon drawn, quick tap) | Enter grip adjust mode |
 | X (left, while weapon drawn, off-hand gripping, quick tap) | Enter foregrip adjust mode |
@@ -138,6 +138,24 @@ Grenades (slot 4, chest holster) use a two-step mechanic:
 The grenade is automatically holstered 0.5 s after throwing. Aim with your controller —
 the throw direction follows wherever the weapon hand is pointing at the moment you release
 the grip. The controller buzzes continuously while the pin is pulled.
+
+### Bolt-action Rifles & Pump-action Shotguns
+
+These weapons require manually cycling the action between shots. **B** opens and closes
+the loading port instead of changing fire mode.
+
+**Loading:**
+
+1. Press **B** to open the action
+2. Press **support hand trigger** (without gripping for two-hand aim) to load one round or shell — repeat until full
+3. Press **B** again to close the action
+
+**Cycling between shots:**
+
+| Weapon type | Action |
+|-------------|--------|
+| Bolt-action | Lower the weapon (release grip away from body), then press **dominant trigger** — the bolt cycles and the weapon automatically raises back |
+| Pump-action shotgun | Grab with the **support hand grip**, then make a quick pump motion (push forward, pull back) — one shell is chambered per pump |
 
 ### Scope Zoom
 
