@@ -52,6 +52,14 @@ var _weapon_hand := ""  # "left" or "right" — which hand currently holds weapo
 var _weapon_slot := 0   # 1-4 mapped to KEY_1..KEY_4, 0 = none
 var _transition_slot := 0   # slot saved across level transition (0 = was unarmed)
 var _transition_hand := ""  # hand saved across level transition
+var _weapon_subtype := ""           # "Shotgun", "Bolt", etc. — from data resource
+var _weapon_uses_r_reload := false  # True for Bolt/Shotgun: action open/close + manual ammo load
+var _action_open := false           # True while weapon action is open (Ctrl toggled)
+var _pump_gesture_active := false   # True after forward phase of pump detected
+var _pump_start_dist := 0.0         # Hand separation at gesture baseline
+var _pump_min_dist := 0.0           # Minimum separation seen during forward phase
+var _pump_gesture_timer := 0.0      # Time remaining for back phase to complete
+var _pump_cooldown := 0.0           # Prevents rapid repeat
 
 const HOLSTER_ZONES := {
 	1: {"name": "right_shoulder", "key": KEY_1},
@@ -500,6 +508,12 @@ func _holster_weapon() -> void:
 	_weapon_slot = 0
 	_weapon_loaded = false
 	_weapon_is_long = false
+	_weapon_subtype = ""
+	_weapon_uses_r_reload = false
+	_action_open = false
+	_pump_gesture_active = false
+	_pump_start_dist = 0.0
+	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
 	_walk_sway_captured = false
 	_walk_sway_logged = false
@@ -754,6 +768,10 @@ func _process(delta: float) -> void:
 					elif _ammo_panel_mesh and is_instance_valid(_ammo_panel_mesh) and xr_camera:
 						_update_ammo_panel_position()
 
+				# Shotgun pump gesture: forward+back motion between hands injects R
+				if _weapon_subtype == "Shotgun" and _holster_state == HolsterState.DRAWN and not _support_grip_held and not _action_open:
+					_update_pump_gesture(delta)
+
 				# Post-scroll delayed debug dump
 				if _post_scroll_timer > 0:
 					_post_scroll_timer -= delta
@@ -770,6 +788,11 @@ func _process(delta: float) -> void:
 						var wep = mgr.get_child(0)
 						print("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
 						_weapon_is_long = _classify_weapon_is_long(wep)
+						_weapon_subtype = _get_weapon_subtype(wep)
+						_weapon_uses_r_reload = _weapon_subtype == "Shotgun" or _weapon_subtype == "Bolt"
+						_action_open = false
+						_pump_gesture_active = false
+						_pump_start_dist = 0.0
 						# Defer rest capture until Handling.gd has animated the
 						# weapon from pre-raise offset to its aimed position, so
 						# _recoil_rest_xform and _walk_sway_rest agree on the
@@ -1670,6 +1693,12 @@ func _on_level_transition() -> void:
 	_weapons_reparented = false
 	_weapon_loaded = false
 	_weapon_is_long = false
+	_weapon_subtype = ""
+	_weapon_uses_r_reload = false
+	_action_open = false
+	_pump_gesture_active = false
+	_pump_start_dist = 0.0
+	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
 	_walk_sway_captured = false
 	_walk_sway_logged = false
@@ -2049,7 +2078,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_inject_mouse_button(MOUSE_BUTTON_XBUTTON1, false)
 					_trig_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.15, 0.0)
 					print("[VR Mod] NVG toggled (trigger above head)")
-				elif is_weapon_hand and _holster_state == HolsterState.DRAWN:
+				elif is_weapon_hand and _holster_state == HolsterState.DRAWN and not (_weapon_uses_r_reload and _action_open):
 					if _weapon_slot == 4:
 						if not _grenade_pin_pulled:
 							# Grenade: tap fire = pull pin (game click 1)
@@ -2075,6 +2104,15 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_inject_action("fire", true)
 						_inject_action("left_mouse", true)
 						_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+				elif is_weapon_hand and _holster_state == HolsterState.LOWERED and _weapon_subtype == "Bolt":
+					# Bolt-action: trigger while weapon lowered cycles the bolt (R)
+					_inject_action("reload", true)
+					_inject_action("reload", false)
+					print("[VR Mod] BOLT CYCLED (dominant trigger, LOWERED)")
+					var bolt_ctrl = _get_controller(_weapon_hand)
+					if bolt_ctrl:
+						bolt_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.1, 0.0)
+					_raise_weapon()
 				elif is_support_hand and _holster_state in [HolsterState.DRAWN, HolsterState.LOWERED]:
 					# Support hand trigger = rail slide / reload / laser (drawn or lowered)
 					if _rail_mode and _holster_state == HolsterState.DRAWN:
@@ -2084,9 +2122,15 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_inject_key(KEY_T, false)
 						print("[VR Mod] LASER toggled (support trigger + grip)")
 					else:
-						# Start long-press timer — short = reload, long = ammo check (KEY_V)
-						_support_trigger_pending = true
-						_support_trigger_press_time = Time.get_ticks_msec() / 1000.0
+						if _weapon_uses_r_reload and _action_open:
+							# Action open: support trigger loads one round/shell (LMB)
+							_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+							_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
+							print("[VR Mod] LOAD AMMO (support trigger, action open)")
+						else:
+							# Start long-press timer — short = reload, long = ammo check (KEY_V)
+							_support_trigger_pending = true
+							_support_trigger_press_time = Time.get_ticks_msec() / 1000.0
 		"grip_click":
 			if _interface_open:
 				if is_support_hand:
@@ -2219,9 +2263,15 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				_inject_action("interface", true)  # Y = toggle inventory
 			else:
 				if _holster_state == HolsterState.DRAWN:
-					_inject_key(KEY_F, true)
-					_inject_key(KEY_F, false)
-					print("[VR Mod] FIRE MODE toggled (B button)")
+					if _weapon_uses_r_reload:
+						_action_open = !_action_open
+						_inject_key(KEY_CTRL, true)
+						_inject_key(KEY_CTRL, false)
+						print("[VR Mod] ACTION ", "OPENED" if _action_open else "CLOSED", " (B, Ctrl)")
+					else:
+						_inject_key(KEY_F, true)
+						_inject_key(KEY_F, false)
+						print("[VR Mod] FIRE MODE toggled (B button)")
 				else:
 					_inject_action("interact", true)
 		"menu_button":
@@ -3962,6 +4012,57 @@ func _classify_weapon_is_long(weapon_rig: Node3D) -> bool:
 		return false
 	_log("Weapon class: long (default for slot " + str(_weapon_slot) + ")")
 	return true
+
+
+func _get_weapon_subtype(weapon_rig: Node3D) -> String:
+	if _weapon_slot == 3:
+		return "Melee"
+	if _weapon_slot == 4:
+		return "Grenade"
+	var data_res = weapon_rig.get("data")
+	if data_res and data_res is Resource:
+		var st = data_res.get("subtype")
+		if st != null:
+			return str(st)
+	return ""
+
+
+func _update_pump_gesture(delta: float) -> void:
+	_pump_cooldown -= delta
+	var dom_ctrl = _get_controller(_weapon_hand)
+	var sup_ctrl = _get_controller(_get_support_hand())
+	if not dom_ctrl or not sup_ctrl:
+		return
+	var dist: float = dom_ctrl.global_position.distance_to(sup_ctrl.global_position)
+	# Initialize baseline on first call after draw
+	if _pump_start_dist < 0.01:
+		_pump_start_dist = dist
+		return
+	const PUMP_THRESHOLD := 0.08  # 8 cm each direction
+	const PUMP_TIME_LIMIT := 1.0
+	if not _pump_gesture_active:
+		if dist < _pump_start_dist - PUMP_THRESHOLD:
+			_pump_gesture_active = true
+			_pump_min_dist = dist
+			_pump_gesture_timer = PUMP_TIME_LIMIT
+		else:
+			_pump_start_dist = dist
+	else:
+		_pump_gesture_timer -= delta
+		_pump_min_dist = min(_pump_min_dist, dist)
+		if dist > _pump_min_dist + PUMP_THRESHOLD:
+			if _pump_cooldown <= 0.0:
+				_inject_action("reload", true)
+				_inject_action("reload", false)
+				print("[VR Mod] PUMP — shell cycled (R)")
+				if dom_ctrl:
+					dom_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.12, 0.0)
+				_pump_cooldown = 0.5
+			_pump_gesture_active = false
+			_pump_start_dist = dist
+		elif _pump_gesture_timer <= 0.0:
+			_pump_gesture_active = false
+			_pump_start_dist = dist
 
 
 # ── Wrist watch crop shader ───────────────────────────────────────────────
