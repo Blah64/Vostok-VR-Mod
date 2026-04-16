@@ -519,6 +519,7 @@ var _laser_mesh: MeshInstance3D   # Visual laser pointer line (dual-purpose: gra
 var _hover_label: Label3D = null  # Floating item name shown when aiming at interactable/grabbable
 var _menu_open := false           # True while inventory/menu is visible
 var _menu_ctrl_held := false      # True while support grip is held in menus (Ctrl modifier for fast transfer)
+var _esc_menu_active := false     # True while ESC menu is open (toggled by menu button; forces _interface_open)
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 var _laser_diag_logged := false  # One-shot diagnostic log on first laser update per menu open
 
@@ -1297,6 +1298,23 @@ func _update_interface_state() -> void:
 				_interface_open = true
 				break
 
+	# Also check siblings of UI under Map/Core — ESC menu may live there
+	if not _interface_open:
+		var core_node = get_tree().root.get_node_or_null("Map/Core")
+		if core_node:
+			for child in core_node.get_children():
+				if child.name in ["Camera", "UI", "LOS", "Interactor"]:
+					continue
+				if child is CanvasItem and child.visible:
+					_interface_open = true
+					break
+
+	# ESC menu: detection may miss it (unknown path); _esc_menu_active forces the flag.
+	# When the game closes the ESC menu independently (e.g. Resume button), the flag
+	# stays true until the player presses menu button again — acceptable trade-off.
+	if _esc_menu_active:
+		_interface_open = true
+
 	# Detect transitions
 	if _interface_open and not _prev_interface_open:
 		_on_interface_opened()
@@ -1521,6 +1539,15 @@ func _update_laser_pointer() -> void:
 
 	# Intersect with the HUD quad plane
 	var hit_pos = _ray_quad_intersection(ray_origin, ray_dir, hud_mesh)
+
+	# Fail-path diagnostic (fires once per interface open)
+	if not _laser_diag_logged and hit_pos == Vector3.INF:
+		var qn := hud_mesh.global_basis.z.normalized()
+		var denom := qn.dot(ray_dir)
+		var t_val := qn.dot(hud_mesh.global_position - ray_origin) / denom if abs(denom) > 0.0001 else INF
+		_log("Laser MISS: origin=" + str(ray_origin) + " dir=" + str(ray_dir) + " quad_pos=" + str(hud_mesh.global_position) + " quad_norm=" + str(qn) + " denom=" + str(denom) + " t=" + str(t_val))
+		_laser_diag_logged = true
+
 	if hit_pos != Vector3.INF:
 		# Convert 3D hit point to 2D viewport coordinates
 		var local_pos = hud_mesh.global_transform.affine_inverse() * hit_pos
@@ -1531,33 +1558,28 @@ func _update_laser_pointer() -> void:
 		var uv_y = (-local_pos.y + quad_size.y / 2.0) / quad_size.y
 
 		# Range check on raw UV (did the ray actually hit the quad?)
+		if not _laser_diag_logged and (uv_x < 0 or uv_x > 1 or uv_y < 0 or uv_y > 1):
+			_log("Laser UV MISS: uv=(" + str(uv_x) + "," + str(uv_y) + ") local=" + str(local_pos) + " quad_size=" + str(quad_size))
+			_laser_diag_logged = true
 		if uv_x >= 0 and uv_x <= 1 and uv_y >= 0 and uv_y <= 1:
-			# The SubViewport renders canvas coords 0..hud_viewport.size with
-			# canvas_transform=Identity, so UV directly gives us a viewport-local
-			# position in the main viewport too (both share world_2d).
-			# Apply the controller-alignment offset in canvas space, after hit detection.
-			var vp_pos = Vector2(
+			# push_input(false) treats position as screen coords and goes through
+			# the Window's content_scale pipeline — same as real OS mouse events.
+			# Use hud_viewport.size so UV maps to the full stereo viewport range,
+			# which Godot's content_scale inverse maps to the correct canvas position.
+			var canvas_pos = Vector2(
 				(uv_x + _menu_laser_uv_x) * hud_viewport.size.x,
 				(uv_y + _menu_laser_uv_y) * hud_viewport.size.y
 			)
-			_laser_screen_pos = vp_pos
-
-			# Move the cursor via the Viewport (not Input) so Godot applies the
-			# viewport->window stretch transform internally. The game uses stretch
-			# mode "viewport", so the Window is larger than visible_rect and a
-			# plain Input.warp_mouse(vp_pos) would undershoot by the stretch factor.
-			var main_vp = get_viewport()
-			main_vp.warp_mouse(vp_pos)
+			_laser_screen_pos = canvas_pos
 
 			if not _laser_diag_logged:
 				_laser_diag_logged = true
-				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " vp_pos=" + str(vp_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size) + " win=" + str(DisplayServer.window_get_size()) + " mouse_after_warp=" + str(main_vp.get_mouse_position()))
+				var main_vp: Viewport = get_viewport()
+				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " canvas_pos=" + str(canvas_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size))
 
-			# Also inject mouse motion event for drag support.
-			# event.position is in the target viewport's pixel space.
 			var motion = InputEventMouseMotion.new()
-			motion.position = vp_pos
-			motion.global_position = vp_pos
+			motion.position = canvas_pos
+			motion.global_position = canvas_pos
 			motion.relative = Vector2.ZERO
 			var mask := 0
 			if _mouse_states.get(MOUSE_BUTTON_LEFT, false):
@@ -1566,6 +1588,7 @@ func _update_laser_pointer() -> void:
 				mask |= 2
 			motion.button_mask = mask
 			Input.parse_input_event(motion)
+			get_viewport().push_input(motion, false)
 
 			# Laser tip flush with quad surface. no_depth_test=true prevents clipping.
 			var dist = ray_origin.distance_to(hit_pos) - 0.01
@@ -1623,6 +1646,7 @@ func _on_level_transition() -> void:
 	_rest_capture_pending = false
 	_walk_sway_capture_delay = 0.0
 	_clear_grenade_state()
+	_esc_menu_active = false
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
 	_teardown_watch_content()
@@ -1974,6 +1998,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					var mode_name = "ROTATION" if _decor_scroll_mode == 1 else "DISTANCE"
 					_log("[VR Mod] DECOR: Scroll mode -> " + mode_name)
 					right_controller.trigger_haptic_pulse("haptic", 0.0, 0.2, 0.1, 0.0)
+			"menu_button":
+				_toggle_esc_menu()
 		return  # Don't fall through to normal input handling
 
 	match button_name:
@@ -1981,6 +2007,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if _config_screen_open:
 				_inject_config_click(true)
 			elif _interface_open:
+				_log("ESC click: laser_pos=" + str(_laser_screen_pos) + " esc_active=" + str(_esc_menu_active) + " hud_vis=" + str(hud_mesh.visible if hud_mesh else "null") + " hud_pos=" + str(hud_mesh.global_position if hud_mesh else Vector3.ZERO))
 				_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				_inject_action("left_mouse", true)
 			else:
@@ -2151,7 +2178,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				else:
 					_inject_action("interact", true)
 		"menu_button":
-			_inject_action("escape", true)
+			_toggle_esc_menu()
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", true)
@@ -2177,6 +2204,8 @@ func _on_button_released(button_name: String, hand: String) -> void:
 			"trigger_click":
 				if is_weapon_hand:
 					_inject_key(KEY_G, false)  # Release place key
+			"menu_button":
+				pass  # ESC release handled by _toggle_esc_menu
 		return  # Don't fall through to normal release handling
 
 	match button_name:
@@ -2288,7 +2317,7 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				if _holster_state != HolsterState.DRAWN:
 					_inject_action("interact", false)
 		"menu_button":
-			_inject_action("escape", false)
+			pass  # ESC release handled by _toggle_esc_menu
 		"primary_click":
 			if hand == "left":
 				_inject_action("sprint", false)
@@ -2321,14 +2350,11 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 	event.button_index = button
 	event.pressed = pressed
 	event.ctrl_pressed = _menu_ctrl_held
-	# Use laser pointer position when in inventory, center of screen otherwise.
-	# Center-of-screen for non-menu events (weapon firing etc.) uses the main
-	# viewport's own center in its pixel space.
 	if _interface_open and _laser_screen_pos.x >= 0:
 		event.position = _laser_screen_pos
 	else:
-		event.position = get_viewport().get_visible_rect().size / 2
-	# Set button_mask - required for proper mouse event processing
+		event.position = get_viewport().get_visible_rect().size / 2.0
+	event.global_position = event.position
 	var mask := 0
 	for btn in _mouse_states:
 		if _mouse_states[btn]:
@@ -2337,7 +2363,6 @@ func _inject_mouse_button(button: int, pressed: bool) -> void:
 				MOUSE_BUTTON_RIGHT: mask |= MOUSE_BUTTON_MASK_RIGHT
 				MOUSE_BUTTON_MIDDLE: mask |= MOUSE_BUTTON_MASK_MIDDLE
 	event.button_mask = mask
-	# Send through BOTH paths to maximize chances of game receiving it
 	Input.parse_input_event(event)
 	get_viewport().push_input(event, false)
 
@@ -2347,11 +2372,11 @@ func _inject_scroll(direction: int) -> void:
 	var event = InputEventMouseButton.new()
 	event.button_index = MOUSE_BUTTON_WHEEL_UP if direction > 0 else MOUSE_BUTTON_WHEEL_DOWN
 	event.pressed = true
-	# Use laser pointer position when in a menu, center of screen otherwise
+	# _laser_screen_pos is in canvas coords; push_input(true) uses canvas/local coords.
 	if _interface_open and _laser_screen_pos.x >= 0:
 		event.position = _laser_screen_pos
 	else:
-		event.position = get_viewport().get_visible_rect().size / 2
+		event.position = get_viewport().get_visible_rect().size / 2.0
 	Input.parse_input_event(event)
 	get_viewport().push_input(event, false)
 	# Scroll events need immediate release
@@ -2913,6 +2938,66 @@ func _teardown_watch_content() -> void:
 	_watch_crop_computed = false
 	_watch_crop_delay = 0
 	_watch_crop_retries = 0
+
+
+func _toggle_esc_menu() -> void:
+	# Use Input.parse_input_event only (no push_input) to avoid double-processing.
+	var ev_press := InputEventKey.new()
+	ev_press.keycode = KEY_ESCAPE
+	ev_press.physical_keycode = KEY_ESCAPE
+	ev_press.pressed = true
+	var ev_release := InputEventKey.new()
+	ev_release.keycode = KEY_ESCAPE
+	ev_release.physical_keycode = KEY_ESCAPE
+	ev_release.pressed = false
+
+	if _interface_open and not _esc_menu_active:
+		# An inventory/loot/trade screen is open — close it first.
+		# A subsequent menu button press (after it closes) will open the ESC menu.
+		_key_states.erase(KEY_ESCAPE)
+		Input.parse_input_event(ev_press)
+		get_tree().create_timer(0.08).timeout.connect(func(): Input.parse_input_event(ev_release))
+		print("[VR Mod] Menu button: closing open interface screen")
+	elif not _esc_menu_active:
+		_esc_menu_active = true
+		_key_states.erase(KEY_ESCAPE)
+		Input.parse_input_event(ev_press)
+		# No release — menu stays open until next press.
+		print("[VR Mod] ESC menu opened")
+	else:
+		_esc_menu_active = false
+		_key_states.erase(KEY_ESCAPE)
+		Input.parse_input_event(ev_press)
+		get_tree().create_timer(0.08).timeout.connect(func(): Input.parse_input_event(ev_release))
+		print("[VR Mod] ESC menu closed (menu button)")
+
+
+func _dump_visible_canvas_nodes() -> void:
+	# Scan the entire scene tree for visible CanvasItem nodes not in our known HUD paths.
+	# Fired 0.3 s after ESC menu opens to identify where the ESC menu node lives.
+	_log("=== ESC MENU NODE SCAN ===")
+	var known_paths := ["VRHudViewport", "VRWatchMedVP", "VRModOrigin", "VRHudPanel",
+		"Map/Core/UI/HUD", "Map/Core/UI/Effects", "Map/Core/UI/NVG"]
+	_scan_for_visible_canvas(get_tree().root, "", known_paths, 0)
+	_log("=== END ESC MENU NODE SCAN ===")
+
+
+func _scan_for_visible_canvas(node: Node, path: String, skip_prefixes: Array, depth: int) -> void:
+	if depth > 8:
+		return
+	var full_path := path + "/" + node.name if path != "" else node.name
+	# Skip our own mod nodes
+	if node == self or node == xr_origin:
+		return
+	for skip in skip_prefixes:
+		if full_path.contains(skip):
+			return
+	if node is CanvasItem and (node as CanvasItem).visible:
+		# Only log nodes that are leaf-ish or have few children (reduces noise)
+		var child_count := node.get_child_count()
+		_log("  VISIBLE: " + full_path + " [" + node.get_class() + "] children=" + str(child_count))
+	for child in node.get_children():
+		_scan_for_visible_canvas(child, full_path, skip_prefixes, depth + 1)
 
 
 func _grenade_auto_holster() -> void:
