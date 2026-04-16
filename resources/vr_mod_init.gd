@@ -3330,10 +3330,26 @@ func _sync_weapon_to_controller() -> void:
 	if not _rest_capture_pending:
 		recoil_delta = _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
-	weapon_rig.global_position = controller.global_position + aim_basis * (local_offset + recoil_delta.origin)
+
+	# Pivot compensation: during two-hand aiming, shift the weapon so its grip
+	# aligns with the hand model center (dom_off from controller) instead of the
+	# controller origin. This keeps the hand anchored to the physical controller
+	# while the weapon pivots around the hand's position.
+	var arc_comp := Vector3.ZERO
+	var arc_is_right := _get_weapon_hand() == "right"
+	var arc_dom_off := HAND_GLTF_OFFSET_RIGHT if arc_is_right else HAND_GLTF_OFFSET_LEFT
+	var arc_dom_rot := HAND_GLTF_ROTATION_RIGHT if arc_is_right else HAND_GLTF_ROTATION_LEFT
+	var arc_sh_rot := 0.0 if _weapon_slot == 4 else float(_slot_grip_rotations.get(_weapon_slot, 0.0))
+	var arc_rot_b := Basis.from_euler(arc_dom_rot * (PI / 180.0))
+	var arc_w2h := Basis(Vector3.UP, deg_to_rad(-(180.0 + arc_sh_rot))) * arc_rot_b
+	var arc_r_delta := Basis.IDENTITY
+	if use_two_hand:
+		arc_r_delta = controller.global_basis.inverse() * weapon_rig.global_basis * arc_w2h * arc_rot_b.inverse()
+		arc_comp = controller.global_basis * (arc_dom_off - arc_r_delta * arc_dom_off)
+	weapon_rig.global_position = controller.global_position + arc_comp + aim_basis * (local_offset + recoil_delta.origin)
 
 	# Displace hand models so they visually follow weapon sway / recoil.
-	_apply_sway_to_hands(controller, off_controller, aim_basis, local_offset, recoil_delta, use_two_hand)
+	_apply_sway_to_hands(weapon_rig, controller, off_controller, aim_basis, local_offset, recoil_delta, use_two_hand, arc_comp)
 
 	# Hide all arm surfaces on every weapon type (guns, knives, grenades)
 	_hide_arms_in_subtree(weapon_rig)
@@ -3347,9 +3363,11 @@ func _sync_weapon_to_controller() -> void:
 
 
 func _apply_sway_to_hands(
+		weapon_rig: Node3D,
 		dom_ctrl: XRController3D, sup_ctrl: XRController3D,
 		aim_basis: Basis, local_offset: Vector3,
-		recoil_delta: Transform3D, use_two_hand: bool) -> void:
+		recoil_delta: Transform3D, use_two_hand: bool,
+		arc_comp: Vector3) -> void:
 	# Displace each hand wrapper so the hand appears to grip the gun rather than
 	# floating at the raw controller position while the weapon bobs from sway/recoil.
 	#
@@ -3358,10 +3376,10 @@ func _apply_sway_to_hands(
 	# Dominant grip: P_dom = -local_offset  (weapon_rig placed at ctrl + aim * local_offset)
 	# Support grip: P_sup computed from off-hand controller world position
 	#
-	# Displacement is applied as a controller-LOCAL offset so the configurable
+	# Position displacement is applied as a controller-LOCAL offset so the configurable
 	# HAND_GLTF_OFFSET_* is preserved (adding to it, not overwriting it).
-	# Rotation is intentionally NOT changed — sway rotation is small (1-3 deg) and
-	# overriding global_basis would bake in a stale rotation on frames where we skip.
+	# Rotation: during two-hand aiming the dominant hand rotates to match the weapon
+	# orientation (weapon_rig.global_basis), otherwise the canonical GLTF rotation is kept.
 	#
 	# Both wrappers are reset to their canonical GLTF position/rotation every call
 	# so stale displacement from a previous frame never persists.
@@ -3383,22 +3401,47 @@ func _apply_sway_to_hands(
 		sup_wrapper.position = sup_off
 		sup_wrapper.rotation_degrees = sup_rot
 
+	# During two-hand aiming, rotate dominant hand to track the weapon tilt.
+	# The weapon has a built-in 180 Y flip (+ slot rotation) relative to the controller.
+	# weapon_to_hand undoes that flip before applying the GLTF offset, so the hand
+	# carries the same grip-relative orientation as in single-hand mode but tilted with
+	# the weapon. Verification: when aim_basis == single_hand_basis (no tilt) this
+	# reduces to dom_rot_basis (canonical), matching the normal non-two-hand reset above.
+	#
+	# The hand stays at dom_off (anchored to the physical controller). The weapon
+	# is shifted by arc_comp so its grip aligns with the hand model center.
+	if use_two_hand and dom_wrapper:
+		var sh_rot_deg := 0.0 if _weapon_slot == 4 else float(_slot_grip_rotations.get(_weapon_slot, 0.0))
+		var dom_rot_basis := Basis.from_euler(dom_rot * (PI / 180.0))
+		var weapon_to_hand := Basis(Vector3.UP, deg_to_rad(-(180.0 + sh_rot_deg))) * dom_rot_basis
+		var new_hand_basis := dom_ctrl.global_basis.inverse() * weapon_rig.global_basis * weapon_to_hand
+		dom_wrapper.transform = Transform3D(new_hand_basis, dom_off)
+
 	if recoil_delta == Transform3D.IDENTITY:
 		return
 
-	# Dominant hand displacement
+	# Direct tracking: read the exact world position of each grip point from the
+	# weapon_rig transform, which already has every chain animation baked in.
+	#
+	# Dominant grip is at -local_offset in weapon_rig local space (by calibration:
+	# weapon_rig was placed at controller + aim_basis*local_offset, so the controller
+	# is at -local_offset in weapon_rig local).
+	#
+	# Support grip: p_sup is the off-hand position expressed in no-sway weapon_rig
+	# local space; the sway transform maps it exactly to its displaced world position.
 	if dom_wrapper:
-		var p_dom := -local_offset
-		var world_disp := aim_basis * (recoil_delta.origin + recoil_delta.basis * p_dom - p_dom)
-		# Convert to controller-local space so GLTF offset is preserved additively
-		dom_wrapper.position = dom_off + dom_ctrl.global_basis.inverse() * world_disp
+		var grip_world := weapon_rig.global_transform * (-local_offset)
+		var grip_disp := dom_ctrl.global_basis.inverse() * (grip_world - dom_ctrl.global_position)
+		# Subtract arc_comp contribution so the hand tracks recoil/sway but not
+		# the pivot shift (arc_comp shifts the weapon, not the hand).
+		var arc_local := dom_ctrl.global_basis.inverse() * arc_comp
+		dom_wrapper.position = dom_off + grip_disp - arc_local
 
-	# Support hand displacement (two-hand only)
 	if use_two_hand and sup_ctrl and sup_ctrl.get_is_active() and sup_wrapper:
-		var weapon_rig_no_sway_origin := dom_ctrl.global_position + aim_basis * local_offset
+		var weapon_rig_no_sway_origin := dom_ctrl.global_position + arc_comp + aim_basis * local_offset
 		var p_sup := aim_basis.inverse() * (sup_ctrl.global_position - weapon_rig_no_sway_origin)
-		var world_disp_sup := aim_basis * (recoil_delta.origin + recoil_delta.basis * p_sup - p_sup)
-		sup_wrapper.position = sup_off + sup_ctrl.global_basis.inverse() * world_disp_sup
+		var sup_grip_world := weapon_rig.global_transform * p_sup
+		sup_wrapper.position = sup_off + sup_ctrl.global_basis.inverse() * (sup_grip_world - sup_ctrl.global_position)
 
 
 func _sync_weapon_to_sling(weapon_rig: Node3D) -> void:
