@@ -299,7 +299,7 @@ Both methods can be used interchangeably. A haptic pulse confirms each rail incr
 
 ## Known Issues
 
-**Esc menu opens, but can't be interacted.
+Esc menu opens, but can't be interacted.
 ---
 
 ## Troubleshooting
