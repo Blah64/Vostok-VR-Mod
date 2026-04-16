@@ -55,10 +55,10 @@ var _transition_hand := ""  # hand saved across level transition
 var _weapon_subtype := ""           # "Shotgun", "Bolt", etc. — from data resource
 var _weapon_uses_r_reload := false  # True for Bolt/Shotgun: action open/close + manual ammo load
 var _action_open := false           # True while weapon action is open (Ctrl toggled)
-var _pump_gesture_active := false   # True after forward phase of pump detected
-var _pump_start_dist := 0.0         # Hand separation at gesture baseline
-var _pump_min_dist := 0.0           # Minimum separation seen during forward phase
-var _pump_gesture_timer := 0.0      # Time remaining for back phase to complete
+var _pump_gesture_active := false   # True after forward phase detected
+var _pump_fwd_dir := Vector3.ZERO   # Direction of support hand motion in forward phase
+var _pump_prev_pos := Vector3.ZERO  # Support hand position last frame (zero = uninitialized)
+var _pump_gesture_timer := 0.0      # Time remaining for reverse phase to complete
 var _pump_cooldown := 0.0           # Prevents rapid repeat
 
 const HOLSTER_ZONES := {
@@ -512,7 +512,7 @@ func _holster_weapon() -> void:
 	_weapon_uses_r_reload = false
 	_action_open = false
 	_pump_gesture_active = false
-	_pump_start_dist = 0.0
+	_pump_prev_pos = Vector3.ZERO
 	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
 	_walk_sway_captured = false
@@ -769,7 +769,7 @@ func _process(delta: float) -> void:
 						_update_ammo_panel_position()
 
 				# Shotgun pump gesture: forward+back motion between hands injects R
-				if _weapon_subtype == "Shotgun" and _holster_state == HolsterState.DRAWN and not _support_grip_held and not _action_open:
+				if _weapon_subtype == "Shotgun" and _holster_state == HolsterState.DRAWN and _support_grip_held and not _action_open:
 					_update_pump_gesture(delta)
 
 				# Post-scroll delayed debug dump
@@ -792,7 +792,7 @@ func _process(delta: float) -> void:
 						_weapon_uses_r_reload = _weapon_subtype == "Shotgun" or _weapon_subtype == "Bolt"
 						_action_open = false
 						_pump_gesture_active = false
-						_pump_start_dist = 0.0
+						_pump_prev_pos = Vector3.ZERO
 						# Defer rest capture until Handling.gd has animated the
 						# weapon from pre-raise offset to its aimed position, so
 						# _recoil_rest_xform and _walk_sway_rest agree on the
@@ -1697,7 +1697,7 @@ func _on_level_transition() -> void:
 	_weapon_uses_r_reload = false
 	_action_open = false
 	_pump_gesture_active = false
-	_pump_start_dist = 0.0
+	_pump_prev_pos = Vector3.ZERO
 	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
 	_walk_sway_captured = false
@@ -2104,6 +2104,13 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_inject_action("fire", true)
 						_inject_action("left_mouse", true)
 						_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
+						var fire_ctrl = _get_controller(hand)
+						if fire_ctrl:
+							fire_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.08, 0.0)
+						if _support_grip_held:
+							var sup_fire_ctrl = _get_controller(_get_support_hand())
+							if sup_fire_ctrl:
+								sup_fire_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.08, 0.0)
 				elif is_weapon_hand and _holster_state == HolsterState.LOWERED and _weapon_subtype == "Bolt":
 					# Bolt-action: trigger while weapon lowered cycles the bolt (R)
 					_inject_action("reload", true)
@@ -2117,7 +2124,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					# Support hand trigger = rail slide / reload / laser (drawn or lowered)
 					if _rail_mode and _holster_state == HolsterState.DRAWN:
 						_start_rail_slide()
-					elif _support_grip_held:
+					elif _support_grip_held and not _weapon_uses_r_reload:
 						_inject_key(KEY_T, true)
 						_inject_key(KEY_T, false)
 						print("[VR Mod] LASER toggled (support trigger + grip)")
@@ -2165,6 +2172,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 								# Support hand grip = two-hand aim (long weapons only)
 								if _weapon_is_long:
 									_support_grip_held = true
+									_pump_gesture_active = false
+									_pump_prev_pos = Vector3.ZERO
 									print("[VR Mod] Support grip: two-hand aim ON")
 								else:
 									print("[VR Mod] Support grip ignored — short weapon, no two-hand aim")
@@ -2267,6 +2276,10 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_action_open = !_action_open
 						_inject_key(KEY_CTRL, true)
 						_inject_key(KEY_CTRL, false)
+						if not _action_open:
+							# Reset pump baseline so gesture doesn't misfire from stale position
+							_pump_prev_pos = Vector3.ZERO
+							_pump_gesture_active = false
 						print("[VR Mod] ACTION ", "OPENED" if _action_open else "CLOSED", " (B, Ctrl)")
 					else:
 						_inject_key(KEY_F, true)
@@ -2368,6 +2381,9 @@ func _on_button_released(button_name: String, hand: String) -> void:
 								_holster_weapon()
 				elif is_support_hand:
 					_support_grip_held = false
+					_pump_gesture_active = false
+					_pump_prev_pos = Vector3.ZERO
+					_pump_fwd_dir = Vector3.ZERO
 					if _fg_adjust_mode:
 						_fg_adjust_mode = false
 						print("[VR Mod] === FG ADJUST MODE OFF (support released) ===")
@@ -4029,40 +4045,45 @@ func _get_weapon_subtype(weapon_rig: Node3D) -> String:
 
 func _update_pump_gesture(delta: float) -> void:
 	_pump_cooldown -= delta
-	var dom_ctrl = _get_controller(_weapon_hand)
 	var sup_ctrl = _get_controller(_get_support_hand())
-	if not dom_ctrl or not sup_ctrl:
+	if not sup_ctrl:
 		return
-	var dist: float = dom_ctrl.global_position.distance_to(sup_ctrl.global_position)
-	# Initialize baseline on first call after draw
-	if _pump_start_dist < 0.01:
-		_pump_start_dist = dist
+	var pos: Vector3 = sup_ctrl.position
+	# Initialize reference on first call or after reset
+	if _pump_prev_pos == Vector3.ZERO:
+		_pump_prev_pos = pos
 		return
-	const PUMP_THRESHOLD := 0.08  # 8 cm each direction
-	const PUMP_TIME_LIMIT := 1.0
+	# PUMP_OUT: how far hand must move from reference to start the gesture.
+	# PUMP_BACK: how close hand must return to the frozen reference to complete it.
+	# Reference slowly tracks resting hand position (accounts for arm drift).
+	# During forward phase the reference is frozen so only a real return fires the pump.
+	const PUMP_OUT := 0.06        # 6 cm displacement from reference
+	const PUMP_BACK := 0.03       # 3 cm from frozen reference = returned far enough
+	const TRACK_RATE := 3.0       # reference lerp speed while idle (m/s equivalent)
 	if not _pump_gesture_active:
-		if dist < _pump_start_dist - PUMP_THRESHOLD:
+		_pump_prev_pos = _pump_prev_pos.lerp(pos, delta * TRACK_RATE)
+		if pos.distance_to(_pump_prev_pos) > PUMP_OUT:
 			_pump_gesture_active = true
-			_pump_min_dist = dist
-			_pump_gesture_timer = PUMP_TIME_LIMIT
-		else:
-			_pump_start_dist = dist
+			_pump_gesture_timer = 1.2
+			print("[VR Mod] PUMP: fwd phase dist=", snappedf(pos.distance_to(_pump_prev_pos) * 100.0, 0.1), "cm")
 	else:
 		_pump_gesture_timer -= delta
-		_pump_min_dist = min(_pump_min_dist, dist)
-		if dist > _pump_min_dist + PUMP_THRESHOLD:
+		var dist: float = pos.distance_to(_pump_prev_pos)
+		if dist < PUMP_BACK:
 			if _pump_cooldown <= 0.0:
 				_inject_action("reload", true)
 				_inject_action("reload", false)
 				print("[VR Mod] PUMP — shell cycled (R)")
+				var dom_ctrl = _get_controller(_weapon_hand)
 				if dom_ctrl:
 					dom_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.12, 0.0)
 				_pump_cooldown = 0.5
 			_pump_gesture_active = false
-			_pump_start_dist = dist
+			_pump_prev_pos = pos
 		elif _pump_gesture_timer <= 0.0:
+			print("[VR Mod] PUMP: timeout dist=", snappedf(dist * 100.0, 0.1), "cm")
 			_pump_gesture_active = false
-			_pump_start_dist = dist
+			_pump_prev_pos = pos
 
 
 # ── Wrist watch crop shader ───────────────────────────────────────────────
