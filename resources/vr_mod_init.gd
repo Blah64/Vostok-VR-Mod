@@ -1918,8 +1918,12 @@ func _process_input(delta: float) -> void:
 
 
 func _on_button_pressed(button_name: String, hand: String) -> void:
-	# Resolve hand roles dynamically based on holster state
-	var is_weapon_hand := (hand == _weapon_hand) if _holster_state != HolsterState.UNARMED else (hand == _config_dominant_hand)
+	# Resolve hand roles dynamically based on holster state.
+	# UNARMED and SLING both use config dominant hand — in sling the weapon is
+	# hanging, not wielded, so _weapon_hand (which hand last grabbed it) should
+	# not flip the support/weapon roles and break menu fast transfer.
+	var _use_dominant := _holster_state == HolsterState.UNARMED or _holster_state == HolsterState.SLING
+	var is_weapon_hand := (hand == _config_dominant_hand) if _use_dominant else (hand == _weapon_hand)
 	var is_support_hand := not is_weapon_hand
 
 	# Grip tracking must happen before any early return (needed for both-grips detection)
@@ -2155,7 +2159,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 
 
 func _on_button_released(button_name: String, hand: String) -> void:
-	var is_weapon_hand := (hand == _weapon_hand) if _holster_state != HolsterState.UNARMED else (hand == _config_dominant_hand)
+	var _use_dominant := _holster_state == HolsterState.UNARMED or _holster_state == HolsterState.SLING
+	var is_weapon_hand := (hand == _config_dominant_hand) if _use_dominant else (hand == _weapon_hand)
 	var is_support_hand := not is_weapon_hand
 
 	# Grip release tracking must happen before any early return
