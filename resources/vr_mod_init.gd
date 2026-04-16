@@ -522,6 +522,7 @@ var _menu_ctrl_held := false      # True while support grip is held in menus (Ct
 var _esc_menu_active := false     # True while ESC menu is open (toggled by menu button; forces _interface_open)
 var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 var _laser_diag_logged := false  # One-shot diagnostic log on first laser update per menu open
+var _esc_hovered_control: Control = null  # Currently hovered ESC menu control (for manual hover)
 
 # HUD sizing (vars so config screen can change them at runtime)
 var _hud_width := 2.3
@@ -609,6 +610,7 @@ func _ready() -> void:
 	# Run AFTER game scripts so our weapon transform override sticks
 	process_priority = 1000
 	process_physics_priority = 1000
+	process_mode = Node.PROCESS_MODE_ALWAYS  # Keep running even if game pauses (ESC menu)
 	print("[VR Mod] === VR Mod initializing (priority=1000) ===")
 
 	xr_interface = XRServer.find_interface("OpenXR")
@@ -1288,6 +1290,7 @@ func _update_interface_state() -> void:
 	# Check if any UI panel that's normally hidden is now visible
 	# (inventory, settings, loot pool, etc.)
 	_interface_open = false
+	var _detected_by := ""
 	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
 	if ui_node:
 		for child in ui_node.get_children():
@@ -1296,6 +1299,7 @@ func _update_interface_state() -> void:
 				continue
 			if child is CanvasItem and child.visible:
 				_interface_open = true
+				_detected_by = "Map/Core/UI/" + child.name + " (" + child.get_class() + ")"
 				break
 
 	# Also check siblings of UI under Map/Core — ESC menu may live there
@@ -1307,11 +1311,17 @@ func _update_interface_state() -> void:
 					continue
 				if child is CanvasItem and child.visible:
 					_interface_open = true
+					_detected_by = "Map/Core/" + child.name + " (" + child.get_class() + ")"
 					break
 
-	# ESC menu: detection may miss it (unknown path); _esc_menu_active forces the flag.
-	# When the game closes the ESC menu independently (e.g. Resume button), the flag
-	# stays true until the player presses menu button again — acceptable trade-off.
+	if _interface_open and not _prev_interface_open:
+		_log("Interface opened: detected by " + _detected_by)
+
+	# ESC menu always pauses the tree; inventory/loot pools do not.
+	# Clear the flag the moment the tree is no longer paused.
+	if _esc_menu_active and not get_tree().paused:
+		_esc_menu_active = false
+		_esc_clear_hover()
 	if _esc_menu_active:
 		_interface_open = true
 
@@ -1577,6 +1587,17 @@ func _update_laser_pointer() -> void:
 				var main_vp: Viewport = get_viewport()
 				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " canvas_pos=" + str(canvas_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size))
 
+			# Warp the real OS cursor so hover/drag-based controls (loot pool items,
+			# sliders) receive proper mouse_entered signals — push_input alone is not
+			# enough for controls that rely on actual cursor position.
+			# warp_mouse expects window pixel coords, not canvas coords.
+			# Convert: canvas (0..vp_size) → window pixels (letterbox_offset..win_size).
+			var _win_size = DisplayServer.window_get_size()
+			var _vp_size = get_viewport().get_visible_rect().size
+			var _warp_x = canvas_pos.x * _win_size.x / _vp_size.x
+			var _warp_y = canvas_pos.y * _win_size.y / _vp_size.y
+			get_viewport().warp_mouse(Vector2(_warp_x, _warp_y))
+
 			var motion = InputEventMouseMotion.new()
 			motion.position = canvas_pos
 			motion.global_position = canvas_pos
@@ -1598,8 +1619,13 @@ func _update_laser_pointer() -> void:
 				_laser_mesh.visible = true
 			else:
 				_laser_mesh.visible = false  # Too close, hide entirely
+			# ESC menu hover: update each frame while laser hits the quad
+			if _esc_menu_active:
+				_update_esc_hover()
 		else:
 			_laser_screen_pos = Vector2(-1, -1)
+			if _esc_menu_active:
+				_esc_clear_hover()
 
 
 func _ray_quad_intersection(ray_origin: Vector3, ray_dir: Vector3, quad: MeshInstance3D) -> Vector3:
@@ -1646,6 +1672,7 @@ func _on_level_transition() -> void:
 	_rest_capture_pending = false
 	_walk_sway_capture_delay = 0.0
 	_clear_grenade_state()
+	_esc_clear_hover()
 	_esc_menu_active = false
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
@@ -2007,7 +2034,6 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if _config_screen_open:
 				_inject_config_click(true)
 			elif _interface_open:
-				_log("ESC click: laser_pos=" + str(_laser_screen_pos) + " esc_active=" + str(_esc_menu_active) + " hud_vis=" + str(hud_mesh.visible if hud_mesh else "null") + " hud_pos=" + str(hud_mesh.global_position if hud_mesh else Vector3.ZERO))
 				_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				_inject_action("left_mouse", true)
 			else:
@@ -2940,6 +2966,89 @@ func _teardown_watch_content() -> void:
 	_watch_crop_retries = 0
 
 
+func _esc_find_deepest_stop_control(node: Node, pos: Vector2) -> Control:
+	# Recursively find the deepest visible STOP-filter Control containing pos.
+	# Children are checked in reverse draw order (topmost first).
+	if not (node is Control):
+		return null
+	var ctrl = node as Control
+	if not ctrl.is_visible_in_tree():
+		return null
+	var r = ctrl.get_global_rect()
+	if r.size.x <= 0 or r.size.y <= 0:
+		return null
+	if not r.has_point(pos):
+		return null
+	for i in range(ctrl.get_child_count() - 1, -1, -1):
+		var found = _esc_find_deepest_stop_control(ctrl.get_child(i), pos)
+		if found:
+			return found
+	if ctrl.mouse_filter == Control.MOUSE_FILTER_STOP:
+		return ctrl
+	return null
+
+
+func _esc_click_at(pos: Vector2) -> void:
+	var settings_node = get_tree().root.get_node_or_null("Map/Core/UI/Settings")
+	if not settings_node:
+		_log("ESC click: no Settings node at pos=" + str(pos))
+		return
+	var target = _esc_find_deepest_stop_control(settings_node, pos)
+	if not target:
+		_log("ESC click: no target at " + str(pos))
+		return
+	_log("ESC click -> " + str(target.name) + " [" + target.get_class() + "] rect=" + str(target.get_global_rect()))
+	if target is Range:
+		var r = target.get_global_rect()
+		var ratio = clampf((pos.x - r.position.x) / r.size.x, 0.0, 1.0)
+		var new_val = target.min_value + ratio * (target.max_value - target.min_value)
+		_log("ESC slider -> " + str(target.name) + " val=" + str(new_val))
+		target.value = new_val
+	else:
+		# Push real press+release events to the control's viewport so the
+		# button state machine fires fully (emit_signal bypasses it).
+		var click_pos = target.get_global_rect().get_center()
+		var vp = target.get_viewport()
+		var ev_press = InputEventMouseButton.new()
+		ev_press.button_index = MOUSE_BUTTON_LEFT
+		ev_press.pressed = true
+		ev_press.position = click_pos
+		ev_press.global_position = click_pos
+		vp.push_input(ev_press, true)
+		var ev_rel = InputEventMouseButton.new()
+		ev_rel.button_index = MOUSE_BUTTON_LEFT
+		ev_rel.pressed = false
+		ev_rel.position = click_pos
+		ev_rel.global_position = click_pos
+		vp.push_input(ev_rel, true)
+
+
+func _update_esc_hover() -> void:
+	if not _esc_menu_active or _laser_screen_pos.x < 0:
+		_esc_clear_hover()
+		return
+	var settings_node = get_tree().root.get_node_or_null("Map/Core/UI/Settings")
+	if not settings_node:
+		_esc_clear_hover()
+		return
+	var target = _esc_find_deepest_stop_control(settings_node, _laser_screen_pos)
+	if target and not (target is BaseButton or target is Range):
+		target = null
+	if target == _esc_hovered_control:
+		return
+	if _esc_hovered_control and is_instance_valid(_esc_hovered_control):
+		_esc_hovered_control.notification(Control.NOTIFICATION_MOUSE_EXIT)
+	_esc_hovered_control = target
+	if target:
+		target.notification(Control.NOTIFICATION_MOUSE_ENTER)
+
+
+func _esc_clear_hover() -> void:
+	if _esc_hovered_control and is_instance_valid(_esc_hovered_control):
+		_esc_hovered_control.notification(Control.NOTIFICATION_MOUSE_EXIT)
+	_esc_hovered_control = null
+
+
 func _toggle_esc_menu() -> void:
 	# Use Input.parse_input_event only (no push_input) to avoid double-processing.
 	var ev_press := InputEventKey.new()
@@ -2965,6 +3074,7 @@ func _toggle_esc_menu() -> void:
 		# No release — menu stays open until next press.
 		print("[VR Mod] ESC menu opened")
 	else:
+		_esc_clear_hover()
 		_esc_menu_active = false
 		_key_states.erase(KEY_ESCAPE)
 		Input.parse_input_event(ev_press)
@@ -2983,19 +3093,22 @@ func _dump_visible_canvas_nodes() -> void:
 
 
 func _scan_for_visible_canvas(node: Node, path: String, skip_prefixes: Array, depth: int) -> void:
-	if depth > 8:
+	if depth > 20:
 		return
 	var full_path := path + "/" + node.name if path != "" else node.name
-	# Skip our own mod nodes
 	if node == self or node == xr_origin:
 		return
 	for skip in skip_prefixes:
 		if full_path.contains(skip):
 			return
-	if node is CanvasItem and (node as CanvasItem).visible:
-		# Only log nodes that are leaf-ish or have few children (reduces noise)
-		var child_count := node.get_child_count()
-		_log("  VISIBLE: " + full_path + " [" + node.get_class() + "] children=" + str(child_count))
+	if node is Control and (node as Control).is_visible_in_tree():
+		var ctrl := node as Control
+		var r := ctrl.get_global_rect()
+		var mf := ctrl.mouse_filter
+		var mf_str := "STOP" if mf == 0 else ("PASS" if mf == 1 else "IGNORE")
+		# Only log controls with non-zero size and not IGNORE
+		if r.size.x > 0 and r.size.y > 0 and mf != Control.MOUSE_FILTER_IGNORE:
+			_log("  CTRL: " + full_path + " [" + node.get_class() + "] rect=" + str(r) + " mf=" + mf_str)
 	for child in node.get_children():
 		_scan_for_visible_canvas(child, full_path, skip_prefixes, depth + 1)
 
@@ -5983,21 +6096,46 @@ func _dump_hud_tree() -> void:
 	f.seek_end(0)
 	f.store_line("")
 	f.store_line("=== HUD TREE DUMP (" + str(Time.get_datetime_string_from_system()) + ") ===")
+	f.store_line("interface_open=" + str(_interface_open) + " esc_active=" + str(_esc_menu_active) + " paused=" + str(get_tree().paused))
 
+	# Dump ALL Map/Core/UI children with class and visibility for loot pool diagnosis
 	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
 	if not ui_node:
 		f.store_line("  Map/Core/UI not found!")
 		f.close()
 		return
+	f.store_line("--- Map/Core/UI children ---")
+	for c in ui_node.get_children():
+		var vis_str = ""
+		if c is CanvasItem:
+			vis_str = " visible=" + str((c as CanvasItem).visible) + " vis_in_tree=" + str((c as CanvasItem).is_visible_in_tree())
+		f.store_line("  " + c.name + " (" + c.get_class() + ")" + vis_str)
+		for gc in c.get_children():
+			var gvis_str = ""
+			if gc is CanvasItem:
+				gvis_str = " visible=" + str((gc as CanvasItem).visible) + " vis_in_tree=" + str((gc as CanvasItem).is_visible_in_tree())
+			f.store_line("    " + gc.name + " (" + gc.get_class() + ")" + gvis_str)
+			for ggc in gc.get_children():
+				var ggvis_str = ""
+				if ggc is CanvasItem:
+					ggvis_str = " visible=" + str((ggc as CanvasItem).visible) + " vis_in_tree=" + str((ggc as CanvasItem).is_visible_in_tree())
+				f.store_line("      " + ggc.name + " (" + ggc.get_class() + ")" + ggvis_str)
+	f.store_line("--- Map/Core siblings ---")
+	var core_node = get_tree().root.get_node_or_null("Map/Core")
+	if core_node:
+		for c in core_node.get_children():
+			var vis_str = ""
+			if c is CanvasItem:
+				vis_str = " visible=" + str((c as CanvasItem).visible) + " vis_in_tree=" + str((c as CanvasItem).is_visible_in_tree())
+			f.store_line("  " + c.name + " (" + c.get_class() + ")" + vis_str)
 
 	var hud_node = ui_node.get_node_or_null("HUD")
 	if not hud_node:
-		f.store_line("  Map/Core/UI/HUD not found! Children of UI:")
-		for c in ui_node.get_children():
-			f.store_line("    " + c.name + " (" + c.get_class() + ")")
+		f.store_line("  Map/Core/UI/HUD not found!")
 		f.close()
 		return
 
+	f.store_line("--- HUD subtree ---")
 	_dump_node_recursive(f, hud_node, 0)
 	f.store_line("=== END HUD TREE DUMP ===")
 	f.close()
