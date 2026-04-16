@@ -1576,40 +1576,24 @@ func _update_laser_pointer() -> void:
 			# the Window's content_scale pipeline — same as real OS mouse events.
 			# Use hud_viewport.size so UV maps to the full stereo viewport range,
 			# which Godot's content_scale inverse maps to the correct canvas position.
-			var canvas_pos = Vector2(
+			# Both warp_mouse and push_input(false) use hud_viewport coords (3840x1080).
+			# This matches pre-4750b39 behaviour where warp_mouse(uv*hud_vp_size) worked
+			# for both buttons and items.
+			var vp_pos = Vector2(
 				(uv_x + _menu_laser_uv_x) * hud_viewport.size.x,
 				(uv_y + _menu_laser_uv_y) * hud_viewport.size.y
 			)
-			_laser_screen_pos = canvas_pos
+			_laser_screen_pos = vp_pos
 
 			if not _laser_diag_logged:
 				_laser_diag_logged = true
 				var main_vp: Viewport = get_viewport()
-				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " canvas_pos=" + str(canvas_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size))
+				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " vp_pos=" + str(vp_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size) + " win=" + str(DisplayServer.window_get_size()))
 
-			# Warp the real OS cursor so hover/drag-based controls (loot pool items,
-			# sliders) receive proper mouse_entered signals — push_input alone is not
-			# enough for controls that rely on actual cursor position.
-			# warp_mouse expects window pixel coords, not canvas coords.
-			# Convert: canvas (0..vp_size) → window pixels (letterbox_offset..win_size).
-			var _win_size = DisplayServer.window_get_size()
-			var _vp_size = get_viewport().get_visible_rect().size
-			var _warp_x = canvas_pos.x * _win_size.x / _vp_size.x
-			var _warp_y = canvas_pos.y * _win_size.y / _vp_size.y
-			get_viewport().warp_mouse(Vector2(_warp_x, _warp_y))
-
-			var motion = InputEventMouseMotion.new()
-			motion.position = canvas_pos
-			motion.global_position = canvas_pos
-			motion.relative = Vector2.ZERO
-			var mask := 0
-			if _mouse_states.get(MOUSE_BUTTON_LEFT, false):
-				mask |= 1
-			if _mouse_states.get(MOUSE_BUTTON_RIGHT, false):
-				mask |= 2
-			motion.button_mask = mask
-			Input.parse_input_event(motion)
-			get_viewport().push_input(motion, false)
+			# warp_mouse generates a real OS mouse event that drives both button hover
+			# and loot pool item mouse_entered. Don't also push_input a motion event —
+			# the two together produce conflicting GUI states and break button clicking.
+			get_viewport().warp_mouse(vp_pos)
 
 			# Laser tip flush with quad surface. no_depth_test=true prevents clipping.
 			var dist = ray_origin.distance_to(hit_pos) - 0.01
