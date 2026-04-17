@@ -9,7 +9,7 @@ extends Node
 # Controller pointing + trigger click for inventory interaction.
 
 var _log_path    := "user://vr_mod/vr_mod_debug.log"
-var _config_path := "user://vr_mod/default_config.json"
+var _config_path := "user://vr_mod/vr_mod_config.json"
 var _assets_base := "res://resources/hands/"
 
 var xr_interface: XRInterface
