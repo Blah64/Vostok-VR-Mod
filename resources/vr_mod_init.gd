@@ -2282,7 +2282,12 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if hand == "left":
 				_inject_action("interface", true)  # Y = toggle inventory
 			else:
-				if _holster_state == HolsterState.DRAWN:
+				if _interface_open:
+					# B = rotate dragged item (game default: R key)
+					_inject_key(KEY_R, true)
+					_inject_key(KEY_R, false)
+					print("[VR Mod] INVENTORY: Rotate item (R)")
+				elif _holster_state == HolsterState.DRAWN:
 					if _weapon_uses_r_reload:
 						_action_open = !_action_open
 						_inject_key(KEY_CTRL, true)

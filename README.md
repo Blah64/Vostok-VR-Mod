@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod v1.1.2
+# Road to Vostok — VR Mod v1.1.4
 
 A VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
@@ -218,6 +218,7 @@ When a menu or inventory panel is open the laser switches to **blue** and extend
 | A (right) | Click button under laser |
 | Dominant trigger (hold + move) | Drag item |
 | Dominant grip | Right-click / context menu |
+| B (right) | Rotate dragged item |
 | Support grip (hold) + Trigger | Fast transfer (Ctrl + click) |
 | Right stick up / down | Scroll |
 
