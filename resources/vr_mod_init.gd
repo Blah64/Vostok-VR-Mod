@@ -3531,44 +3531,49 @@ func _hide_arms_in_subtree(node: Node) -> void:
 		_hide_arms_in_subtree(child)
 
 
+func _weapon_key() -> String:
+	return _weapon_hand + "|" + _current_weapon_name
+
 func _get_weapon_grip_offset() -> Vector3:
-	if _current_weapon_name != "" and _weapon_grip_offsets.has(_current_weapon_name):
-		return _weapon_grip_offsets[_current_weapon_name]
+	var k := _weapon_key()
+	if _current_weapon_name != "" and _weapon_grip_offsets.has(k):
+		return _weapon_grip_offsets[k]
 	return _slot_grip_defaults.get(_weapon_slot, Vector3.ZERO)
 
 func _get_weapon_grip_rotation() -> float:
-	if _current_weapon_name != "" and _weapon_grip_rotations.has(_current_weapon_name):
-		return _weapon_grip_rotations[_current_weapon_name]
+	var k := _weapon_key()
+	if _current_weapon_name != "" and _weapon_grip_rotations.has(k):
+		return _weapon_grip_rotations[k]
 	return _slot_rot_defaults.get(_weapon_slot, 0.0)
 
 func _set_weapon_grip_offset(v: Vector3) -> void:
 	if _current_weapon_name != "":
-		_weapon_grip_offsets[_current_weapon_name] = v
+		_weapon_grip_offsets[_weapon_key()] = v
 
 func _set_weapon_grip_rotation(v: float) -> void:
 	if _current_weapon_name != "":
-		_weapon_grip_rotations[_current_weapon_name] = v
+		_weapon_grip_rotations[_weapon_key()] = v
 
 func _has_weapon_fg_p() -> bool:
-	return _current_weapon_name != "" and _weapon_fg_p_local.has(_current_weapon_name)
+	return _current_weapon_name != "" and _weapon_fg_p_local.has(_weapon_key())
 
 func _get_weapon_fg_p() -> Vector3:
 	if _current_weapon_name != "":
-		return _weapon_fg_p_local.get(_current_weapon_name, Vector3.ZERO)
+		return _weapon_fg_p_local.get(_weapon_key(), Vector3.ZERO)
 	return Vector3.ZERO
 
 func _get_weapon_fg_r() -> Basis:
 	if _current_weapon_name != "":
-		return _weapon_fg_r_local.get(_current_weapon_name, Basis.IDENTITY)
+		return _weapon_fg_r_local.get(_weapon_key(), Basis.IDENTITY)
 	return Basis.IDENTITY
 
 func _set_weapon_fg_p(v: Vector3) -> void:
 	if _current_weapon_name != "":
-		_weapon_fg_p_local[_current_weapon_name] = v
+		_weapon_fg_p_local[_weapon_key()] = v
 
 func _set_weapon_fg_r(v: Basis) -> void:
 	if _current_weapon_name != "":
-		_weapon_fg_r_local[_current_weapon_name] = v
+		_weapon_fg_r_local[_weapon_key()] = v
 
 
 func _sync_weapon_to_controller() -> void:
