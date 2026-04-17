@@ -2149,13 +2149,16 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							_support_trigger_press_time = Time.get_ticks_msec() / 1000.0
 		"grip_click":
 			if _interface_open:
-				if is_support_hand:
-					_menu_ctrl_held = true
-					_inject_key(KEY_CTRL, true)
-					print("[VR Mod] MENU: Ctrl held (fast transfer mode)")
-				else:
-					_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
-					_inject_action("context", true)
+				if is_weapon_hand:
+					_try_grab(hand)
+				if not _grabbed_object:
+					if is_support_hand:
+						_menu_ctrl_held = true
+						_inject_key(KEY_CTRL, true)
+						print("[VR Mod] MENU: Ctrl held (fast transfer mode)")
+					else:
+						_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
+						_inject_action("context", true)
 			elif _decor_mode:
 				return
 			elif _holster_cooldown > 0.0:
@@ -2165,10 +2168,13 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
 				match _holster_state:
 					HolsterState.UNARMED:
-						if zone > 0:
-							_draw_weapon(hand, zone)
-						else:
+						if is_weapon_hand:
 							_try_grab(hand)
+						if not _grabbed_object:
+							if zone > 0:
+								_draw_weapon(hand, zone)
+							else:
+								_try_grab(hand)
 					HolsterState.DRAWN:
 						if hand == _weapon_hand:
 							pass  # Already gripping weapon
@@ -2187,27 +2193,33 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 								else:
 									print("[VR Mod] Support grip ignored — short weapon, no two-hand aim")
 					HolsterState.LOWERED:
-						if zone > 0 and zone != _weapon_slot:
-							# Near a different holster — holster old, draw new
-							_holster_weapon()
-							_draw_weapon(hand, zone)
-						elif hand == _weapon_hand:
-							# Same hand re-gripping — raise weapon
-							_raise_weapon()
-						else:
-							# Different hand, no new holster — raise with original hand
-							_raise_weapon()
-							if _weapon_is_long:
-								_support_grip_held = true
+						if is_weapon_hand:
+							_try_grab(hand)
+						if not _grabbed_object:
+							if zone > 0 and zone != _weapon_slot:
+								# Near a different holster — holster old, draw new
+								_holster_weapon()
+								_draw_weapon(hand, zone)
+							elif hand == _weapon_hand:
+								# Same hand re-gripping — raise weapon
+								_raise_weapon()
+							else:
+								# Different hand, no new holster — raise with original hand
+								_raise_weapon()
+								if _weapon_is_long:
+									_support_grip_held = true
 					HolsterState.SLING:
-						if zone == _weapon_slot:
-							# Near own holster zone — holster completely
-							_holster_weapon()
-						else:
-							# Grab sling weapon; zone proximity to other holsters is ignored
-							# (chest-level sling overlaps zone 4, so any zone check would misfire)
-							_weapon_hand = hand
-							_raise_weapon()
+						if is_weapon_hand:
+							_try_grab(hand)
+						if not _grabbed_object:
+							if zone == _weapon_slot:
+								# Near own holster zone — holster completely
+								_holster_weapon()
+							else:
+								# Grab sling weapon; zone proximity to other holsters is ignored
+								# (chest-level sling overlaps zone 4, so any zone check would misfire)
+								_weapon_hand = hand
+								_raise_weapon()
 		"ax_button":  # A on right, X on left (physical mapping)
 			if hand == "left":
 				# X button: rail mode (long-press) / adjust mode (short press) / flashlight
@@ -3383,6 +3395,14 @@ func _update_hand_visibility() -> void:
 
 
 
+func _hand_laser_sees_grabbable(hand: String) -> bool:
+	var ray = _grab_ray_right if hand == "right" else _grab_ray_left
+	if not ray or not ray.is_colliding():
+		return false
+	var c = ray.get_collider()
+	return c is RigidBody3D and (c.collision_layer & 4) != 0
+
+
 func _try_grab(hand: String) -> void:
 	if _grabbed_object:
 		return  # Already holding something
@@ -3395,7 +3415,7 @@ func _try_grab(hand: String) -> void:
 	if not collider:
 		return
 
-	# Only grab loose items: RigidBody3D with collision layer 4 (bit 2)
+	# Only grab loose items: RigidBody3D with collision layer 4
 	if not (collider is RigidBody3D and (collider.collision_layer & 4) != 0):
 		return
 
