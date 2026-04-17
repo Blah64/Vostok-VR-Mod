@@ -3584,6 +3584,33 @@ func _sync_weapon_to_controller() -> void:
 
 	var mgr = game_camera.get_node_or_null("Manager")
 	if not mgr or mgr.get_child_count() == 0:
+		# If we think a weapon is equipped but the rig is gone, the game unequipped it
+		# externally (e.g. via inventory while drawn). Reset without injecting the unequip
+		# key — the game already handled the unequip.
+		if _holster_state != HolsterState.UNARMED and _weapon_loaded:
+			print("[VR Mod] Weapon rig gone externally — resetting to UNARMED")
+			_pending_holster_key = -1
+			_adjust_mode = false
+			_fg_adjust_mode = false
+			if _rail_mode:
+				_exit_rail_mode()
+			_cleanup_scope()
+			_inject_action("aim", false)
+			_inject_action("weapon_high", false)
+			_holster_state = HolsterState.UNARMED
+			_weapon_hand = ""
+			_weapon_slot = 0
+			_current_weapon_name = ""
+			_weapon_loaded = false
+			_weapon_is_long = false
+			_weapon_subtype = ""
+			_weapon_uses_r_reload = false
+			_action_open = false
+			_pump_gesture_active = false
+			_pump_prev_pos = Vector3.ZERO
+			_pump_cooldown = 0.0
+			_clear_grenade_state()
+			_support_grip_held = false
 		return
 
 	var weapon_rig = mgr.get_child(0)
