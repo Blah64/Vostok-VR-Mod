@@ -67,8 +67,8 @@ Config and debug log are written to `%APPDATA%\Road to Vostok\vr_mod\`.
 | Left stick click | Sprint |
 | Right stick click | Crouch |
 | Menu button | Pause / escape |
-| X (left, weapon holstered, quick tap) | Toggle flashlight |
-| X (left, weapon holstered, hold 0.5 s) | Enter shelter decoration mode |
+| X (left, weapon holstered, quick tap) | Toggle flashlight *(disabled when menu open)* |
+| X (left, weapon holstered, hold 0.5 s) | Enter shelter decoration mode *(disabled when menu open)* |
 | Trigger (above head, unarmed) | Toggle night vision goggles |
 
 ### Holster System
@@ -218,7 +218,7 @@ When a menu or inventory panel is open the laser switches to **blue** and extend
 | A (right) | Click button under laser |
 | Dominant trigger (hold + move) | Drag item |
 | Dominant grip | Right-click / context menu |
-| B (right) | Rotate dragged item |
+| X (left) | Rotate dragged item |
 | Support grip (hold) + Trigger | Fast transfer (Ctrl + click) |
 | Right stick up / down | Scroll |
 
