@@ -4737,8 +4737,21 @@ func _find_game_camera(node: Node) -> Camera3D:
 func _load_config() -> void:
 	var config_path = _config_path
 	if not FileAccess.file_exists(config_path):
-		print("[VR Mod] Config not found at: ", config_path, ", using defaults")
-		return
+		var bundled := "res://resources/default_config.json"
+		if FileAccess.file_exists(bundled):
+			var src := FileAccess.open(bundled, FileAccess.READ)
+			if src:
+				var content := src.get_as_text()
+				src.close()
+				DirAccess.make_dir_recursive_absolute("user://vr_mod")
+				var dst := FileAccess.open(config_path, FileAccess.WRITE)
+				if dst:
+					dst.store_string(content)
+					dst.close()
+					print("[VR Mod] Seeded config from bundled defaults: ", config_path)
+		if not FileAccess.file_exists(config_path):
+			print("[VR Mod] Config not found at: ", config_path, ", using defaults")
+			return
 
 	var file = FileAccess.open(config_path, FileAccess.READ)
 	if not file:
