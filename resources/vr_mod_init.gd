@@ -192,6 +192,7 @@ var _ammo_panel_mesh: MeshInstance3D = null
 var _ammo_read_delay := 0           # frames to wait before reading labels after KEY_V
 
 # Grip adjust mode — tune offsets live with thumbsticks
+var _gun_config_enabled := false      # Enables grip adjust and foregrip adjust modes
 var _adjust_mode := false
 var _adjust_saved_offset := Vector3.ZERO  # Backup to discard changes
 var _adjust_saved_rotation := 0.0
@@ -2400,25 +2401,26 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				if _rail_x_pending:
 					_rail_x_pending = false
 					if _holster_state == HolsterState.DRAWN and not _rail_mode:
-						if _support_grip_held:
-							# Off-hand gripping — enter foregrip adjust mode:
-							# gun freezes, support hand follows controller; press A to save, X to discard
-							_fg_adjust_mode = true
-							_fg_adjust_saved_p = _slot_fg_p_local.get(_weapon_slot, Vector3.ZERO)
-							_fg_adjust_saved_r = _slot_fg_r_local.get(_weapon_slot, Basis.IDENTITY)
-							_fg_grip_captured = false
-							if _cached_weapon_rig and is_instance_valid(_cached_weapon_rig):
-								_fg_adjust_frozen_xform = _cached_weapon_rig.global_transform
-							print("[VR Mod] === FG ADJUST MODE ON (slot ", _weapon_slot, ") ===")
-							print("[VR Mod] Gun frozen. Move support hand to foregrip, then A=Save, X=Discard")
-						else:
-							# Main hand only — enter grip adjust mode
-							_adjust_mode = true
-							_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
-							_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
-							print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
-							print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
-							print("[VR Mod] A=Save, X=Discard")
+						if _gun_config_enabled:
+							if _support_grip_held:
+								# Off-hand gripping — enter foregrip adjust mode:
+								# gun freezes, support hand follows controller; press A to save, X to discard
+								_fg_adjust_mode = true
+								_fg_adjust_saved_p = _slot_fg_p_local.get(_weapon_slot, Vector3.ZERO)
+								_fg_adjust_saved_r = _slot_fg_r_local.get(_weapon_slot, Basis.IDENTITY)
+								_fg_grip_captured = false
+								if _cached_weapon_rig and is_instance_valid(_cached_weapon_rig):
+									_fg_adjust_frozen_xform = _cached_weapon_rig.global_transform
+								print("[VR Mod] === FG ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+								print("[VR Mod] Gun frozen. Move support hand to foregrip, then A=Save, X=Discard")
+							else:
+								# Main hand only — enter grip adjust mode
+								_adjust_mode = true
+								_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
+								_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
+								print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+								print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
+								print("[VR Mod] A=Save, X=Discard")
 				elif _decor_x_pending:
 					_decor_x_pending = false
 					# Short press — toggle flashlight
@@ -4710,6 +4712,7 @@ func _load_config() -> void:
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
 				_standing_mode = data["controls"].get("standing_mode", false)
+				_gun_config_enabled = data["controls"].get("gun_config_enabled", false)
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
 				for slot in [1, 2, 3, 4]:
@@ -5145,6 +5148,7 @@ func _populate_config_ui() -> void:
 	var grid_ctrl = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
 	_add_toggle_row(grid_ctrl, "Tracking Mode", ["Sitting", "Standing"], 1 if _standing_mode else 0, "_on_cfg_standing_mode")
+	_add_toggle_row(grid_ctrl, "Gun Config", ["Off", "On"], 1 if _gun_config_enabled else 0, "_on_cfg_gun_config")
 
 	# ── Tab 1: Zones ──
 	var scroll_zone = ScrollContainer.new()
@@ -5543,6 +5547,14 @@ func _on_cfg_hand(idx: int) -> void:
 	_create_watch_mesh()
 
 
+func _on_cfg_gun_config(idx: int) -> void:
+	_gun_config_enabled = (idx == 1)
+	if not _gun_config_enabled:
+		_adjust_mode = false
+		_fg_adjust_mode = false
+	print("[VR Mod] Gun config: ", "on" if _gun_config_enabled else "off")
+
+
 func _on_cfg_standing_mode(idx: int) -> void:
 	_standing_mode = (idx == 1)
 	if xr_interface and is_instance_valid(xr_interface):
@@ -5916,7 +5928,8 @@ func _save_full_config() -> void:
 	data["controls"] = {
 		"thumbstick_deadzone": thumbstick_deadzone,
 		"dominant_hand": _config_dominant_hand,
-		"standing_mode": _standing_mode
+		"standing_mode": _standing_mode,
+		"gun_config_enabled": _gun_config_enabled
 	}
 
 	# HUD
