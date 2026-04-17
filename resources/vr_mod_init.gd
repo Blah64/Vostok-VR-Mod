@@ -111,16 +111,19 @@ var _right_grip_held := false
 var _decor_x_pending := false
 var _decor_x_press_time := 0.0
 
-# Per-slot grip offsets in aim-local space (up, forward from controller)
-# Slot 1=primary, 2=sidearm, 3=knife, 4=grenade
-var _slot_grip_offsets := {
-	1: Vector3(0.122, -0.233, -0.876),   # Primary / long gun
-	2: Vector3(0.102, -0.301, -1.121),   # Sidearm / pistol
-	3: Vector3(0.105,  0.087, -0.327),   # Knife
-	4: Vector3(0.09,  -0.302, -0.958),   # Grenade
+# Per-weapon grip offsets in aim-local space (keyed by weapon name, e.g. "MK18")
+# Falls back to slot defaults when a weapon has no saved config.
+var _weapon_grip_offsets := {}     # {weapon_name: Vector3}
+var _weapon_grip_rotations := {}   # {weapon_name: float}
+var _current_weapon_name := ""     # weapon rig name minus "_Rig"; set each frame from rig
+# Slot-based fallback defaults used until a weapon is explicitly calibrated
+var _slot_grip_defaults := {
+	1: Vector3(0.122, -0.233, -0.876),
+	2: Vector3(0.102, -0.301, -1.121),
+	3: Vector3(0.105,  0.087, -0.327),
+	4: Vector3(0.09,  -0.302, -0.958),
 }
-# Per-slot Y rotation offset in degrees (added to the 180° flip)
-var _slot_grip_rotations := { 1: 1.1, 2: 3.0, 3: -94.7, 4: -69.7 }
+var _slot_rot_defaults := { 1: 1.1, 2: 3.0, 3: -94.7, 4: -69.7 }
 
 # VR hand skeletal models (godot-xr-tools lowpoly hands loaded at runtime via GLTFDocument)
 # Each controller gets a Node3D wrapper (required — MeshInstance3D cannot be a direct child
@@ -206,8 +209,8 @@ var _fg_adjust_saved_offset := Vector3.ZERO  # kept for potential compat; not us
 var _fg_adjust_frozen_xform := Transform3D.IDENTITY  # weapon transform frozen at adjust entry
 var _fg_adjust_saved_p := Vector3.ZERO    # per-slot p saved for discard
 var _fg_adjust_saved_r := Basis.IDENTITY  # per-slot r saved for discard
-var _slot_fg_p_local := {}     # weapon-local foregrip position per slot (set by adjust)
-var _slot_fg_r_local := {}     # weapon-local foregrip rotation (Basis) per slot
+var _weapon_fg_p_local := {}   # weapon-local foregrip position per weapon name
+var _weapon_fg_r_local := {}   # weapon-local foregrip rotation (Basis) per weapon name
 var _fg_p_sup_local := Vector3.ZERO   # active foregrip position in weapon_rig local space
 var _fg_r_sup_local := Basis.IDENTITY # active foregrip rotation in weapon_rig local space
 var _fg_grip_captured := false         # true while the foregrip lock is active
@@ -514,6 +517,7 @@ func _holster_weapon() -> void:
 	_holster_state = HolsterState.UNARMED
 	_weapon_hand = ""
 	_weapon_slot = 0
+	_current_weapon_name = ""
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_weapon_subtype = ""
@@ -1872,8 +1876,8 @@ func _process_input(delta: float) -> void:
 	# --- Grip adjust mode: thumbsticks control offsets ---
 	if _adjust_mode and _weapon_slot > 0:
 		var changed := false
-		var offset: Vector3 = _slot_grip_offsets[_weapon_slot]
-		var rot: float = _slot_grip_rotations[_weapon_slot]
+		var offset: Vector3 = _get_weapon_grip_offset()
+		var rot: float = _get_weapon_grip_rotation()
 		if left_controller and left_controller.get_is_active():
 			var left = left_controller.get_vector2("primary")
 			if left.length() > thumbstick_deadzone:
@@ -1887,9 +1891,9 @@ func _process_input(delta: float) -> void:
 				rot += right.x * ADJUST_ROT_SPEED * delta
 				changed = true
 		if changed:
-			_slot_grip_offsets[_weapon_slot] = offset
-			_slot_grip_rotations[_weapon_slot] = rot
-			print("[VR Mod] ADJUST slot ", _weapon_slot, ": x=", snapped(offset.x, 0.001), " y=", snapped(offset.y, 0.001), " z=", snapped(offset.z, 0.001), " rot=", snapped(rot, 0.1), "°")
+			_set_weapon_grip_offset(offset)
+			_set_weapon_grip_rotation(rot)
+			print("[VR Mod] ADJUST ", _current_weapon_name, ": x=", snapped(offset.x, 0.001), " y=", snapped(offset.y, 0.001), " z=", snapped(offset.z, 0.001), " rot=", snapped(rot, 0.1), "°")
 		# Release movement keys and skip normal input
 		_inject_key(KEY_W, false)
 		_inject_key(KEY_S, false)
@@ -2212,16 +2216,16 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_exit_rail_mode()
 				elif _fg_adjust_mode:
 					# X while in foregrip adjust = discard and exit
-					if _slot_fg_p_local.has(_weapon_slot):
-						_slot_fg_p_local[_weapon_slot] = _fg_adjust_saved_p
-						_slot_fg_r_local[_weapon_slot] = _fg_adjust_saved_r
+					if _has_weapon_fg_p():
+						_set_weapon_fg_p(_fg_adjust_saved_p)
+						_set_weapon_fg_r(_fg_adjust_saved_r)
 					_fg_grip_captured = false
 					_fg_adjust_mode = false
 					print("[VR Mod] === FG ADJUST MODE OFF (discarded) ===")
 				elif _adjust_mode:
 					# X again = discard changes and exit
-					_slot_grip_offsets[_weapon_slot] = _adjust_saved_offset
-					_slot_grip_rotations[_weapon_slot] = _adjust_saved_rotation
+					_set_weapon_grip_offset(_adjust_saved_offset)
+					_set_weapon_grip_rotation(_adjust_saved_rotation)
 					_adjust_mode = false
 					print("[VR Mod] === ADJUST MODE OFF (discarded) ===")
 				elif _holster_state == HolsterState.DRAWN:
@@ -2242,9 +2246,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						var wr := _cached_weapon_rig
 						var hp := sup_ctrl_sv.global_position + sup_ctrl_sv.global_basis * s_off
 						var hb := sup_ctrl_sv.global_basis * Basis.from_euler(s_rot * (PI / 180.0))
-						_slot_fg_p_local[_weapon_slot] = wr.global_transform.affine_inverse() * hp
-						_slot_fg_r_local[_weapon_slot] = wr.global_basis.inverse() * hb
-						print("[VR Mod] FG ADJUST saved slot ", _weapon_slot, ": p=", snapped(_slot_fg_p_local[_weapon_slot].x, 0.001), ",", snapped(_slot_fg_p_local[_weapon_slot].y, 0.001), ",", snapped(_slot_fg_p_local[_weapon_slot].z, 0.001))
+						var fg_p := wr.global_transform.affine_inverse() * hp
+						var fg_r := wr.global_basis.inverse() * hb
+						_set_weapon_fg_p(fg_p)
+						_set_weapon_fg_r(fg_r)
+						print("[VR Mod] FG ADJUST saved ", _current_weapon_name, ": p=", snapped(fg_p.x, 0.001), ",", snapped(fg_p.y, 0.001), ",", snapped(fg_p.z, 0.001))
 					_fg_grip_captured = false
 					_fg_adjust_mode = false
 					_save_grip_config()
@@ -2406,8 +2412,8 @@ func _on_button_released(button_name: String, hand: String) -> void:
 								# Off-hand gripping — enter foregrip adjust mode:
 								# gun freezes, support hand follows controller; press A to save, X to discard
 								_fg_adjust_mode = true
-								_fg_adjust_saved_p = _slot_fg_p_local.get(_weapon_slot, Vector3.ZERO)
-								_fg_adjust_saved_r = _slot_fg_r_local.get(_weapon_slot, Basis.IDENTITY)
+								_fg_adjust_saved_p = _get_weapon_fg_p()
+								_fg_adjust_saved_r = _get_weapon_fg_r()
 								_fg_grip_captured = false
 								if _cached_weapon_rig and is_instance_valid(_cached_weapon_rig):
 									_fg_adjust_frozen_xform = _cached_weapon_rig.global_transform
@@ -2416,8 +2422,8 @@ func _on_button_released(button_name: String, hand: String) -> void:
 							else:
 								# Main hand only — enter grip adjust mode
 								_adjust_mode = true
-								_adjust_saved_offset = _slot_grip_offsets[_weapon_slot]
-								_adjust_saved_rotation = _slot_grip_rotations[_weapon_slot]
+								_adjust_saved_offset = _get_weapon_grip_offset()
+								_adjust_saved_rotation = _get_weapon_grip_rotation()
 								print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
 								print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
 								print("[VR Mod] A=Save, X=Discard")
@@ -3525,6 +3531,46 @@ func _hide_arms_in_subtree(node: Node) -> void:
 		_hide_arms_in_subtree(child)
 
 
+func _get_weapon_grip_offset() -> Vector3:
+	if _current_weapon_name != "" and _weapon_grip_offsets.has(_current_weapon_name):
+		return _weapon_grip_offsets[_current_weapon_name]
+	return _slot_grip_defaults.get(_weapon_slot, Vector3.ZERO)
+
+func _get_weapon_grip_rotation() -> float:
+	if _current_weapon_name != "" and _weapon_grip_rotations.has(_current_weapon_name):
+		return _weapon_grip_rotations[_current_weapon_name]
+	return _slot_rot_defaults.get(_weapon_slot, 0.0)
+
+func _set_weapon_grip_offset(v: Vector3) -> void:
+	if _current_weapon_name != "":
+		_weapon_grip_offsets[_current_weapon_name] = v
+
+func _set_weapon_grip_rotation(v: float) -> void:
+	if _current_weapon_name != "":
+		_weapon_grip_rotations[_current_weapon_name] = v
+
+func _has_weapon_fg_p() -> bool:
+	return _current_weapon_name != "" and _weapon_fg_p_local.has(_current_weapon_name)
+
+func _get_weapon_fg_p() -> Vector3:
+	if _current_weapon_name != "":
+		return _weapon_fg_p_local.get(_current_weapon_name, Vector3.ZERO)
+	return Vector3.ZERO
+
+func _get_weapon_fg_r() -> Basis:
+	if _current_weapon_name != "":
+		return _weapon_fg_r_local.get(_current_weapon_name, Basis.IDENTITY)
+	return Basis.IDENTITY
+
+func _set_weapon_fg_p(v: Vector3) -> void:
+	if _current_weapon_name != "":
+		_weapon_fg_p_local[_current_weapon_name] = v
+
+func _set_weapon_fg_r(v: Basis) -> void:
+	if _current_weapon_name != "":
+		_weapon_fg_r_local[_current_weapon_name] = v
+
+
 func _sync_weapon_to_controller() -> void:
 	if not game_camera or not is_instance_valid(game_camera):
 		return
@@ -3539,6 +3585,7 @@ func _sync_weapon_to_controller() -> void:
 	if not weapon_rig or not weapon_rig is Node3D:
 		return
 	_cached_weapon_rig = weapon_rig
+	_current_weapon_name = weapon_rig.name.trim_suffix("_Rig")
 
 	# Only sync when weapon is equipped (DRAWN or LOWERED)
 	if _holster_state == HolsterState.UNARMED:
@@ -3560,9 +3607,9 @@ func _sync_weapon_to_controller() -> void:
 
 	# Single-hand basis computed at function scope so the smooth-init path can also use it.
 	# Grenades (slot 4): ignore grip rotation — throw direction must follow controller forward.
-	var sh_rot_offset: float = 0.0 if _weapon_slot == 4 else _slot_grip_rotations.get(_weapon_slot, 0.0)
+	var sh_rot_offset: float = 0.0 if _weapon_slot == 4 else _get_weapon_grip_rotation()
 	var single_hand_basis: Basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + sh_rot_offset))
-	var local_offset: Vector3 = _slot_grip_offsets.get(_weapon_slot, Vector3(0, 0.15, -0.20))
+	var local_offset: Vector3 = _get_weapon_grip_offset()
 
 	# Foregrip adjust: freeze the weapon in place so the player can position their support
 	# hand freely. Canonical hand resets are applied; normal sync skipped.
@@ -3684,7 +3731,7 @@ func _sync_weapon_to_controller() -> void:
 	var arc_is_right := _get_weapon_hand() == "right"
 	var arc_dom_off := HAND_GLTF_OFFSET_RIGHT if arc_is_right else HAND_GLTF_OFFSET_LEFT
 	var arc_dom_rot := HAND_GLTF_ROTATION_RIGHT if arc_is_right else HAND_GLTF_ROTATION_LEFT
-	var arc_sh_rot := 0.0 if _weapon_slot == 4 else float(_slot_grip_rotations.get(_weapon_slot, 0.0))
+	var arc_sh_rot := 0.0 if _weapon_slot == 4 else _get_weapon_grip_rotation()
 	var arc_rot_b := Basis.from_euler(arc_dom_rot * (PI / 180.0))
 	var arc_w2h := Basis(Vector3.UP, deg_to_rad(-(180.0 + arc_sh_rot))) * arc_rot_b
 	var arc_r_delta := Basis.IDENTITY
@@ -3756,7 +3803,7 @@ func _apply_sway_to_hands(
 	# The hand stays at dom_off (anchored to the physical controller). The weapon
 	# is shifted by arc_comp so its grip aligns with the hand model center.
 	if use_two_hand and dom_wrapper:
-		var sh_rot_deg := 0.0 if _weapon_slot == 4 else float(_slot_grip_rotations.get(_weapon_slot, 0.0))
+		var sh_rot_deg := 0.0 if _weapon_slot == 4 else _get_weapon_grip_rotation()
 		var dom_rot_basis := Basis.from_euler(dom_rot * (PI / 180.0))
 		var weapon_to_hand := Basis(Vector3.UP, deg_to_rad(-(180.0 + sh_rot_deg))) * dom_rot_basis
 		var new_hand_basis := dom_ctrl.global_basis.inverse() * weapon_rig.global_basis * weapon_to_hand
@@ -3790,9 +3837,9 @@ func _apply_sway_to_hands(
 			# controller position (hand stays where the player grabbed) so unconfigured
 			# slots still work naturally.
 			if not _fg_grip_captured:
-				if _slot_fg_p_local.has(_weapon_slot):
-					_fg_p_sup_local = _slot_fg_p_local[_weapon_slot]
-					_fg_r_sup_local = _slot_fg_r_local.get(_weapon_slot, Basis.IDENTITY)
+				if _has_weapon_fg_p():
+					_fg_p_sup_local = _get_weapon_fg_p()
+					_fg_r_sup_local = _get_weapon_fg_r()
 				else:
 					var hand_wp := sup_ctrl.global_position + sup_ctrl.global_basis * sup_off
 					var hand_wb := sup_ctrl.global_basis * Basis.from_euler(sup_rot * (PI / 180.0))
@@ -3816,7 +3863,7 @@ func _sync_weapon_to_sling(weapon_rig: Node3D) -> void:
 	weapon_rig.global_position = xr_camera.global_position + yaw_basis * _sling_offset
 	# Orient weapon to face forward with the same handedness as the drawn single-hand basis,
 	# then apply the per-axis sling rotation offset (pitch/yaw/roll in degrees)
-	var slot_y_rot: float = _slot_grip_rotations.get(_weapon_slot, 0.0)
+	var slot_y_rot: float = _get_weapon_grip_rotation()
 	var base_basis := yaw_basis * Basis(Vector3.UP, deg_to_rad(180.0 + slot_y_rot))
 	weapon_rig.global_basis = base_basis * Basis.from_euler(Vector3(
 		deg_to_rad(_sling_rot_offset.x),
@@ -4734,27 +4781,21 @@ func _load_config() -> void:
 				_nvg_mono = nz.get("mono", true)
 			if data.has("weapon_offsets"):
 				var wo = data["weapon_offsets"]
-				for slot in [1, 2, 3, 4]:
-					var key = str(slot)
-					if wo.has(key):
-						var o = wo[key]
-						_slot_grip_offsets[slot] = Vector3(o.get("x", 0), o.get("y", 0.15), o.get("z", -0.20))
-						_slot_grip_rotations[slot] = o.get("rot", 0.0)
+				for wname in wo:
+					var o = wo[wname]
+					_weapon_grip_offsets[wname] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
+					_weapon_grip_rotations[wname] = o.get("rot", 0.0)
 			if data.has("foregrip_p_local"):
 				var fgp = data["foregrip_p_local"]
-				for slot in [1, 2, 3, 4]:
-					var key = str(slot)
-					if fgp.has(key):
-						var o = fgp[key]
-						_slot_fg_p_local[slot] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
+				for wname in fgp:
+					var o = fgp[wname]
+					_weapon_fg_p_local[wname] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
 			if data.has("foregrip_r_local"):
 				var fgr = data["foregrip_r_local"]
-				for slot in [1, 2, 3, 4]:
-					var key = str(slot)
-					if fgr.has(key):
-						var o = fgr[key]
-						var q := Quaternion(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0), o.get("w", 1.0))
-						_slot_fg_r_local[slot] = Basis(q)
+				for wname in fgr:
+					var o = fgr[wname]
+					var q := Quaternion(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0), o.get("w", 1.0))
+					_weapon_fg_r_local[wname] = Basis(q)
 			if data.has("hud"):
 				var h = data["hud"]
 				_hud_width = h.get("width", 2.3)
@@ -4822,29 +4863,27 @@ func _save_grip_config() -> void:
 
 	# Update weapon_offsets section with current values
 	var wo := {}
-	for slot in [1, 2, 3, 4]:
-		var o := _slot_grip_offsets[slot] as Vector3
-		wo[str(slot)] = {
+	for wname in _weapon_grip_offsets:
+		var o := _weapon_grip_offsets[wname] as Vector3
+		wo[wname] = {
 			"x": snapped(o.x, 0.001),
 			"y": snapped(o.y, 0.001),
 			"z": snapped(o.z, 0.001),
-			"rot": snapped(_slot_grip_rotations[slot], 0.1)
+			"rot": snapped(_weapon_grip_rotations.get(wname, 0.0), 0.1)
 		}
 	data["weapon_offsets"] = wo
 
 	var fgp := {}
-	for slot in [1, 2, 3, 4]:
-		if _slot_fg_p_local.has(slot):
-			var p: Vector3 = _slot_fg_p_local[slot]
-			fgp[str(slot)] = {"x": snapped(p.x, 0.0001), "y": snapped(p.y, 0.0001), "z": snapped(p.z, 0.0001)}
+	for wname in _weapon_fg_p_local:
+		var p: Vector3 = _weapon_fg_p_local[wname]
+		fgp[wname] = {"x": snapped(p.x, 0.0001), "y": snapped(p.y, 0.0001), "z": snapped(p.z, 0.0001)}
 	data["foregrip_p_local"] = fgp
 
 	var fgr := {}
-	for slot in [1, 2, 3, 4]:
-		if _slot_fg_r_local.has(slot):
-			var b: Basis = _slot_fg_r_local[slot]
-			var q := b.get_rotation_quaternion()
-			fgr[str(slot)] = {"x": snapped(q.x, 0.0001), "y": snapped(q.y, 0.0001), "z": snapped(q.z, 0.0001), "w": snapped(q.w, 0.0001)}
+	for wname in _weapon_fg_r_local:
+		var b: Basis = _weapon_fg_r_local[wname]
+		var q := b.get_rotation_quaternion()
+		fgr[wname] = {"x": snapped(q.x, 0.0001), "y": snapped(q.y, 0.0001), "z": snapped(q.z, 0.0001), "w": snapped(q.w, 0.0001)}
 	data["foregrip_r_local"] = fgr
 
 	var out = FileAccess.open(config_path, FileAccess.WRITE)
@@ -4852,9 +4891,9 @@ func _save_grip_config() -> void:
 		out.store_string(JSON.stringify(data, "\t"))
 		out.close()
 		print("[VR Mod] Grip config saved to: ", config_path)
-		for slot in [1, 2, 3, 4]:
-			var o = _slot_grip_offsets[slot]
-			print("[VR Mod]   Slot ", slot, ": grip x=", snapped(o.x, 0.001), " y=", snapped(o.y, 0.001), " z=", snapped(o.z, 0.001), " rot=", snapped(_slot_grip_rotations[slot], 0.1), "° foregrip_configured=", _slot_fg_p_local.has(slot))
+		for wname in _weapon_grip_offsets:
+			var o = _weapon_grip_offsets[wname]
+			print("[VR Mod]   ", wname, ": grip x=", snapped(o.x, 0.001), " y=", snapped(o.y, 0.001), " z=", snapped(o.z, 0.001), " rot=", snapped(_weapon_grip_rotations.get(wname, 0.0), 0.1), "° foregrip_configured=", _weapon_fg_p_local.has(wname))
 
 
 # ── Smooth HUD follow ──────────────────────────────────────────────────────────
@@ -5996,18 +6035,26 @@ func _save_full_config() -> void:
 	}
 
 	# Preserve weapon_offsets and foregrip local data so Save & Close never drops them
+	var wo2 := {}
+	for wname in _weapon_grip_offsets:
+		var o2 := _weapon_grip_offsets[wname] as Vector3
+		wo2[wname] = {
+			"x": snapped(o2.x, 0.001),
+			"y": snapped(o2.y, 0.001),
+			"z": snapped(o2.z, 0.001),
+			"rot": snapped(_weapon_grip_rotations.get(wname, 0.0), 0.1)
+		}
+	data["weapon_offsets"] = wo2
 	var fgp2 := {}
-	for slot in [1, 2, 3, 4]:
-		if _slot_fg_p_local.has(slot):
-			var p2: Vector3 = _slot_fg_p_local[slot]
-			fgp2[str(slot)] = {"x": snapped(p2.x, 0.0001), "y": snapped(p2.y, 0.0001), "z": snapped(p2.z, 0.0001)}
+	for wname in _weapon_fg_p_local:
+		var p2: Vector3 = _weapon_fg_p_local[wname]
+		fgp2[wname] = {"x": snapped(p2.x, 0.0001), "y": snapped(p2.y, 0.0001), "z": snapped(p2.z, 0.0001)}
 	data["foregrip_p_local"] = fgp2
 	var fgr2 := {}
-	for slot in [1, 2, 3, 4]:
-		if _slot_fg_r_local.has(slot):
-			var b2: Basis = _slot_fg_r_local[slot]
-			var q2 := b2.get_rotation_quaternion()
-			fgr2[str(slot)] = {"x": snapped(q2.x, 0.0001), "y": snapped(q2.y, 0.0001), "z": snapped(q2.z, 0.0001), "w": snapped(q2.w, 0.0001)}
+	for wname in _weapon_fg_r_local:
+		var b2: Basis = _weapon_fg_r_local[wname]
+		var q2 := b2.get_rotation_quaternion()
+		fgr2[wname] = {"x": snapped(q2.x, 0.0001), "y": snapped(q2.y, 0.0001), "z": snapped(q2.z, 0.0001), "w": snapped(q2.w, 0.0001)}
 	data["foregrip_r_local"] = fgr2
 
 	# Hand models
