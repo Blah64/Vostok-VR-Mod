@@ -118,8 +118,8 @@ To holster from sling: grip near your right-shoulder holster zone.
 | Right stick up / down (weapon drawn, variable scope) | Zoom in / out |
 | B (right, weapon drawn) | Cycle fire mode (standard weapons) / Open or close action (bolt-action & shotgun) |
 | B (right, weapon lowered) | Interact with objects |
-| X (left, while weapon drawn, quick tap) | Enter grip adjust mode |
-| X (left, while weapon drawn, off-hand gripping, quick tap) | Enter foregrip adjust mode |
+| X (left, while weapon drawn, quick tap) | Enter grip adjust mode *(Gun Config must be On)* |
+| X (left, while weapon drawn, off-hand gripping, quick tap) | Enter foregrip adjust mode *(Gun Config must be On)* |
 | X (left, while weapon drawn, hold 0.3 s) | Enter optic rail adjust mode |
 
 > **Note:** All weapon inputs follow the weapon hand dynamically. If you draw with your
@@ -253,6 +253,8 @@ Press **Cancel** to discard changes for this session.
 
 Dial in weapon grip position and rotation **while in-game** without editing files manually.
 
+> **Requires Gun Config to be On** — enable it in the F8 config screen under **Controls**.
+
 1. Draw a weapon (grip near a holster zone)
 2. Press **X (left)** *(without the off-hand gripping)* → controller prints "ADJUST MODE ON" to the debug log
 3. Use the sticks to tune:
@@ -276,6 +278,8 @@ automatically if you lower or holster the weapon.
 
 Calibrate exactly where the support hand visually grips the weapon during two-hand aiming.
 The weapon model is frozen in place so you can position your hand precisely.
+
+> **Requires Gun Config to be On** — enable it in the F8 config screen under **Controls**.
 
 1. Draw a weapon and grab with the off-hand (support grip)
 2. Press **X (left)** while the off-hand is gripping → the gun freezes in place
@@ -332,5 +336,5 @@ A stale `vr_mod_init.gd` in the game root (`Road to Vostok\vr_mod_init.gd`) over
 script inside the VMZ. Delete that file — Metro loads the correct version from `mods\vr-mod.vmz`.
 
 **Weapon floats at wrong position**
-Use Grip Adjust Mode (X button while weapon drawn) to tune the grip offset live.
+Enable **Gun Config** in F8 → Controls, then use Grip Adjust Mode (X while weapon drawn) to tune the grip offset live.
 If the issue persists across sessions, check `vr_mod_debug.log` in `%APPDATA%\Road to Vostok\vr_mod\`.
