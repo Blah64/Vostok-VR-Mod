@@ -404,6 +404,9 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_holster_state = HolsterState.DRAWN
 	_weapon_hand = hand
 	_weapon_slot = slot
+	# Player manually drew — pre-transition slot is no longer relevant.
+	_transition_slot = 0
+	_transition_hand = ""
 
 	# Cancel any pending holster KEY injection — prevents double-toggle when
 	# holster and draw happen within 0.15 s of each other.
@@ -813,7 +816,7 @@ func _process(delta: float) -> void:
 						# After a level transition with a weapon equipped, restore DRAWN
 						# state so the mod resumes controlling weapon position/arm hiding.
 						# The raise timer below will then inject weapon_high correctly.
-						if _transition_slot > 0:
+						if _transition_slot > 0 and _holster_state == HolsterState.UNARMED:
 							_holster_state = HolsterState.DRAWN
 							_weapon_slot = _transition_slot
 							_weapon_hand = _transition_hand
