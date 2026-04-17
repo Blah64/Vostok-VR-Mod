@@ -244,7 +244,7 @@ is always visible.
 ## In-Game Config Screen
 
 Press **F8** at any time during gameplay to open the VR settings panel. 
-Press **Save & Close** to write all settings to `default_config.json`.
+Press **Save & Close** to write all settings to `vr_mod_config.json`.
 Press **Cancel** to discard changes for this session.
 
 ---
@@ -266,7 +266,7 @@ Dial in weapon grip position and rotation **while in-game** without editing file
 | Right stick X | Weapon rotation (Y axis) |
 | Right stick Y | Grip forward / back (Z) |
 
-4. Press **A (right)** to save the current slot's values to `default_config.json` and exit
+4. Press **A (right)** to save the current slot's values to `vr_mod_config.json` and exit
 5. Press **X (left)** again to discard changes and exit
 
 Movement and turning are disabled while adjust mode is active. The mode exits

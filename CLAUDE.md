@@ -23,8 +23,8 @@ compositor — the headset stays black. `rtv_vr_bootstrap.dll` hooks Vulkan/Open
   **VMZ must use forward-slash zip entry paths** — Metro rejects backslash paths.
   `build.bat` uses `System.IO.Compression.ZipArchive` (not `Compress-Archive`) for this.
 - `%APPDATA%\Road to Vostok\vr_mod\vr_mod_debug.log` — diagnostic log (Metro writes to user data)
-- `%APPDATA%\Road to Vostok\vr_mod\default_config.json` — runtime config (created on first launch)
-- `VR Mod/config/default_config.json` — reference/defaults (not read at runtime)
+- `%APPDATA%\Road to Vostok\vr_mod\vr_mod_config.json` — runtime config (created on first launch, seeded from bundled defaults)
+- `VR Mod/config/default_config.json` — reference/defaults (not read at runtime; bundled in VMZ as `resources/default_config.json`)
 - GitHub: https://github.com/Blah64/Vostok-VR-Mod
 
 ## Critical Rules
@@ -205,7 +205,7 @@ var _hand_in_nvg_zone := {"left": false, "right": false}  # edge-detection
 
 Zone position offset is head-world-space (no yaw rotation applied — straight up).
 Tunable via F8 config → "NVG Zone" section (Radius + Y height). Persisted as
-`nvg_zone.y` and `nvg_zone.radius` in `default_config.json`.
+`nvg_zone.y` and `nvg_zone.radius` in `vr_mod_config.json`.
 
 ## NVG Overlay System
 
@@ -247,7 +247,7 @@ var _nvg_brightness := 2.0           # config: brightness multiplier
 var _nvg_overlay_installed := false
 ```
 
-**Config:** `nvg_zone` dict in `default_config.json` — keys: `y`, `radius`, `brightness`, `mono`.
+**Config:** `nvg_zone` dict in `vr_mod_config.json` — keys: `y`, `radius`, `brightness`, `mono`.
 F8 config screen → NVG Zone section: Radius, Y Height, Brightness, Mono Vision toggle.
 
 ## Comfort Vignette
@@ -404,7 +404,7 @@ var _slot_grip_offsets := { 1: ..., 2: ..., 3: ..., 4: ... }
 var _slot_grip_rotations := { 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0 }
 ```
 
-Loaded from `config/default_config.json` under `weapon_offsets.{slot}.{x,y,z,rot}`.
+Loaded from `vr_mod_config.json` under `weapon_offsets.{weapon_key}.{x,y,z,rot}`.
 Tuned live in-game via **grip adjust mode** (X button when DRAWN).
 
 ## Foregrip Lock System
