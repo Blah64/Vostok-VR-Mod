@@ -339,3 +339,6 @@ script inside the VMZ. Delete that file — Metro loads the correct version from
 **Weapon floats at wrong position**
 Enable **Gun Config** in F8 → Controls, then use Grip Adjust Mode (X while weapon drawn) to tune the grip offset live.
 If the issue persists across sessions, check `vr_mod_debug.log` in `%APPDATA%\Road to Vostok\vr_mod\`.
+
+**Can't click buttons in menu screens**
+Click on buttons with 'A' button instead of trigger.
