@@ -2232,6 +2232,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					# Start long-press detection — will resolve on release or timeout
 					_rail_x_pending = true
 					_rail_x_press_time = Time.get_ticks_msec() / 1000.0
+				elif _interface_open:
+					# X = rotate dragged item (R key); flashlight/decor disabled while menu is open
+					_inject_key(KEY_R, true)
+					_inject_key(KEY_R, false)
+					print("[VR Mod] INVENTORY: Rotate item (R)")
 				else:
 					# X button when unarmed/lowered: long-press (0.5s) = decor mode, short-press = flashlight
 					_decor_x_pending = true
@@ -2282,12 +2287,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			if hand == "left":
 				_inject_action("interface", true)  # Y = toggle inventory
 			else:
-				if _interface_open:
-					# B = rotate dragged item (game default: R key)
-					_inject_key(KEY_R, true)
-					_inject_key(KEY_R, false)
-					print("[VR Mod] INVENTORY: Rotate item (R)")
-				elif _holster_state == HolsterState.DRAWN:
+				if _holster_state == HolsterState.DRAWN:
 					if _weapon_uses_r_reload:
 						_action_open = !_action_open
 						_inject_key(KEY_CTRL, true)
