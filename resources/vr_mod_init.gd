@@ -602,6 +602,8 @@ var snap_turn_degrees := 45.0
 var smooth_turn_speed := 120.0
 var use_snap_turn := false
 var thumbstick_deadzone := 0.15
+var _move_direction_mode := "camera"  # "camera" = HMD yaw, "controller" = chosen controller yaw
+var _move_direction_hand := "left"    # "left" or "right"; used when _move_direction_mode == "controller"
 var _config_dominant_hand := "right"
 var _standing_mode := false          # false = sitting (fixed height), true = standing (physical height)
 var _standing_mode_resnap := 0       # frames remaining before re-snapping origin after mode change
@@ -1967,8 +1969,13 @@ func _process_input(delta: float) -> void:
 			var strength = (move_input.length() - thumbstick_deadzone) / (1.0 - thumbstick_deadzone)
 			move_input = move_input.normalized() * strength
 
-			if game_camera and is_instance_valid(game_camera) and xr_camera:
-				var yaw_diff = xr_camera.global_rotation.y - game_camera.global_rotation.y
+			if game_camera and is_instance_valid(game_camera):
+				var ref_yaw := xr_camera.global_rotation.y if xr_camera else 0.0
+				if _move_direction_mode == "controller":
+					var move_ctrl = right_controller if _move_direction_hand == "right" else left_controller
+					if move_ctrl and move_ctrl.get_is_active():
+						ref_yaw = move_ctrl.global_rotation.y
+				var yaw_diff = ref_yaw - game_camera.global_rotation.y
 				move_input = move_input.rotated(yaw_diff)
 
 			_inject_key(KEY_W, move_input.y > 0.3)
@@ -4849,6 +4856,8 @@ func _load_config() -> void:
 				_standing_mode = data["controls"].get("standing_mode", false)
 				_gun_config_enabled = data["controls"].get("gun_config_enabled", false)
 				_laser_always_on = data["controls"].get("laser_always_on", true)
+				_move_direction_mode = data["controls"].get("move_direction_mode", "camera")
+				_move_direction_hand = data["controls"].get("move_direction_hand", "left")
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
 				for slot in [1, 2, 3, 4]:
@@ -5278,6 +5287,8 @@ func _populate_config_ui() -> void:
 	_add_toggle_row(grid_ctrl, "Tracking Mode", ["Sitting", "Standing"], 1 if _standing_mode else 0, "_on_cfg_standing_mode")
 	_add_toggle_row(grid_ctrl, "Gun Config", ["Off", "On"], 1 if _gun_config_enabled else 0, "_on_cfg_gun_config")
 	_add_toggle_row(grid_ctrl, "Laser Always On", ["On", "Off"], 0 if _laser_always_on else 1, "_on_cfg_laser_always_on")
+	_add_toggle_row(grid_ctrl, "Move Direction", ["Camera", "Controller"], 0 if _move_direction_mode == "camera" else 1, "_on_cfg_move_direction")
+	_add_toggle_row(grid_ctrl, "Move Controller", ["Left", "Right"], 0 if _move_direction_hand == "left" else 1, "_on_cfg_move_direction_hand")
 
 	# ── Tab 1: Zones ──
 	var scroll_zone = ScrollContainer.new()
@@ -5688,6 +5699,14 @@ func _on_cfg_laser_always_on(idx: int) -> void:
 	_laser_always_on = (idx == 0)
 	print("[VR Mod] Laser always on: ", _laser_always_on)
 
+func _on_cfg_move_direction(idx: int) -> void:
+	_move_direction_mode = "camera" if idx == 0 else "controller"
+	print("[VR Mod] Move direction: ", _move_direction_mode)
+
+func _on_cfg_move_direction_hand(idx: int) -> void:
+	_move_direction_hand = "left" if idx == 0 else "right"
+	print("[VR Mod] Move direction hand: ", _move_direction_hand)
+
 
 func _on_cfg_standing_mode(idx: int) -> void:
 	_standing_mode = (idx == 1)
@@ -6064,7 +6083,9 @@ func _save_full_config() -> void:
 		"dominant_hand": _config_dominant_hand,
 		"standing_mode": _standing_mode,
 		"gun_config_enabled": _gun_config_enabled,
-		"laser_always_on": _laser_always_on
+		"laser_always_on": _laser_always_on,
+		"move_direction_mode": _move_direction_mode,
+		"move_direction_hand": _move_direction_hand
 	}
 
 	# HUD

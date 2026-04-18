@@ -12,6 +12,9 @@
 	"controls": {
 		"dominant_hand": "right",
 		"gun_config_enabled": false,
+		"laser_always_on": false,
+		"move_direction_hand": "left",
+		"move_direction_mode": "camera",
 		"standing_mode": false,
 		"thumbstick_deadzone": 0.15
 	},
@@ -327,7 +330,7 @@
 		"left|RK-62M": {
 			"w": -0.0827,
 			"x": 0.067,
-			"y": 0.9938,
+			"y": 0.9939,
 			"z": -0.0305
 		},
 		"left|RK-95": {
@@ -505,7 +508,7 @@
 	},
 	"holsters": {
 		"bag": {
-			"radius": 0.35,
+			"radius": 0.4,
 			"x": 0.15,
 			"y": -0.1,
 			"z": 0.35
