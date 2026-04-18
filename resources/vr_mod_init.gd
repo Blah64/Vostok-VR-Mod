@@ -602,6 +602,7 @@ var smooth_turn_speed := 120.0
 var use_snap_turn := false
 var thumbstick_deadzone := 0.15
 var _config_dominant_hand := "right"
+var _config_controller_directed_movement := false
 var _standing_mode := false          # false = sitting (fixed height), true = standing (physical height)
 var _standing_mode_resnap := 0       # frames remaining before re-snapping origin after mode change
 var _standing_height_ref := 0.0      # xr_camera.position.y captured at full upright height (STAGE space)
@@ -1931,6 +1932,9 @@ func _process_input(delta: float) -> void:
 				move = move.normalized() * strength
 				if game_camera and is_instance_valid(game_camera) and xr_camera:
 					var yaw_diff = xr_camera.global_rotation.y - game_camera.global_rotation.y
+					# Overwite yaw_diff if using controller directed movement instead of HMD
+					if _config_controller_directed_movement:
+						yaw_diff = _get_controller(_config_dominant_hand).global_rotation.y - game_camera.global_rotation.y
 					move = move.rotated(yaw_diff)
 				_inject_key(KEY_W, move.y > 0.3)
 				_inject_key(KEY_S, move.y < -0.3)
@@ -1968,6 +1972,9 @@ func _process_input(delta: float) -> void:
 
 			if game_camera and is_instance_valid(game_camera) and xr_camera:
 				var yaw_diff = xr_camera.global_rotation.y - game_camera.global_rotation.y
+				# Overwrite yaw diff if using controller directed movement instead of HMD movement
+				if _config_controller_directed_movement:
+					yaw_diff = _get_controller(_config_dominant_hand).global_rotation.y - game_camera.global_rotation.y
 				move_input = move_input.rotated(yaw_diff)
 
 			_inject_key(KEY_W, move_input.y > 0.3)
@@ -4828,6 +4835,7 @@ func _load_config() -> void:
 			if data.has("controls"):
 				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
+				_config_controller_directed_movement = data["controls"].get("controller_directed_movement", false)
 				_standing_mode = data["controls"].get("standing_mode", false)
 				_gun_config_enabled = data["controls"].get("gun_config_enabled", false)
 			if data.has("holsters"):
@@ -5256,6 +5264,7 @@ func _populate_config_ui() -> void:
 	_mk_header(vbox_gen, "Controls")
 	var grid_ctrl = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
+	_add_toggle_row(grid_ctrl, "Controller Directed Movement", ["Off", "On"], 1 if _config_controller_directed_movement else 0, "_on_cfg_ctrl_dir_mvmt")
 	_add_toggle_row(grid_ctrl, "Tracking Mode", ["Sitting", "Standing"], 1 if _standing_mode else 0, "_on_cfg_standing_mode")
 	_add_toggle_row(grid_ctrl, "Gun Config", ["Off", "On"], 1 if _gun_config_enabled else 0, "_on_cfg_gun_config")
 
@@ -5655,6 +5664,12 @@ func _on_cfg_hand(idx: int) -> void:
 	_destroy_watch_mesh()
 	_create_watch_mesh()
 
+func _on_cfg_ctrl_dir_mvmt(idx: int) -> void:
+	if idx == 1:
+		_config_controller_directed_movement = true
+	else:
+		_config_controller_directed_movement = false
+
 
 func _on_cfg_gun_config(idx: int) -> void:
 	_gun_config_enabled = (idx == 1)
@@ -6037,6 +6052,7 @@ func _save_full_config() -> void:
 	data["controls"] = {
 		"thumbstick_deadzone": thumbstick_deadzone,
 		"dominant_hand": _config_dominant_hand,
+		"controller_directed_movement": _config_controller_directed_movement,
 		"standing_mode": _standing_mode,
 		"gun_config_enabled": _gun_config_enabled
 	}
