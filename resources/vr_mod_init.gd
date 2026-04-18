@@ -1984,6 +1984,7 @@ func _process_input(delta: float) -> void:
 				_inject_key(KEY_S, move.y < -0.3)
 				_inject_key(KEY_A, move.x < -0.3)
 				_inject_key(KEY_D, move.x > 0.3)
+				_vignette_hold = maxf(_vignette_hold, 0.15)
 			else:
 				_inject_key(KEY_W, false)
 				_inject_key(KEY_S, false)
@@ -2027,6 +2028,7 @@ func _process_input(delta: float) -> void:
 			_inject_key(KEY_S, move_input.y < -0.3)
 			_inject_key(KEY_A, move_input.x < -0.3)
 			_inject_key(KEY_D, move_input.x > 0.3)
+			_vignette_hold = maxf(_vignette_hold, 0.15)
 		else:
 			_inject_key(KEY_W, false)
 			_inject_key(KEY_S, false)
