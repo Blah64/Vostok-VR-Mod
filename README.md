@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod v1.1.6
+# Road to Vostok — VR Mod v1.2.0
 
 A VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
@@ -330,7 +330,7 @@ Both methods can be used interchangeably. A haptic pulse confirms each rail incr
 
 **Black screen in headset after launch**
 Make sure SteamVR or the Meta PC app is running *before* you start the game.
-The Main Menu launches VR into a black screen, but a VR camera is not started until the world actually loads in.
+The game launch starts up VR, but the mod doesn't start until after Metro Mod Launcher initiates mods. MML needs the monitor and mouse to start the mods.
 
 **Mod behaves like an older version / changes have no effect**
 A stale `vr_mod_init.gd` in the game root (`Road to Vostok\vr_mod_init.gd`) overrides the
