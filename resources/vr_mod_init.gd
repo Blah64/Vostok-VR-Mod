@@ -2061,8 +2061,9 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			"by_button":
 				if hand == "left":
 					# Y button = furniture inventory (Tab)
-					_inject_key(KEY_TAB, true)
-					_inject_key(KEY_TAB, false)
+					# Single dispatch only — _inject_key double-sends (parse+push_input)
+					# which toggles the furniture inventory open then immediately closed.
+					_tab_single_press()
 					print("[VR Mod] DECOR: Furniture inventory (Tab)")
 				elif hand == "right":
 					# B button = store item to furniture inventory (middle mouse)
@@ -2085,6 +2086,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			"menu_button":
 				_toggle_esc_menu()
 		return  # Don't fall through to normal input handling
+
+	# In decor mode with furniture inventory open, Y still maps to TAB (not player inventory)
+	if _decor_mode and _interface_open and button_name == "by_button" and hand == "left":
+		_tab_single_press()
+		return
 
 	match button_name:
 		"trigger_click":
@@ -2462,7 +2468,8 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				_inject_action("jump", false)
 		"by_button":
 			if hand == "left":
-				_inject_action("interface", false)
+				if not _decor_mode:
+					_inject_action("interface", false)
 			else:
 				if _holster_state != HolsterState.DRAWN:
 					_inject_action("interact", false)
@@ -2477,6 +2484,18 @@ func _on_button_released(button_name: String, hand: String) -> void:
 
 var _key_states := {}
 var _mouse_states := {}
+
+func _tab_single_press() -> void:
+	# Send TAB press+release via push_input only (not parse_input_event).
+	# _inject_key sends both; parse_input_event re-fires the toggle handler a second time,
+	# opening then immediately closing the furniture inventory.
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_TAB
+	ev.physical_keycode = KEY_TAB
+	ev.pressed = true
+	get_viewport().push_input(ev, false)
+	ev.pressed = false
+	get_viewport().push_input(ev, false)
 
 func _inject_key(keycode: int, pressed: bool) -> void:
 	var current = _key_states.get(keycode, false)
