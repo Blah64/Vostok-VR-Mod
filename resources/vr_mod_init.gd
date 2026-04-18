@@ -216,6 +216,10 @@ var _fg_r_sup_local := Basis.IDENTITY # active foregrip rotation in weapon_rig l
 var _fg_grip_captured := false         # true while the foregrip lock is active
 var _cached_weapon_rig: Node3D = null  # last weapon_rig ref, used for adjust mode entry/save
 
+# Used for activating VR Config Menu
+var _vr_config_menu_reminder_already_shown := false  # Only show the "Press both sticks to open VR Config" hint once per session
+var _left_stick_held := false
+var _right_stick_held := false
 
 func _get_weapon_hand() -> String:
 	if _holster_state != HolsterState.UNARMED and _weapon_hand != "":
@@ -687,6 +691,25 @@ func _ready() -> void:
 	else:
 		print("[VR Mod] Tracking: sitting (local)")
 	print("[VR Mod] Waiting for 3D camera (gameplay start)...")
+	# Show reminder about VR options menu once
+	if not _vr_config_menu_reminder_already_shown:
+		_vr_config_menu_reminder_already_shown = true
+		# Create Label3d in front of camera with reminder about VR options menu, free after a ten seconds
+		var reminder_label = Label3D.new()
+		reminder_label.text = "VR OPTIONS MENU:\nToggle In-Game \nBy Clicking Both Thumbsticks"
+		reminder_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		reminder_label.modulate = Color(0.2, 0.5, 1.0) 
+		reminder_label.outline_modulate = Color.BLACK
+		reminder_label.pixel_size = 0.002
+		reminder_label.font_size = 32
+		reminder_label.no_depth_test = true
+		reminder_label.shaded = false
+		reminder_label.render_priority = 127
+		reminder_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		xr_camera.add_child(reminder_label)
+		reminder_label.position = Vector3(0, 0, -0.75)
+		print("[VR Mod] Showing Reminder re VR Options Menu")
+		get_tree().create_timer(20.0).timeout.connect(reminder_label.queue_free)
 
 
 func _process(delta: float) -> void:
@@ -1201,8 +1224,8 @@ func _setup_vr_hud() -> void:
 	print("[VR Mod] VR HUD installed (wrist watch mode)")
 
 	_setup_nvg_overlay()
+	
 	print("[VR Mod] === VR fully active ===")
-
 
 func _setup_nvg_overlay() -> void:
 	_nvg_overlay_mesh = MeshInstance3D.new()
@@ -1792,10 +1815,9 @@ func _on_main_menu_entered() -> void:
 	_in_menu_mode = true
 	# Menu needs visible cursor so warp_mouse() actually moves the click position.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_log("Main menu mode entered")
 	if xr_camera:
 		xr_camera.current = true
-	_log("Main menu mode entered")
-
 
 func _sync_origin_to_game() -> void:
 	if game_camera and is_instance_valid(game_camera) and xr_origin:
@@ -2071,7 +2093,6 @@ func _process_input(delta: float) -> void:
 					_vignette_hold = maxf(_vignette_hold, 0.15)
 			else:
 				_snap_turn_cooldown = false
-
 
 func _on_button_pressed(button_name: String, hand: String) -> void:
 	# Resolve hand roles dynamically based on holster state.
@@ -2380,9 +2401,17 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			_toggle_esc_menu()
 		"primary_click":
 			if hand == "left":
-				_inject_action("sprint", true)
-			elif not _physical_crouch_active:
-				_inject_action("crouch", true)
+				_left_stick_held = true
+				if not _right_stick_held:
+					_inject_action("sprint", true)
+			else:
+				_right_stick_held = true
+				if not _physical_crouch_active and not _left_stick_held:
+					_inject_action("crouch", true)
+			if _left_stick_held and _right_stick_held and not _interface_open:
+				# Both sticks = toggle config screen
+				_toggle_config_screen()
+				return
 
 
 func _on_button_released(button_name: String, hand: String) -> void:
@@ -2524,9 +2553,12 @@ func _on_button_released(button_name: String, hand: String) -> void:
 			pass  # ESC release handled by _toggle_esc_menu
 		"primary_click":
 			if hand == "left":
+				_left_stick_held = false
 				_inject_action("sprint", false)
-			elif not _physical_crouch_active:
-				_inject_action("crouch", false)
+			else:
+				_right_stick_held = false
+				if not _physical_crouch_active:
+					_inject_action("crouch", false)
 
 
 var _key_states := {}
@@ -5451,6 +5483,41 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_sling, "Rot Y", _sling_rot_offset.y, -180.0, 180.0, 5.0, "_on_cfg_sling_ry")
 	_add_stepper_row(grid_sling, "Rot Z", _sling_rot_offset.z, -180.0, 180.0, 5.0, "_on_cfg_sling_rz")
 
+	# ── Tab 3: Info/Controls ──
+	var scroll_info = ScrollContainer.new()
+	scroll_info.name = "Controls | Readme"
+	scroll_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_info.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(scroll_info)
+
+	var info_text = RichTextLabel.new()
+	info_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	info_text.bbcode_enabled = true
+	info_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info_text.add_theme_font_size_override("normal_font_size", 18)
+	info_text.add_theme_font_size_override("bold_font_size", 20)
+
+	# Logic to find README in [Exe Dir]/VR Mod/README.md to display in help menu
+	var exe_dir = OS.get_executable_path().get_base_dir()
+	# Path join handles separators correctly across platforms
+	var readme_path = exe_dir.path_join("VR Mod").path_join("README.md")
+
+	if FileAccess.file_exists(readme_path):
+		var file = FileAccess.open(readme_path, FileAccess.READ)
+		var raw_md = file.get_as_text()
+		info_text.append_text(_parse_vostok_readme(raw_md))
+	else:
+		# Fallback for local development/editor testing if file isn't next to editor exe
+		var fallback_path = "res://VR Mod/README.md"
+		if FileAccess.file_exists(fallback_path):
+			var file = FileAccess.open(fallback_path, FileAccess.READ)
+			info_text.append_text(_parse_vostok_readme(file.get_as_text()))
+		else:
+			info_text.append_text("[color=gray]README.md not found at:\n" + readme_path + "[/color]")
+	
+	scroll_info.add_child(info_text)
+
 	# ── Save & Close (pinned below tabs — always visible) ──
 	var btn_sep = HSeparator.new()
 	btn_sep.add_theme_constant_override("separation", 10)
@@ -5545,7 +5612,66 @@ func _mk_style(color: Color) -> StyleBoxFlat:
 	sb.content_margin_bottom = 4
 	return sb
 
+# README Parser for UI
+func _parse_vostok_readme(md: String) -> String:
+	var bb = md
+	var regex = RegEx.new()
 
+	# 1. Table Parser (Manual loop is safer than regex for complex MD tables)
+	var lines = bb.split("\n")
+	var in_table = false
+	var new_lines = []
+	var table_rows = []
+	var max_cols = 0
+
+	for line in lines:
+		var stripped = line.strip_edges()
+		if stripped.begins_with("|") and stripped.ends_with("|"):
+			if "---" in line: continue 
+			in_table = true
+			var cells = line.split("|", false)
+			max_cols = max(max_cols, cells.size())
+			table_rows.append(cells)
+		else:
+			if in_table:
+				var table_bb = "\n[table=" + str(max_cols) + "]"
+				for row in table_rows:
+					for cell in row:
+						table_bb += "[cell][color=#e0e0e0] " + cell.strip_edges() + " [/color][/cell]"
+				table_bb += "[/table]\n"
+				new_lines.append(table_bb)
+				table_rows = []
+				max_cols = 0
+				in_table = false
+			new_lines.append(line)
+	bb = "\n".join(new_lines)
+
+	# 2. Markdown Parsing using RegEx.sub(subject, replacement, all=true)
+	
+	# Headers (H1-H3)
+	# Using raw strings r"..." avoids double-backslash headaches
+	regex.compile(r"(?m)^# (.*)")
+	bb = regex.sub(bb, "[font_size=32][b][color=#e6da99]$1[/color][/b][/font_size]", true)
+	
+	regex.compile(r"(?m)^## (.*)")
+	bb = regex.sub(bb, "\n[font_size=24][b][color=#b3ccff]$1[/color][/b][/font_size]", true)
+	
+	regex.compile(r"(?m)^### (.*)")
+	bb = regex.sub(bb, "\n[font_size=20][b][color=#8eb4ff]$1[/color][/b][/font_size]", true)
+
+	# Bold Text **text**
+	regex.compile(r"\*\*(.*?)\*\*")
+	bb = regex.sub(bb, "[b]$1[/b]", true)
+	
+	# Blockquotes > text
+	regex.compile(r"(?m)^> (.*)")
+	bb = regex.sub(bb, "[color=#99ffcc][i]$1[/i][/color]", true)
+
+	# Code Blocks (Monospace feel)
+	regex.compile(r"(?s)```(.*?)```")
+	bb = regex.sub(bb, "[indent][color=#aaaaaa][font_size=16]$1[/font_size][/color][/indent]", true)
+
+	return bb
 # ── Row builders ────────────────────────────────────────────────────────────
 
 func _add_toggle_row(grid: GridContainer, label: String, options: Array, active: int, callback_name: String) -> void:
