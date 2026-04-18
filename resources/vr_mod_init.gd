@@ -545,6 +545,7 @@ var hud_mesh: MeshInstance3D
 var _hud_installed := false
 var _interface_open := false
 var _prev_interface_open := false  # For detecting transitions
+var _in_menu_mode := false         # True when at the main menu (no game camera); shows HUD panel
 var _laser_mesh: MeshInstance3D   # Visual laser pointer line (dual-purpose: grab range + UI pointer)
 var _laser_always_on := true      # When false, laser hidden unless pointing at something interactable
 var _hover_label: Label3D = null  # Floating item name shown when aiming at interactable/grabbable
@@ -633,6 +634,7 @@ var _vignette_hold := 0.0     # seconds; >0 = vignette active
 const CAMERA_POLL_INTERVAL := 30
 const XR_SETTLE_FRAMES := 10
 const HUD_SETUP_DELAY := 30
+const MENU_SETTLE_FRAMES := 90  # ~1.5s; proceed to VR even without game camera
 
 
 func _notification(what: int) -> void:
@@ -700,7 +702,11 @@ func _process(delta: float) -> void:
 				if game_camera:
 					print("[VR Mod] === Game camera detected! ===")
 					print("[VR Mod] Camera: ", game_camera.get_path())
-					get_viewport().use_xr = true
+					_phase = 1
+					_frames_waited = 0
+				elif _frames_waited >= MENU_SETTLE_FRAMES:
+					print("[VR Mod] No gameplay camera after settle — enabling VR at main menu")
+					_in_menu_mode = true
 					_phase = 1
 					_frames_waited = 0
 
@@ -724,13 +730,14 @@ func _process(delta: float) -> void:
 							_on_level_transition()
 							_camera_lost_frames = 0
 							print("[VR Mod] Camera found again")
-					# After ~2 seconds without a camera (main menu), gracefully quit
-					elif _camera_lost_frames > 120 and get_viewport().use_xr:
-						print("[VR Mod] Camera lost for 2+ seconds (main menu detected) — quitting game")
-						get_tree().quit()
+					# After ~2 seconds without a camera, enter main menu mode (once)
+					elif _camera_lost_frames > 120 and not _in_menu_mode:
+						_on_main_menu_entered()
 
 				if not _hud_installed and _frames_waited >= HUD_SETUP_DELAY:
 					_setup_vr_hud()
+					if _in_menu_mode:
+						_prev_interface_open = false  # Force _on_interface_opened() to re-fire now that hud_mesh exists
 
 				# Retry weapon reparenting until it succeeds (nodes may load late)
 				if not _weapons_reparented and _frames_waited % 60 == 0:
@@ -1011,6 +1018,7 @@ func _install_xr_rig() -> void:
 	else:
 		xr_origin.global_position = Vector3.ZERO
 		_last_game_cam_pos = Vector3(0, 1.7, 0)
+		_in_menu_mode = true  # No game camera — show menu panel once HUD is set up
 
 	xr_camera.current = true
 	get_viewport().use_xr = true
@@ -1379,6 +1387,10 @@ func _update_interface_state() -> void:
 	if _esc_menu_active:
 		_interface_open = true
 
+	# Main menu mode: no game scene, but show the HUD panel for the main menu UI
+	if _in_menu_mode:
+		_interface_open = true
+
 	# Detect transitions
 	if _interface_open and not _prev_interface_open:
 		_on_interface_opened()
@@ -1692,6 +1704,7 @@ func _attach_rig_to_camera() -> void:
 	xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - actual_head_height, cam_pos.z)
 	_last_game_cam_pos = cam_pos
 	xr_camera.cull_mask = game_camera.cull_mask
+	_in_menu_mode = false
 	print("[VR Mod] Rig snapped to new camera at ", cam_pos)
 
 
@@ -1750,6 +1763,30 @@ func _on_level_transition() -> void:
 	print("[VR Mod] XR camera re-asserted as current")
 
 	_log("Level transition reset complete, camera at " + str(game_camera.global_position))
+
+
+func _on_main_menu_entered() -> void:
+	print("[VR Mod] Main menu detected — VR stays active, polling for game camera")
+	_holster_state = HolsterState.UNARMED
+	_weapon_slot = 0
+	_weapons_reparented = false
+	_weapon_loaded = false
+	_grabbed_object = null
+	_grab_hand = ""
+	_action_open = false
+	_pump_gesture_active = false
+	_nvg_active = false
+	if _nvg_overlay_mesh:
+		_nvg_overlay_mesh.visible = false
+	_clear_grenade_state()
+	_esc_menu_active = false
+	_teardown_watch_content()
+	_cleanup_scope()
+	_camera_lost_frames = 0
+	_in_menu_mode = true
+	if xr_camera:
+		xr_camera.current = true
+	_log("Main menu mode entered")
 
 
 func _sync_origin_to_game() -> void:
