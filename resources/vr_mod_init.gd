@@ -546,6 +546,7 @@ var _hud_installed := false
 var _interface_open := false
 var _prev_interface_open := false  # For detecting transitions
 var _laser_mesh: MeshInstance3D   # Visual laser pointer line (dual-purpose: grab range + UI pointer)
+var _laser_always_on := true      # When false, laser hidden unless pointing at something interactable
 var _hover_label: Label3D = null  # Floating item name shown when aiming at interactable/grabbable
 var _menu_open := false           # True while inventory/menu is visible
 var _menu_ctrl_held := false      # True while support grip is held in menus (Ctrl modifier for fast transfer)
@@ -3352,14 +3353,29 @@ func _update_hand_visibility() -> void:
 									pointing_at_furniture = true
 									break
 							check = check.get_parent()
-			elif grab_ray and grab_ray.is_colliding():
-				var c = grab_ray.get_collider()
-				pointing_at_grabbable = c is RigidBody3D and (c.collision_layer & 4) != 0
-				if not pointing_at_grabbable and c.is_in_group("Interactable"):
-					pointing_at_interactable = true
-				if (pointing_at_grabbable or pointing_at_interactable) and c is Node3D:
-					hover_collider = c as Node3D
-					hover_hit_pos = grab_ray.get_collision_point()
+			else:
+				# Grabbable: mod's GrabRay handles pickup directly (RigidBody3D layer 4, 1m)
+				if grab_ray and grab_ray.is_colliding():
+					var c = grab_ray.get_collider()
+					if c is RigidBody3D and (c.collision_layer & 4) != 0:
+						pointing_at_grabbable = true
+						hover_collider = c as Node3D
+						hover_hit_pos = grab_ray.get_collision_point()
+				# B-button interactable: use game's Interactor so yellow = B actually works
+				if not pointing_at_grabbable and game_camera and is_instance_valid(game_camera):
+					var interactor = game_camera.get_node_or_null("Interactor")
+					if interactor is RayCast3D and interactor.is_colliding():
+						var ic = interactor.get_collider()
+						var check = ic
+						for _i in range(4):
+							if not is_instance_valid(check):
+								break
+							if check.is_in_group("Interactable"):
+								pointing_at_interactable = true
+								hover_collider = check as Node3D
+								hover_hit_pos = interactor.get_collision_point()
+								break
+							check = check.get_parent()
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
 				if _decor_mode and pointing_at_furniture:
@@ -3388,10 +3404,12 @@ func _update_hand_visibility() -> void:
 					_hover_label.visible = true
 				else:
 					_hover_label.visible = false
+			var has_target := pointing_at_grabbable or pointing_at_interactable or pointing_at_furniture
+			_laser_mesh.visible = _laser_always_on or has_target
 		else:
 			if _hover_label:
 				_hover_label.visible = false
-		_laser_mesh.visible = show_laser
+			_laser_mesh.visible = false
 
 
 
@@ -4830,6 +4848,7 @@ func _load_config() -> void:
 				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
 				_standing_mode = data["controls"].get("standing_mode", false)
 				_gun_config_enabled = data["controls"].get("gun_config_enabled", false)
+				_laser_always_on = data["controls"].get("laser_always_on", true)
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
 				for slot in [1, 2, 3, 4]:
@@ -5258,6 +5277,7 @@ func _populate_config_ui() -> void:
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
 	_add_toggle_row(grid_ctrl, "Tracking Mode", ["Sitting", "Standing"], 1 if _standing_mode else 0, "_on_cfg_standing_mode")
 	_add_toggle_row(grid_ctrl, "Gun Config", ["Off", "On"], 1 if _gun_config_enabled else 0, "_on_cfg_gun_config")
+	_add_toggle_row(grid_ctrl, "Laser Always On", ["On", "Off"], 0 if _laser_always_on else 1, "_on_cfg_laser_always_on")
 
 	# ── Tab 1: Zones ──
 	var scroll_zone = ScrollContainer.new()
@@ -5664,6 +5684,11 @@ func _on_cfg_gun_config(idx: int) -> void:
 	print("[VR Mod] Gun config: ", "on" if _gun_config_enabled else "off")
 
 
+func _on_cfg_laser_always_on(idx: int) -> void:
+	_laser_always_on = (idx == 0)
+	print("[VR Mod] Laser always on: ", _laser_always_on)
+
+
 func _on_cfg_standing_mode(idx: int) -> void:
 	_standing_mode = (idx == 1)
 	if xr_interface and is_instance_valid(xr_interface):
@@ -6038,7 +6063,8 @@ func _save_full_config() -> void:
 		"thumbstick_deadzone": thumbstick_deadzone,
 		"dominant_hand": _config_dominant_hand,
 		"standing_mode": _standing_mode,
-		"gun_config_enabled": _gun_config_enabled
+		"gun_config_enabled": _gun_config_enabled,
+		"laser_always_on": _laser_always_on
 	}
 
 	# HUD
