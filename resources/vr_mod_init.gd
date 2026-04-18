@@ -1030,8 +1030,13 @@ func _install_xr_rig() -> void:
 
 	_reparent_camera_children()
 
-	# Ensure mouse is captured so fire input works
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	# Gameplay needs captured cursor for fire input; main menu needs visible cursor
+	# so warp_mouse() actually moves the click position (captured mode locks cursor
+	# to window center → every click registers at center regardless of laser aim).
+	if _in_menu_mode:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 	# Ensure user data directory and default config exist
 	DirAccess.make_dir_recursive_absolute("user://vr_mod")
@@ -1705,6 +1710,7 @@ func _attach_rig_to_camera() -> void:
 	_last_game_cam_pos = cam_pos
 	xr_camera.cull_mask = game_camera.cull_mask
 	_in_menu_mode = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	print("[VR Mod] Rig snapped to new camera at ", cam_pos)
 
 
@@ -1784,6 +1790,8 @@ func _on_main_menu_entered() -> void:
 	_cleanup_scope()
 	_camera_lost_frames = 0
 	_in_menu_mode = true
+	# Menu needs visible cursor so warp_mouse() actually moves the click position.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if xr_camera:
 		xr_camera.current = true
 	_log("Main menu mode entered")
