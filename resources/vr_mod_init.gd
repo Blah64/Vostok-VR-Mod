@@ -217,6 +217,11 @@ var _fg_r_sup_local := Basis.IDENTITY # active foregrip rotation in weapon_rig l
 var _fg_grip_captured := false         # true while the foregrip lock is active
 var _cached_weapon_rig: Node3D = null  # last weapon_rig ref, used for adjust mode entry/save
 
+# Used for activating VR Config Menu
+var _left_stick_held := false
+var _right_stick_held := false
+var _readme_bbcode_cache := ""
+var _config_reminder_label: Label3D = null
 
 func _get_weapon_hand() -> String:
 	if _holster_state != HolsterState.UNARMED and _weapon_hand != "":
@@ -696,6 +701,23 @@ func _ready() -> void:
 	else:
 		print("[VR Mod] Tracking: sitting (local)")
 	print("[VR Mod] Waiting for 3D camera (gameplay start)...")
+	# Show reminder about VR options menu at startup; persists (hidden) for main menu reuse
+	_config_reminder_label = Label3D.new()
+	_config_reminder_label.text = "VR OPTIONS MENU:\nToggle In-Game \nBy Clicking Both Thumbsticks"
+	_config_reminder_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_config_reminder_label.modulate = Color(0.2, 0.5, 1.0)
+	_config_reminder_label.outline_modulate = Color.BLACK
+	_config_reminder_label.pixel_size = 0.002
+	_config_reminder_label.font_size = 32
+	_config_reminder_label.no_depth_test = true
+	_config_reminder_label.shaded = false
+	_config_reminder_label.render_priority = 127
+	_config_reminder_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_config_reminder_label.layers = 1 << 19
+	xr_camera.add_child(_config_reminder_label)
+	_config_reminder_label.position = Vector3(0, 0, -0.75)
+	print("[VR Mod] Showing config reminder")
+	get_tree().create_timer(3.0).timeout.connect(_anchor_config_reminder)
 
 
 func _process(delta: float) -> void:
@@ -1210,8 +1232,8 @@ func _setup_vr_hud() -> void:
 	print("[VR Mod] VR HUD installed (wrist watch mode)")
 
 	_setup_nvg_overlay()
+	
 	print("[VR Mod] === VR fully active ===")
-
 
 func _setup_nvg_overlay() -> void:
 	_nvg_overlay_mesh = MeshInstance3D.new()
@@ -1720,6 +1742,8 @@ func _attach_rig_to_camera() -> void:
 	xr_camera.cull_mask = game_camera.cull_mask
 	_in_menu_mode = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if _config_reminder_label and is_instance_valid(_config_reminder_label):
+		_config_reminder_label.visible = false
 	print("[VR Mod] Rig snapped to new camera at ", cam_pos)
 
 
@@ -1801,10 +1825,35 @@ func _on_main_menu_entered() -> void:
 	_in_menu_mode = true
 	# Menu needs visible cursor so warp_mouse() actually moves the click position.
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_log("Main menu mode entered")
 	if xr_camera:
 		xr_camera.current = true
-	_log("Main menu mode entered")
+	_show_config_reminder()
 
+func _show_config_reminder() -> void:
+	if not _config_reminder_label or not is_instance_valid(_config_reminder_label) or not xr_camera:
+		return
+	var cam_pos = xr_camera.global_position
+	var cam_forward = -xr_camera.global_basis.z
+	cam_forward.y = 0.0
+	cam_forward = cam_forward.normalized()
+	var pos = cam_pos + cam_forward * _menu_distance
+	pos += xr_camera.global_basis.x * _menu_lr_offset
+	pos.y = cam_pos.y + _hud_height_offset + 0.8
+	_config_reminder_label.global_position = pos
+	_config_reminder_label.look_at(cam_pos, Vector3.UP)
+	_config_reminder_label.rotate_y(deg_to_rad(180))
+	_config_reminder_label.visible = true
+
+func _anchor_config_reminder() -> void:
+	if not _config_reminder_label or not is_instance_valid(_config_reminder_label):
+		return
+	var parent = _config_reminder_label.get_parent()
+	if parent:
+		parent.remove_child(_config_reminder_label)
+	get_tree().root.add_child(_config_reminder_label)
+	_show_config_reminder()
+	_config_reminder_label.visible = _in_menu_mode
 
 func _sync_origin_to_game() -> void:
 	if game_camera and is_instance_valid(game_camera) and xr_origin:
@@ -2100,7 +2149,6 @@ func _process_input(delta: float) -> void:
 					_vignette_hold = maxf(_vignette_hold, 0.15)
 			else:
 				_snap_turn_cooldown = false
-
 
 func _on_button_pressed(button_name: String, hand: String) -> void:
 	# Resolve hand roles dynamically based on holster state.
@@ -2409,9 +2457,19 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			_toggle_esc_menu()
 		"primary_click":
 			if hand == "left":
-				_inject_action("sprint", true)
-			elif not _physical_crouch_active:
-				_inject_action("crouch", true)
+				_left_stick_held = true
+				if not _right_stick_held:
+					_inject_action("sprint", true)
+			else:
+				_right_stick_held = true
+				if not _physical_crouch_active and not _left_stick_held:
+					_inject_action("crouch", true)
+			if _left_stick_held and _right_stick_held:
+				# Both sticks = toggle config screen; cancel any in-flight actions first
+				_inject_action("sprint", false)
+				_inject_action("crouch", false)
+				_toggle_config_screen()
+				return
 
 
 func _on_button_released(button_name: String, hand: String) -> void:
@@ -2553,9 +2611,12 @@ func _on_button_released(button_name: String, hand: String) -> void:
 			pass  # ESC release handled by _toggle_esc_menu
 		"primary_click":
 			if hand == "left":
+				_left_stick_held = false
 				_inject_action("sprint", false)
-			elif not _physical_crouch_active:
-				_inject_action("crouch", false)
+			else:
+				_right_stick_held = false
+				if not _physical_crouch_active:
+					_inject_action("crouch", false)
 
 
 var _key_states := {}
@@ -5480,6 +5541,35 @@ func _populate_config_ui() -> void:
 	_add_stepper_row(grid_sling, "Rot Y", _sling_rot_offset.y, -180.0, 180.0, 5.0, "_on_cfg_sling_ry")
 	_add_stepper_row(grid_sling, "Rot Z", _sling_rot_offset.z, -180.0, 180.0, 5.0, "_on_cfg_sling_rz")
 
+	# ── Tab 3: Info/Controls ──
+	var scroll_info = ScrollContainer.new()
+	scroll_info.name = "Controls"
+	scroll_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll_info.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	tabs.add_child(scroll_info)
+
+	var info_text = RichTextLabel.new()
+	info_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_text.size_flags_vertical = Control.SIZE_FILL
+	info_text.fit_content = true
+	info_text.bbcode_enabled = true
+	info_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info_text.add_theme_font_size_override("normal_font_size", 18)
+	info_text.add_theme_font_size_override("bold_font_size", 20)
+
+	if _readme_bbcode_cache.is_empty():
+		var controls_path = "res://resources/controls.md"
+		if FileAccess.file_exists(controls_path):
+			var file = FileAccess.open(controls_path, FileAccess.READ)
+			var raw_md = file.get_as_text()
+			file.close()
+			_readme_bbcode_cache = _parse_vostok_readme(raw_md)
+		else:
+			_readme_bbcode_cache = "[color=gray]controls.md not found in VMZ[/color]"
+	info_text.append_text(_readme_bbcode_cache)
+	
+	scroll_info.add_child(info_text)
+
 	# ── Save & Close (pinned below tabs — always visible) ──
 	var btn_sep = HSeparator.new()
 	btn_sep.add_theme_constant_override("separation", 10)
@@ -5573,6 +5663,79 @@ func _mk_style(color: Color) -> StyleBoxFlat:
 	sb.content_margin_top = 4
 	sb.content_margin_bottom = 4
 	return sb
+
+# README Parser for UI
+func _parse_vostok_readme(md: String) -> String:
+	var bb = md
+	var regex = RegEx.new()
+
+	# 1. Table Parser (Manual loop is safer than regex for complex MD tables)
+	var lines = bb.split("\n")
+	var in_table = false
+	var new_lines = []
+	var table_rows = []
+	var max_cols = 0
+
+	for line in lines:
+		var stripped = line.strip_edges()
+		if stripped.begins_with("|") and stripped.ends_with("|"):
+			if "---" in line: continue
+			in_table = true
+			var cells = line.split("|", false)
+			max_cols = max(max_cols, cells.size())
+			table_rows.append(cells)
+		else:
+			if in_table:
+				var table_bb = "\n[table=" + str(max_cols) + "]"
+				for row in table_rows:
+					for cell in row:
+						table_bb += "[cell][color=#e0e0e0] " + cell.strip_edges() + " [/color][/cell]"
+				table_bb += "[/table]\n"
+				new_lines.append(table_bb)
+				table_rows = []
+				max_cols = 0
+				in_table = false
+			new_lines.append(line)
+	# Flush any table that ends at EOF
+	if in_table and table_rows.size() > 0:
+		var table_bb = "\n[table=" + str(max_cols) + "]"
+		for row in table_rows:
+			for cell in row:
+				table_bb += "[cell][color=#e0e0e0] " + cell.strip_edges() + " [/color][/cell]"
+		table_bb += "[/table]\n"
+		new_lines.append(table_bb)
+	bb = "\n".join(new_lines)
+
+	# 2. Markdown Parsing using RegEx.sub(subject, replacement, all=true)
+	
+	# Headers (H1-H3)
+	# Using raw strings r"..." avoids double-backslash headaches
+	regex.compile(r"(?m)^# (.*)")
+	bb = regex.sub(bb, "[font_size=32][b][color=#e6da99]$1[/color][/b][/font_size]", true)
+	
+	regex.compile(r"(?m)^## (.*)")
+	bb = regex.sub(bb, "\n[font_size=24][b][color=#b3ccff]$1[/color][/b][/font_size]", true)
+	
+	regex.compile(r"(?m)^### (.*)")
+	bb = regex.sub(bb, "\n[font_size=20][b][color=#8eb4ff]$1[/color][/b][/font_size]", true)
+
+	# Bold Text **text**
+	regex.compile(r"\*\*(.*?)\*\*")
+	bb = regex.sub(bb, "[b]$1[/b]", true)
+	
+	# Blockquotes > text
+	regex.compile(r"(?m)^> (.*)")
+	bb = regex.sub(bb, "[color=#99ffcc][i]$1[/i][/color]", true)
+
+	# Code Blocks (Monospace feel)
+	regex.compile(r"(?s)```(.*?)```")
+	bb = regex.sub(bb, "[indent][color=#aaaaaa][font_size=16]$1[/font_size][/color][/indent]", true)
+
+	# Inline code `text`
+	regex.compile(r"`([^`]+)`")
+	bb = regex.sub(bb, "[color=#aaaaaa][font_size=16]$1[/font_size][/color]", true)
+
+	return bb
 
 
 # ── Row builders ────────────────────────────────────────────────────────────
