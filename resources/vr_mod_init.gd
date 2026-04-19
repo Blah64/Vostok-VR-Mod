@@ -75,6 +75,7 @@ var _holster_offsets := {
 }
 var _holster_zone_radius := 0.27
 var _holster_zones_mirrored := false
+var _holster_holo_nodes: Dictionary = {}  # slot -> Node3D container
 var _sling_offset := Vector3(0.2, -0.31, -0.06)    # primary weapon sling pos relative to head (yaw only)
 var _sling_rot_offset := Vector3(0.0, 60.0, 0.0)   # extra pitch/yaw/roll applied on top of slot rotation (degrees)
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
@@ -353,6 +354,120 @@ func _update_holster_zone_haptics() -> void:
 			ctrl.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.15, 0.0)
 			print("[VR Mod] ", hand, " hand entered NVG zone")
 		_hand_in_nvg_zone[hand] = in_zone
+
+
+func _mk_holo_mat() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.2, 0.7, 1.0, 0.55)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = Color(0.1, 0.5, 1.0)
+	mat.emission_energy_multiplier = 1.5
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
+func _add_holo_box(parent: Node3D, size: Vector3, pos: Vector3, euler: Vector3, mat: StandardMaterial3D) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.set_surface_override_material(0, mat)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	mi.position = pos
+	if euler != Vector3.ZERO:
+		mi.rotation = euler
+
+
+func _add_holo_cyl(parent: Node3D, radius: float, height: float, pos: Vector3, euler: Vector3, mat: StandardMaterial3D) -> void:
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = height
+	mi.mesh = cm
+	mi.set_surface_override_material(0, mat)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	mi.position = pos
+	if euler != Vector3.ZERO:
+		mi.rotation = euler
+
+
+func _add_holo_sph(parent: Node3D, radius: float, pos: Vector3, mat: StandardMaterial3D) -> void:
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = radius * 2.0
+	mi.mesh = sm
+	mi.set_surface_override_material(0, mat)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	mi.position = pos
+
+
+func _create_holster_holos() -> void:
+	_destroy_holster_holos()
+	var mat := _mk_holo_mat()
+
+	# Slot 2: pistol — slide along Z (barrel forward), grip hanging below
+	var pistol := Node3D.new()
+	pistol.name = "HoloPistol"
+	add_child(pistol)
+	_add_holo_box(pistol, Vector3(0.026, 0.038, 0.100), Vector3(0.0, 0.008, 0.0), Vector3.ZERO, mat)
+	_add_holo_box(pistol, Vector3(0.022, 0.058, 0.030), Vector3(0.0, -0.037, 0.018), Vector3(deg_to_rad(10.0), 0.0, 0.0), mat)
+	_add_holo_box(pistol, Vector3(0.022, 0.014, 0.034), Vector3(0.0, -0.010, 0.006), Vector3.ZERO, mat)
+	_add_holo_cyl(pistol, 0.007, 0.028, Vector3(0.0, 0.003, -0.064), Vector3(PI / 2.0, 0.0, 0.0), mat)
+	_holster_holo_nodes[2] = pistol
+
+	# Slot 3: knife — blade pointing up, guard at centre, handle cylinder below
+	var knife := Node3D.new()
+	knife.name = "HoloKnife"
+	add_child(knife)
+	_add_holo_box(knife, Vector3(0.016, 0.115, 0.004), Vector3(0.0, 0.072, 0.0), Vector3.ZERO, mat)
+	_add_holo_box(knife, Vector3(0.040, 0.009, 0.006), Vector3(0.0, 0.010, 0.0), Vector3.ZERO, mat)
+	_add_holo_cyl(knife, 0.009, 0.060, Vector3(0.0, -0.035, 0.0), Vector3.ZERO, mat)
+	_holster_holo_nodes[3] = knife
+
+	# Slot 4: grenade — sphere body, safety lever bar, fuse cylinder on top, pin nub
+	var grenade := Node3D.new()
+	grenade.name = "HoloGrenade"
+	add_child(grenade)
+	_add_holo_sph(grenade, 0.030, Vector3(0.0, 0.0, 0.0), mat)
+	_add_holo_box(grenade, Vector3(0.058, 0.009, 0.014), Vector3(0.0, 0.012, 0.0), Vector3.ZERO, mat)
+	_add_holo_cyl(grenade, 0.007, 0.018, Vector3(0.0, 0.038, 0.0), Vector3.ZERO, mat)
+	_add_holo_box(grenade, Vector3(0.006, 0.006, 0.020), Vector3(0.018, 0.030, 0.0), Vector3.ZERO, mat)
+	_holster_holo_nodes[4] = grenade
+
+
+func _destroy_holster_holos() -> void:
+	for slot in _holster_holo_nodes.keys():
+		var node = _holster_holo_nodes[slot]
+		if node and is_instance_valid(node):
+			node.queue_free()
+	_holster_holo_nodes.clear()
+
+
+func _update_holster_holos() -> void:
+	if _holster_holo_nodes.is_empty():
+		return
+	if not xr_camera or not is_instance_valid(xr_camera):
+		return
+	var head_pos := xr_camera.global_position
+	var yaw_basis := Basis(Vector3.UP, xr_camera.global_rotation.y)
+	for slot in _holster_holo_nodes.keys():
+		var node: Node3D = _holster_holo_nodes[slot]
+		if not is_instance_valid(node):
+			continue
+		node.visible = (_weapon_slot != slot)
+		if not node.visible:
+			continue
+		var o: Vector3 = _holster_offsets[slot]
+		var eff := Vector3(-o.x, o.y, o.z) if _holster_zones_mirrored else o
+		node.global_position = head_pos + yaw_basis * eff
+		node.global_basis = yaw_basis
 
 
 func _update_nvg_overlay(_delta: float) -> void:
@@ -925,6 +1040,7 @@ func _process(delta: float) -> void:
 
 				# Holster zone haptic feedback
 				_update_holster_zone_haptics()
+				_update_holster_holos()
 				_update_nvg_overlay(delta)
 				_update_comfort_vignette(delta)
 				_update_physical_crouch()
@@ -1146,6 +1262,7 @@ func _install_xr_rig() -> void:
 	add_child(_hover_label)
 
 	_setup_comfort_vignette()
+	_create_holster_holos()
 
 	print("[VR Mod] === VR rig active ===")
 
