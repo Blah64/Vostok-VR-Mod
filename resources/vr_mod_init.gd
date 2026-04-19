@@ -183,6 +183,7 @@ var _rail_x_press_time := 0.0         # Time when X was pressed (for long-press 
 var _rail_x_pending := false           # X pressed, waiting to determine short vs long press
 var _rail_active := false              # Physical rail slide in progress (trigger held)
 var _rail_grab_origin := 0.0           # Off-hand projected position at grab start
+var _rail_fwd := Vector3.ZERO          # Weapon forward axis frozen at grab start (constant reference axis)
 var _rail_scroll_accum := 0.0          # Accumulated movement for physical grab
 var _rail_scroll_cooldown := 0.0       # Cooldown for stick-based scrolling
 
@@ -4739,8 +4740,8 @@ func _start_rail_slide() -> void:
 	# Record off-hand position projected onto weapon forward axis
 	var support_ctrl = _get_controller(_get_support_hand())
 	if support_ctrl and game_camera:
-		var weapon_fwd = -game_camera.global_basis.z
-		_rail_grab_origin = support_ctrl.global_position.dot(weapon_fwd)
+		_rail_fwd = -game_camera.global_basis.z
+		_rail_grab_origin = support_ctrl.global_position.dot(_rail_fwd)
 	_inject_key(KEY_CTRL, true)
 	if support_ctrl:
 		support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.1, 0.0)
@@ -4758,8 +4759,7 @@ func _update_rail_slide() -> void:
 	var support_ctrl = _get_controller(_get_support_hand())
 	if not support_ctrl or not game_camera:
 		return
-	var weapon_fwd = -game_camera.global_basis.z
-	var current_proj = support_ctrl.global_position.dot(weapon_fwd)
+	var current_proj = support_ctrl.global_position.dot(_rail_fwd)
 	var delta_proj = current_proj - _rail_grab_origin
 	_rail_scroll_accum += delta_proj
 	_rail_grab_origin = current_proj
