@@ -740,6 +740,8 @@ var _physical_crouch_active := false
 var _physical_crouch_resnap := 0      # frames to freeze Y + wait before re-snapping after release
 var _snap_turn_cooldown := false
 var _last_game_cam_pos := Vector3.ZERO
+var _auto_recenter_enabled := true
+var _auto_recenter_cooldown := 0.0
 
 # Two-hand aim stabilization
 var _two_hand_smooth_enabled := true
@@ -1053,6 +1055,16 @@ func _process(delta: float) -> void:
 
 				_update_interface_state()
 				_sync_origin_to_game()
+
+				# Auto-recenter: if HMD has drifted > 0.75 m from character in XZ, snap back.
+				if _auto_recenter_cooldown > 0.0:
+					_auto_recenter_cooldown -= delta
+				elif _auto_recenter_enabled and not _interface_open and not _config_screen_open and not _decor_mode:
+					var _ar_hmd := xr_camera.global_position
+					var _ar_cam := game_camera.global_position
+					if Vector2(_ar_hmd.x - _ar_cam.x, _ar_hmd.z - _ar_cam.z).length() > 0.45:
+						_attach_rig_to_camera()
+
 				_process_input(delta)
 				_update_rail_slide()
 
@@ -1846,21 +1858,25 @@ func _ray_quad_intersection(ray_origin: Vector3, ray_dir: Vector3, quad: MeshIns
 
 
 func _attach_rig_to_camera() -> void:
-	if not game_camera or not xr_origin:
+	if not game_camera or not xr_origin or not xr_camera:
 		return
-	# xr_origin stays parented to self (autoload). Just snap position to new camera.
-	var actual_head_height := xr_camera.position.y if xr_camera else 1.6
-	if actual_head_height < 0.3:
-		actual_head_height = 1.6
-	var cam_pos = game_camera.global_position
-	xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - actual_head_height, cam_pos.z)
+	var cam_pos := game_camera.global_position
+	# Place origin so HMD lands exactly at cam_pos. xr_origin may be rotated (snap/smooth
+	# turns rotate it around Y), so we apply global_basis to map the local tracking offset
+	# into world space before subtracting. Pure Y-rotation leaves the Y component unchanged,
+	# so the head-height fallback is safe to apply before the transform.
+	var head_local := xr_camera.position
+	if head_local.y < 0.3:
+		head_local.y = 1.6
+	xr_origin.global_position = cam_pos - xr_origin.global_basis * head_local
 	_last_game_cam_pos = cam_pos
+	_auto_recenter_cooldown = 3.0
 	xr_camera.cull_mask = game_camera.cull_mask
 	_in_menu_mode = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if _config_reminder_label and is_instance_valid(_config_reminder_label):
 		_config_reminder_label.visible = false
-	print("[VR Mod] Rig snapped to new camera at ", cam_pos)
+	print("[VR Mod] Rig recentered to camera at ", cam_pos)
 
 
 func _on_level_transition() -> void:
@@ -2104,6 +2120,18 @@ func _steer_game_camera_via_mouse() -> void:
 	_sens_cal_prev_target_yaw = target_yaw
 
 
+func _turn_origin(angle_deg: float) -> void:
+	if not xr_camera or not xr_origin:
+		return
+	# Rotate xr_origin around the head's world position so the player turns in place.
+	# Plain rotate_y pivots around xr_origin's own position, which drifts from the
+	# head after recenter or any physical movement in the playspace.
+	var head_world := xr_camera.global_position
+	var rot := Basis(Vector3.UP, deg_to_rad(angle_deg))
+	xr_origin.global_position = head_world + rot * (xr_origin.global_position - head_world)
+	xr_origin.rotate_y(deg_to_rad(angle_deg))
+
+
 func _process_input(delta: float) -> void:
 	if _interface_open:
 		# Release movement keys when in inventory
@@ -2196,11 +2224,11 @@ func _process_input(delta: float) -> void:
 				if use_snap_turn:
 					if not _snap_turn_cooldown and abs(turn_input.x) > 0.6:
 						var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
-						xr_origin.rotate_y(deg_to_rad(angle))
+						_turn_origin(angle)
 						_snap_turn_cooldown = true
 						_vignette_hold = maxf(_vignette_hold, 0.3)
 				else:
-					xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
+					_turn_origin(-turn_input.x * smooth_turn_speed * delta)
 					_vignette_hold = maxf(_vignette_hold, 0.15)
 			else:
 				_snap_turn_cooldown = false
@@ -2261,11 +2289,11 @@ func _process_input(delta: float) -> void:
 				if use_snap_turn:
 					if not _snap_turn_cooldown and abs(turn_input.x) > 0.6:
 						var angle = -snap_turn_degrees if turn_input.x > 0 else snap_turn_degrees
-						xr_origin.rotate_y(deg_to_rad(angle))
+						_turn_origin(angle)
 						_snap_turn_cooldown = true
 						_vignette_hold = maxf(_vignette_hold, 0.3)
 				else:
-					xr_origin.rotate_y(deg_to_rad(-turn_input.x * smooth_turn_speed * delta))
+					_turn_origin(-turn_input.x * smooth_turn_speed * delta)
 					_vignette_hold = maxf(_vignette_hold, 0.15)
 			else:
 				_snap_turn_cooldown = false
@@ -5096,6 +5124,7 @@ func _load_config() -> void:
 				_move_direction_mode = data["controls"].get("move_direction_mode", "camera")
 				_move_direction_hand = data["controls"].get("move_direction_hand", "left")
 				_holster_zones_mirrored = data["controls"].get("holster_zones_mirrored", false)
+				_auto_recenter_enabled = data["controls"].get("auto_recenter", true)
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
 				_holster_holos_enabled = data["holsters"].get("holos_enabled", true)
@@ -5441,6 +5470,17 @@ func _populate_config_ui() -> void:
 
 	_mk_sep(outer)
 
+	# Recenter button (pinned above tabs)
+	var recenter_row = HBoxContainer.new()
+	recenter_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	outer.add_child(recenter_row)
+	var recenter_btn = _mk_btn("Recenter to Character", Color(0.2, 0.45, 0.7))
+	recenter_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	recenter_btn.pressed.connect(Callable(self, "_on_cfg_recenter"))
+	recenter_row.add_child(recenter_btn)
+
+	_mk_sep(outer)
+
 	# ── Tab container ──
 	var tabs = TabContainer.new()
 	tabs.name = "CfgTabs"
@@ -5512,6 +5552,7 @@ func _populate_config_ui() -> void:
 	var grid_ctrl = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
 	_add_toggle_row(grid_ctrl, "Mirror Zones", ["Off", "On"], 1 if _holster_zones_mirrored else 0, "_on_cfg_holster_mirror")
+	_add_toggle_row(grid_ctrl, "Auto-Recenter", ["On", "Off"], 0 if _auto_recenter_enabled else 1, "_on_cfg_auto_recenter")
 	_add_toggle_row(grid_ctrl, "Tracking Mode", ["Sitting", "Standing"], 1 if _standing_mode else 0, "_on_cfg_standing_mode")
 	_add_toggle_row(grid_ctrl, "Gun Config", ["Off", "On"], 1 if _gun_config_enabled else 0, "_on_cfg_gun_config")
 	_add_toggle_row(grid_ctrl, "Laser Always On", ["On", "Off"], 0 if _laser_always_on else 1, "_on_cfg_laser_always_on")
@@ -6034,6 +6075,10 @@ func _on_cfg_holster_mirror(idx: int) -> void:
 	_holster_zones_mirrored = (idx == 1)
 
 
+func _on_cfg_auto_recenter(idx: int) -> void:
+	_auto_recenter_enabled = (idx == 0)
+
+
 func _on_cfg_gun_config(idx: int) -> void:
 	_gun_config_enabled = (idx == 1)
 	if not _gun_config_enabled:
@@ -6282,6 +6327,10 @@ func _on_cfg_save_close() -> void:
 	_close_config_screen()
 
 
+func _on_cfg_recenter() -> void:
+	_attach_rig_to_camera()
+
+
 # ── Apply helpers ───────────────────────────────────────────────────────────
 
 func _apply_hud_settings() -> void:
@@ -6437,7 +6486,8 @@ func _save_full_config() -> void:
 		"laser_always_on": _laser_always_on,
 		"move_direction_mode": _move_direction_mode,
 		"move_direction_hand": _move_direction_hand,
-		"holster_zones_mirrored": _holster_zones_mirrored
+		"holster_zones_mirrored": _holster_zones_mirrored,
+		"auto_recenter": _auto_recenter_enabled
 	}
 
 	# HUD
