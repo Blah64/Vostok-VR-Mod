@@ -4303,9 +4303,9 @@ func _update_pump_gesture(delta: float) -> void:
 	# PUMP_BACK: how close hand must return to the frozen reference to complete it.
 	# Reference slowly tracks resting hand position (accounts for arm drift).
 	# During forward phase the reference is frozen so only a real return fires the pump.
-	const PUMP_OUT := 0.06        # 6 cm displacement from reference
+	const PUMP_OUT := 0.04        # 4 cm displacement from reference (was 6 cm; lower = fires on slower pumps)
 	const PUMP_BACK := 0.03       # 3 cm from frozen reference = returned far enough
-	const TRACK_RATE := 3.0       # reference lerp speed while idle (m/s equivalent)
+	const TRACK_RATE := 2.0       # reference lerp speed while idle (was 3.0; lower = more lag → easier to trigger)
 	if not _pump_gesture_active:
 		_pump_prev_pos = _pump_prev_pos.lerp(pos, delta * TRACK_RATE)
 		if pos.distance_to(_pump_prev_pos) > PUMP_OUT:
