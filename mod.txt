@@ -1,8 +1,11 @@
 [mod]
 name="VR Mod"
 id="vr-mod"
-version="1.2.0"
+version="1.3.0"
 priority=100
+
+[updates]
+modworkshop=56230
 
 [autoload]
 VRModInit="res://resources/vr_mod_init.gd"
