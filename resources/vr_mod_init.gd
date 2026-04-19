@@ -2220,8 +2220,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_raise_weapon()
 				elif is_support_hand and _holster_state in [HolsterState.DRAWN, HolsterState.LOWERED]:
 					# Support hand trigger = rail slide / reload / laser (drawn or lowered)
-					if _rail_mode and _holster_state == HolsterState.DRAWN:
-						_start_rail_slide()
+					if _rail_mode:
+						_start_rail_slide()  # rail mode is always exited on lower/holster, so only reached when DRAWN
 					elif _support_grip_held and not _weapon_uses_r_reload:
 						_inject_key(KEY_T, true)
 						_inject_key(KEY_T, false)
