@@ -3805,14 +3805,15 @@ func _sync_weapon_to_controller() -> void:
 			# skews the aim when the off-hand controller is rotated relative to the aim line.
 			var dom_hand_off = HAND_GLTF_OFFSET_RIGHT if _get_weapon_hand() == "right" else HAND_GLTF_OFFSET_LEFT
 			var forward = (off_controller.global_position - controller.global_position - controller.global_basis * dom_hand_off).normalized()
-			# Use world up; fall back to controller Y when aiming nearly vertical.
+			# Use dominant hand's up as roll reference so the gun tilts with the hand.
+			# Fall back to world up only when aiming nearly vertical (hand up ≈ forward).
 			# Godot is right-handed: right = forward x up (NOT up x forward, which gives LEFT
 			# and produces an improper/mirrored basis). Previous bug flipped aim_basis.x and
 			# mirrored the weapon mesh relative to single-hand mode.
-			var up = Vector3.UP
+			var up = controller.global_basis.y
 			var right_vec = forward.cross(up)
 			if right_vec.length_squared() < 0.01:
-				up = controller.global_basis.y
+				up = Vector3.UP
 				right_vec = forward.cross(up)
 			right_vec = right_vec.normalized()
 			var corrected_up = right_vec.cross(forward).normalized()
