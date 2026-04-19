@@ -74,6 +74,7 @@ var _holster_offsets := {
 	4: Vector3(0.0,  -0.15,  0.10),
 }
 var _holster_zone_radius := 0.27
+var _holster_zones_mirrored := false
 var _sling_offset := Vector3(0.2, -0.31, -0.06)    # primary weapon sling pos relative to head (yaw only)
 var _sling_rot_offset := Vector3(0.0, 60.0, 0.0)   # extra pitch/yaw/roll applied on top of slot rotation (degrees)
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
@@ -245,7 +246,9 @@ func _get_nearby_holster_zone(controller_pos: Vector3) -> int:
 	var closest_zone := 0
 	var closest_dist := _holster_zone_radius
 	for slot in HOLSTER_ZONES:
-		var zone_world_pos = head_pos + yaw_basis * _holster_offsets[slot]
+		var o: Vector3 = _holster_offsets[slot]
+		var eff := Vector3(-o.x, o.y, o.z) if _holster_zones_mirrored else o
+		var zone_world_pos = head_pos + yaw_basis * eff
 		var dist = controller_pos.distance_to(zone_world_pos)
 		if dist < closest_dist:
 			closest_dist = dist
@@ -4969,6 +4972,7 @@ func _load_config() -> void:
 				_laser_always_on = data["controls"].get("laser_always_on", true)
 				_move_direction_mode = data["controls"].get("move_direction_mode", "camera")
 				_move_direction_hand = data["controls"].get("move_direction_hand", "left")
+				_holster_zones_mirrored = data["controls"].get("holster_zones_mirrored", false)
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
 				for slot in [1, 2, 3, 4]:
@@ -5395,6 +5399,7 @@ func _populate_config_ui() -> void:
 	_mk_header(vbox_gen, "Controls")
 	var grid_ctrl = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
+	_add_toggle_row(grid_ctrl, "Mirror Zones", ["Off", "On"], 1 if _holster_zones_mirrored else 0, "_on_cfg_holster_mirror")
 	_add_toggle_row(grid_ctrl, "Tracking Mode", ["Sitting", "Standing"], 1 if _standing_mode else 0, "_on_cfg_standing_mode")
 	_add_toggle_row(grid_ctrl, "Gun Config", ["Off", "On"], 1 if _gun_config_enabled else 0, "_on_cfg_gun_config")
 	_add_toggle_row(grid_ctrl, "Laser Always On", ["On", "Off"], 0 if _laser_always_on else 1, "_on_cfg_laser_always_on")
@@ -5900,6 +5905,10 @@ func _on_cfg_hand(idx: int) -> void:
 	_create_watch_mesh()
 
 
+func _on_cfg_holster_mirror(idx: int) -> void:
+	_holster_zones_mirrored = (idx == 1)
+
+
 func _on_cfg_gun_config(idx: int) -> void:
 	_gun_config_enabled = (idx == 1)
 	if not _gun_config_enabled:
@@ -6298,7 +6307,8 @@ func _save_full_config() -> void:
 		"gun_config_enabled": _gun_config_enabled,
 		"laser_always_on": _laser_always_on,
 		"move_direction_mode": _move_direction_mode,
-		"move_direction_hand": _move_direction_hand
+		"move_direction_hand": _move_direction_hand,
+		"holster_zones_mirrored": _holster_zones_mirrored
 	}
 
 	# HUD
