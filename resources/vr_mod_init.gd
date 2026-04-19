@@ -217,9 +217,10 @@ var _fg_grip_captured := false         # true while the foregrip lock is active
 var _cached_weapon_rig: Node3D = null  # last weapon_rig ref, used for adjust mode entry/save
 
 # Used for activating VR Config Menu
-var _vr_config_menu_reminder_already_shown := false  # Only show the "Press both sticks to open VR Config" hint once per session
 var _left_stick_held := false
 var _right_stick_held := false
+var _readme_bbcode_cache := ""
+var _config_reminder_label: Label3D = null
 
 func _get_weapon_hand() -> String:
 	if _holster_state != HolsterState.UNARMED and _weapon_hand != "":
@@ -691,25 +692,23 @@ func _ready() -> void:
 	else:
 		print("[VR Mod] Tracking: sitting (local)")
 	print("[VR Mod] Waiting for 3D camera (gameplay start)...")
-	# Show reminder about VR options menu once
-	if not _vr_config_menu_reminder_already_shown:
-		_vr_config_menu_reminder_already_shown = true
-		# Create Label3d in front of camera with reminder about VR options menu, free after a ten seconds
-		var reminder_label = Label3D.new()
-		reminder_label.text = "VR OPTIONS MENU:\nToggle In-Game \nBy Clicking Both Thumbsticks"
-		reminder_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		reminder_label.modulate = Color(0.2, 0.5, 1.0) 
-		reminder_label.outline_modulate = Color.BLACK
-		reminder_label.pixel_size = 0.002
-		reminder_label.font_size = 32
-		reminder_label.no_depth_test = true
-		reminder_label.shaded = false
-		reminder_label.render_priority = 127
-		reminder_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		xr_camera.add_child(reminder_label)
-		reminder_label.position = Vector3(0, 0, -0.75)
-		print("[VR Mod] Showing Reminder re VR Options Menu")
-		get_tree().create_timer(20.0).timeout.connect(reminder_label.queue_free)
+	# Show reminder about VR options menu at startup; persists (hidden) for main menu reuse
+	_config_reminder_label = Label3D.new()
+	_config_reminder_label.text = "VR OPTIONS MENU:\nToggle In-Game \nBy Clicking Both Thumbsticks"
+	_config_reminder_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_config_reminder_label.modulate = Color(0.2, 0.5, 1.0)
+	_config_reminder_label.outline_modulate = Color.BLACK
+	_config_reminder_label.pixel_size = 0.002
+	_config_reminder_label.font_size = 32
+	_config_reminder_label.no_depth_test = true
+	_config_reminder_label.shaded = false
+	_config_reminder_label.render_priority = 127
+	_config_reminder_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_config_reminder_label.layers = 1 << 19
+	xr_camera.add_child(_config_reminder_label)
+	_config_reminder_label.position = Vector3(0, 0, -0.75)
+	print("[VR Mod] Showing config reminder")
+	get_tree().create_timer(3.0).timeout.connect(_anchor_config_reminder)
 
 
 func _process(delta: float) -> void:
@@ -1734,6 +1733,8 @@ func _attach_rig_to_camera() -> void:
 	xr_camera.cull_mask = game_camera.cull_mask
 	_in_menu_mode = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if _config_reminder_label and is_instance_valid(_config_reminder_label):
+		_config_reminder_label.visible = false
 	print("[VR Mod] Rig snapped to new camera at ", cam_pos)
 
 
@@ -1818,6 +1819,32 @@ func _on_main_menu_entered() -> void:
 	_log("Main menu mode entered")
 	if xr_camera:
 		xr_camera.current = true
+	_show_config_reminder()
+
+func _show_config_reminder() -> void:
+	if not _config_reminder_label or not is_instance_valid(_config_reminder_label) or not xr_camera:
+		return
+	var cam_pos = xr_camera.global_position
+	var cam_forward = -xr_camera.global_basis.z
+	cam_forward.y = 0.0
+	cam_forward = cam_forward.normalized()
+	var pos = cam_pos + cam_forward * _menu_distance
+	pos += xr_camera.global_basis.x * _menu_lr_offset
+	pos.y = cam_pos.y + _hud_height_offset + 0.8
+	_config_reminder_label.global_position = pos
+	_config_reminder_label.look_at(cam_pos, Vector3.UP)
+	_config_reminder_label.rotate_y(deg_to_rad(180))
+	_config_reminder_label.visible = true
+
+func _anchor_config_reminder() -> void:
+	if not _config_reminder_label or not is_instance_valid(_config_reminder_label):
+		return
+	var parent = _config_reminder_label.get_parent()
+	if parent:
+		parent.remove_child(_config_reminder_label)
+	get_tree().root.add_child(_config_reminder_label)
+	_show_config_reminder()
+	_config_reminder_label.visible = _in_menu_mode
 
 func _sync_origin_to_game() -> void:
 	if game_camera and is_instance_valid(game_camera) and xr_origin:
@@ -2408,8 +2435,10 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				_right_stick_held = true
 				if not _physical_crouch_active and not _left_stick_held:
 					_inject_action("crouch", true)
-			if _left_stick_held and _right_stick_held and not _interface_open:
-				# Both sticks = toggle config screen
+			if _left_stick_held and _right_stick_held:
+				# Both sticks = toggle config screen; cancel any in-flight actions first
+				_inject_action("sprint", false)
+				_inject_action("crouch", false)
 				_toggle_config_screen()
 				return
 
@@ -5485,36 +5514,30 @@ func _populate_config_ui() -> void:
 
 	# ── Tab 3: Info/Controls ──
 	var scroll_info = ScrollContainer.new()
-	scroll_info.name = "Controls | Readme"
+	scroll_info.name = "Controls"
 	scroll_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll_info.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tabs.add_child(scroll_info)
 
 	var info_text = RichTextLabel.new()
 	info_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	info_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	info_text.size_flags_vertical = Control.SIZE_FILL
+	info_text.fit_content = true
 	info_text.bbcode_enabled = true
 	info_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	info_text.add_theme_font_size_override("normal_font_size", 18)
 	info_text.add_theme_font_size_override("bold_font_size", 20)
 
-	# Logic to find README in [Exe Dir]/VR Mod/README.md to display in help menu
-	var exe_dir = OS.get_executable_path().get_base_dir()
-	# Path join handles separators correctly across platforms
-	var readme_path = exe_dir.path_join("VR Mod").path_join("README.md")
-
-	if FileAccess.file_exists(readme_path):
-		var file = FileAccess.open(readme_path, FileAccess.READ)
-		var raw_md = file.get_as_text()
-		info_text.append_text(_parse_vostok_readme(raw_md))
-	else:
-		# Fallback for local development/editor testing if file isn't next to editor exe
-		var fallback_path = "res://VR Mod/README.md"
-		if FileAccess.file_exists(fallback_path):
-			var file = FileAccess.open(fallback_path, FileAccess.READ)
-			info_text.append_text(_parse_vostok_readme(file.get_as_text()))
+	if _readme_bbcode_cache.is_empty():
+		var controls_path = "res://resources/controls.md"
+		if FileAccess.file_exists(controls_path):
+			var file = FileAccess.open(controls_path, FileAccess.READ)
+			var raw_md = file.get_as_text()
+			file.close()
+			_readme_bbcode_cache = _parse_vostok_readme(raw_md)
 		else:
-			info_text.append_text("[color=gray]README.md not found at:\n" + readme_path + "[/color]")
+			_readme_bbcode_cache = "[color=gray]controls.md not found in VMZ[/color]"
+	info_text.append_text(_readme_bbcode_cache)
 	
 	scroll_info.add_child(info_text)
 
@@ -5627,7 +5650,7 @@ func _parse_vostok_readme(md: String) -> String:
 	for line in lines:
 		var stripped = line.strip_edges()
 		if stripped.begins_with("|") and stripped.ends_with("|"):
-			if "---" in line: continue 
+			if "---" in line: continue
 			in_table = true
 			var cells = line.split("|", false)
 			max_cols = max(max_cols, cells.size())
@@ -5644,6 +5667,14 @@ func _parse_vostok_readme(md: String) -> String:
 				max_cols = 0
 				in_table = false
 			new_lines.append(line)
+	# Flush any table that ends at EOF
+	if in_table and table_rows.size() > 0:
+		var table_bb = "\n[table=" + str(max_cols) + "]"
+		for row in table_rows:
+			for cell in row:
+				table_bb += "[cell][color=#e0e0e0] " + cell.strip_edges() + " [/color][/cell]"
+		table_bb += "[/table]\n"
+		new_lines.append(table_bb)
 	bb = "\n".join(new_lines)
 
 	# 2. Markdown Parsing using RegEx.sub(subject, replacement, all=true)
@@ -5671,7 +5702,13 @@ func _parse_vostok_readme(md: String) -> String:
 	regex.compile(r"(?s)```(.*?)```")
 	bb = regex.sub(bb, "[indent][color=#aaaaaa][font_size=16]$1[/font_size][/color][/indent]", true)
 
+	# Inline code `text`
+	regex.compile(r"`([^`]+)`")
+	bb = regex.sub(bb, "[color=#aaaaaa][font_size=16]$1[/font_size][/color]", true)
+
 	return bb
+
+
 # ── Row builders ────────────────────────────────────────────────────────────
 
 func _add_toggle_row(grid: GridContainer, label: String, options: Array, active: int, callback_name: String) -> void:
