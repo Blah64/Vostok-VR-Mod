@@ -629,6 +629,14 @@ var _vignette_mesh: MeshInstance3D = null
 var _vignette_radius := 1.0   # current inner edge (1.0 = off screen, smaller = more coverage)
 var _vignette_hold := 0.0     # seconds; >0 = vignette active
 
+# Mouse steering auto-calibration
+var _mouse_sens_estimate := 0.003  # learned radians-per-pixel; updated each frame
+var _sens_cal_pending := false
+var _sens_cal_prev_yaw_err := 0.0
+var _sens_cal_prev_dx := 0.0
+var _sens_cal_prev_target_yaw := 0.0
+var _sens_cal_samples := 0
+
 
 # Timing
 const CAMERA_POLL_INTERVAL := 30
@@ -1840,11 +1848,10 @@ func _steer_decor_camera_to_controller() -> void:
 	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
 		return
 
-	var mouse_sensitivity_estimate := 0.003
 	var correction_strength := 0.8
 
-	var mouse_dx = -(yaw_error * correction_strength) / mouse_sensitivity_estimate
-	var mouse_dy = -(pitch_error * correction_strength) / mouse_sensitivity_estimate
+	var mouse_dx = -(yaw_error * correction_strength) / _mouse_sens_estimate
+	var mouse_dy = -(pitch_error * correction_strength) / _mouse_sens_estimate
 
 	var event = InputEventMouseMotion.new()
 	event.relative = Vector2(mouse_dx, mouse_dy)
@@ -1863,6 +1870,7 @@ func _steer_game_camera_via_mouse() -> void:
 		aim_hand = _get_weapon_hand()
 	var aim_controller = _get_controller(aim_hand)
 	if not aim_controller or not aim_controller.get_is_active():
+		_sens_cal_pending = false
 		return
 
 	# Compute barrel direction: must match the aim_basis used in _sync_weapon_to_controller
@@ -1891,19 +1899,39 @@ func _steer_game_camera_via_mouse() -> void:
 	var yaw_error = fmod(target_yaw - game_yaw + PI, TAU) - PI
 	var pitch_error = target_pitch - game_pitch
 
+	# Auto-calibrate: measure actual camera response to last frame's injection.
+	# Only update when controller aim was stable so camera motion is from our injection.
+	if _sens_cal_pending:
+		_sens_cal_pending = false
+		var target_delta: float = fmod(target_yaw - _sens_cal_prev_target_yaw + PI, TAU) - PI
+		var prev_dx_big: bool = abs(_sens_cal_prev_dx) > 10.0
+		var prev_err_big: bool = abs(_sens_cal_prev_yaw_err) > deg_to_rad(1.0)
+		if abs(target_delta) < deg_to_rad(1.0) and prev_dx_big and prev_err_big:
+			var d_yaw: float = _sens_cal_prev_yaw_err - yaw_error
+			var measured: float = (-d_yaw) / _sens_cal_prev_dx
+			if measured > 0.0003 and measured < 0.030:
+				_mouse_sens_estimate = _mouse_sens_estimate + 0.05 * (measured - _mouse_sens_estimate)
+				_sens_cal_samples += 1
+				if _sens_cal_samples % 20 == 0:
+					_log("Steering sens: " + str(_mouse_sens_estimate) + " rad/px n=" + str(_sens_cal_samples))
+
 	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
 		return
 
-	var mouse_sensitivity_estimate := 0.003
 	var correction_strength := 0.8
 
-	var mouse_dx = -(yaw_error * correction_strength) / mouse_sensitivity_estimate
-	var mouse_dy = -(pitch_error * correction_strength) / mouse_sensitivity_estimate
+	var mouse_dx = -(yaw_error * correction_strength) / _mouse_sens_estimate
+	var mouse_dy = -(pitch_error * correction_strength) / _mouse_sens_estimate
 
 	var event = InputEventMouseMotion.new()
 	event.relative = Vector2(mouse_dx, mouse_dy)
 	event.position = get_viewport().get_visible_rect().size / 2
 	Input.parse_input_event(event)
+
+	_sens_cal_pending = true
+	_sens_cal_prev_yaw_err = yaw_error
+	_sens_cal_prev_dx = mouse_dx
+	_sens_cal_prev_target_yaw = target_yaw
 
 
 func _process_input(delta: float) -> void:
