@@ -20,6 +20,7 @@ copy "%ROOT%\mod.txt"                                    "%STAGE%\vmz\mod.txt"  
 copy "%ROOT%\resources\override.cfg"                     "%STAGE%\vmz\resources\override.cfg"                >nul || goto :error
 copy "%ROOT%\resources\vr_mod_init.gd"                   "%STAGE%\vmz\resources\vr_mod_init.gd"              >nul || goto :error
 copy "%ROOT%\resources\default_config.json"              "%STAGE%\vmz\resources\default_config.json"         >nul || goto :error
+copy "%ROOT%\resources\controls.md"                      "%STAGE%\vmz\resources\controls.md"                 >nul || goto :error
 copy "%ROOT%\resources\hands\Hand_Nails_low_L.gltf"      "%STAGE%\vmz\resources\hands\Hand_Nails_low_L.gltf" >nul || goto :error
 copy "%ROOT%\resources\hands\Hand_Nails_low_R.gltf"      "%STAGE%\vmz\resources\hands\Hand_Nails_low_R.gltf" >nul || goto :error
 copy "%ROOT%\resources\hands\hand_col.png"               "%STAGE%\vmz\resources\hands\hand_col.png"          >nul || goto :error
