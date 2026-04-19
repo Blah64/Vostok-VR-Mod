@@ -76,6 +76,7 @@ var _holster_offsets := {
 var _holster_zone_radius := 0.27
 var _holster_zones_mirrored := false
 var _holster_holo_nodes: Dictionary = {}  # slot -> Node3D container
+var _holster_holos_enabled := true
 var _sling_offset := Vector3(0.2, -0.31, -0.06)    # primary weapon sling pos relative to head (yaw only)
 var _sling_rot_offset := Vector3(0.0, 60.0, 0.0)   # extra pitch/yaw/roll applied on top of slot rotation (degrees)
 var _left_in_zone := 0   # Which zone left controller is in (0 = none)
@@ -461,7 +462,7 @@ func _update_holster_holos() -> void:
 		var node: Node3D = _holster_holo_nodes[slot]
 		if not is_instance_valid(node):
 			continue
-		node.visible = (_weapon_slot != slot)
+		node.visible = _holster_holos_enabled and (_weapon_slot != slot)
 		if not node.visible:
 			continue
 		var o: Vector3 = _holster_offsets[slot]
@@ -5097,6 +5098,7 @@ func _load_config() -> void:
 				_holster_zones_mirrored = data["controls"].get("holster_zones_mirrored", false)
 			if data.has("holsters"):
 				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
+				_holster_holos_enabled = data["holsters"].get("holos_enabled", true)
 				for slot in [1, 2, 3, 4]:
 					var key = str(slot)
 					var def = _holster_offsets[slot]
@@ -5540,6 +5542,7 @@ func _populate_config_ui() -> void:
 
 	_mk_header(vbox_zone, "Holster Zones")
 	var grid_holsters = _mk_grid(vbox_zone)
+	_add_toggle_row(grid_holsters, "Zone Icons", ["On", "Off"], 0 if _holster_holos_enabled else 1, "_on_cfg_holster_holos")
 	_add_stepper_row(grid_holsters, "Zone Radius", _holster_zone_radius, 0.05, 0.5, 0.01, "_on_cfg_hz_radius")
 	var zone_names := ["1: R.Shoulder", "2: R.Hip", "3: L.Hip", "4: Chest"]
 	for zi in range(4):
@@ -6071,6 +6074,10 @@ func _on_cfg_standing_mode(idx: int) -> void:
 	print("[VR Mod] Tracking mode: ", "standing" if _standing_mode else "sitting")
 
 
+func _on_cfg_holster_holos(idx: int) -> void:
+	_holster_holos_enabled = (idx == 0)
+
+
 func _on_cfg_hz_radius(val: float) -> void:
 	_holster_zone_radius = val
 
@@ -6460,6 +6467,7 @@ func _save_full_config() -> void:
 		holster_offsets_data[str(slot)] = {"x": snapped(o.x, 0.001), "y": snapped(o.y, 0.001), "z": snapped(o.z, 0.001)}
 	data["holsters"] = {
 		"zone_radius": _holster_zone_radius,
+		"holos_enabled": _holster_holos_enabled,
 		"offsets": holster_offsets_data,
 		"bag": {
 			"x": snapped(_bag_zone_offset.x, 0.001),
