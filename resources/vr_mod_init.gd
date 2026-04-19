@@ -51,6 +51,8 @@ var _weapon_hand := ""  # "left" or "right" — which hand currently holds weapo
 var _weapon_slot := 0   # 1-4 mapped to KEY_1..KEY_4, 0 = none
 var _transition_slot := 0   # slot saved across level transition (0 = was unarmed)
 var _transition_hand := ""  # hand saved across level transition
+var _resume_slot := 0       # last drawn slot persisted to config (survives app restarts)
+var _resume_hand := ""      # last drawn hand persisted to config
 var _weapon_subtype := ""           # "Shotgun", "Bolt", etc. — from data resource
 var _weapon_uses_r_reload := false  # True for Bolt/Shotgun: action open/close + manual ammo load
 var _action_open := false           # True while weapon action is open (Ctrl toggled)
@@ -562,6 +564,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_scroll_cooldown = 1.0
 	_fixed_reticle_instances.clear()  # Re-scan for reticle on new weapon
 	_cleanup_scope()  # Re-detect scope on new weapon
+	_patch_resume_state(_weapon_slot, _weapon_hand)
 
 
 func _lower_weapon() -> void:
@@ -662,6 +665,7 @@ func _holster_weapon() -> void:
 	_clear_grenade_state()
 	_support_grip_held = false
 	_holster_cooldown = 0.8  # Block re-draw until animation completes
+	_patch_resume_state(0, "")
 
 
 # HUD
@@ -981,16 +985,23 @@ func _process(delta: float) -> void:
 						_walk_sway_logged = false
 						_rest_capture_pending = true
 						_walk_sway_capture_delay = _WALK_SWAY_CAPTURE_DELAY_LOAD
-						# After a level transition with a weapon equipped, restore DRAWN
-						# state so the mod resumes controlling weapon position/arm hiding.
-						# The raise timer below will then inject weapon_high correctly.
-						if _transition_slot > 0 and _holster_state == HolsterState.UNARMED:
+						# Restore DRAWN state whenever weapon loads and mod isn't controlling it.
+						# Priority: _transition_slot (in-session zone change) → _resume_slot
+						# (persisted to config, survives app restarts) → slot 1 fallback
+						# (handles first-ever launch before any resume state exists).
+						if _holster_state == HolsterState.UNARMED:
+							var restore_slot := _transition_slot if _transition_slot > 0 else _resume_slot
+							if restore_slot == 0:
+								restore_slot = 1
+							var restore_hand := _transition_hand if _transition_hand != "" else (_resume_hand if _resume_hand != "" else _config_dominant_hand)
 							_holster_state = HolsterState.DRAWN
-							_weapon_slot = _transition_slot
-							_weapon_hand = _transition_hand
+							_weapon_slot = restore_slot
+							_weapon_hand = restore_hand
 							print("[VR Mod] Restoring DRAWN state: slot=", _weapon_slot, " hand=", _weapon_hand)
 							_transition_slot = 0
 							_transition_hand = ""
+							_resume_slot = 0
+							_resume_hand = ""
 						# Auto-raise weapon after short delay
 						_weapon_raise_timer = 0.5
 						print("[VR Mod] Will auto-raise weapon in 0.5s")
@@ -5252,6 +5263,9 @@ func _load_config() -> void:
 				_menu_lr_offset = m.get("lr_offset", 0.0)
 				_menu_laser_uv_x = m.get("laser_uv_x", 0.0)
 				_menu_laser_uv_y = m.get("laser_uv_y", 0.0)
+			if data.has("resume"):
+				_resume_slot = data["resume"].get("slot", 0)
+				_resume_hand = data["resume"].get("hand", "")
 			print("[VR Mod] Config loaded successfully")
 	file.close()
 
@@ -6493,6 +6507,25 @@ func _scroll_config_panel(amount: float) -> void:
 
 # ── Save full config ────────────────────────────────────────────────────────
 
+func _patch_resume_state(slot: int, hand: String) -> void:
+	_resume_slot = slot
+	_resume_hand = hand
+	var config_path = _config_path
+	var data := {}
+	if FileAccess.file_exists(config_path):
+		var file = FileAccess.open(config_path, FileAccess.READ)
+		if file:
+			var json = JSON.new()
+			if json.parse(file.get_as_text()) == OK and json.data is Dictionary:
+				data = json.data
+			file.close()
+	data["resume"] = {"slot": slot, "hand": hand}
+	var out = FileAccess.open(config_path, FileAccess.WRITE)
+	if out:
+		out.store_string(JSON.stringify(data, "\t"))
+		out.close()
+
+
 func _save_full_config() -> void:
 	var config_path = _config_path
 	var data := {}
@@ -6648,6 +6681,9 @@ func _save_full_config() -> void:
 			}
 		}
 	}
+
+	# Resume state (persisted so weapon-drawn-on-exit restores VR control on next launch)
+	data["resume"] = {"slot": _resume_slot, "hand": _resume_hand}
 
 	# Primary weapon sling
 	data["sling"] = {
