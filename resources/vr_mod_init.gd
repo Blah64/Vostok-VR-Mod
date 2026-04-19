@@ -25,9 +25,6 @@ var _xr_ready := false
 var _weapons_reparented := false
 var _camera_lost_frames := 0  # Frames since camera was lost; disables use_xr if > 120
 
-# Weapon debug
-var _weapon_debug_timer := 0.0
-var _last_cam_child_snapshot := []  # Track changes to camera children
 var _scroll_cooldown := 0.0  # Prevent rapid-fire scroll
 var _support_grip_held := false  # Support hand grip held = two-hand weapon grip
 var _grabbed_object: Node3D = null  # Currently grabbed loose item
@@ -216,6 +213,7 @@ var _fg_p_sup_local := Vector3.ZERO   # active foregrip position in weapon_rig l
 var _fg_r_sup_local := Basis.IDENTITY # active foregrip rotation in weapon_rig local space
 var _fg_grip_captured := false         # true while the foregrip lock is active
 var _cached_weapon_rig: Node3D = null  # last weapon_rig ref, used for adjust mode entry/save
+var _cached_mgr: Node = null           # cached game_camera/Manager; cleared on level transition
 
 # Used for activating VR Config Menu
 var _left_stick_held := false
@@ -892,12 +890,6 @@ func _process(delta: float) -> void:
 								get_tree().create_timer(0.1).timeout.connect(
 									func(): _inject_action("weapon_high", false)
 								)
-
-				# Continuous weapon debug: detect any changes to camera subtree
-				_weapon_debug_timer += delta
-				if _weapon_debug_timer >= 3.0:
-					_weapon_debug_timer = 0.0
-					_deep_camera_debug()
 
 				# Tick down holster cooldown
 				if _holster_cooldown > 0.0:
@@ -1789,6 +1781,7 @@ func _on_level_transition() -> void:
 	_nvg_active = false
 	if _nvg_overlay_mesh:
 		_nvg_overlay_mesh.visible = false
+	_cached_mgr = null
 	_release_physical_crouch()
 
 	# Re-assert XR camera ownership — the new level's camera sets current=true,
@@ -1817,6 +1810,7 @@ func _on_main_menu_entered() -> void:
 	_nvg_active = false
 	if _nvg_overlay_mesh:
 		_nvg_overlay_mesh.visible = false
+	_cached_mgr = null
 	_clear_grenade_state()
 	_esc_menu_active = false
 	_teardown_watch_content()
@@ -2703,52 +2697,6 @@ func _inject_action(action_name: String, pressed: bool, strength: float = 1.0) -
 	event.pressed = pressed
 	event.strength = strength if pressed else 0.0
 	Input.parse_input_event(event)
-
-
-func _deep_camera_debug() -> void:
-	# Deep scan of game_camera subtree to find where weapon nodes appear
-	if not game_camera or not is_instance_valid(game_camera):
-		return
-
-	var snapshot = []
-	var log_lines = []
-	_snapshot_tree(game_camera, 0, 12, snapshot, log_lines)
-
-	# Compare with previous snapshot to detect changes
-	if snapshot != _last_cam_child_snapshot:
-		# Something changed! Log it to file (append mode)
-		var dump_path = _log_path
-		var f = FileAccess.open(dump_path, FileAccess.READ_WRITE)
-		if not f:
-			f = FileAccess.open(dump_path, FileAccess.WRITE)
-		if f:
-			f.seek_end(0)
-			f.store_line("")
-			f.store_line("=== Camera Subtree Snapshot (changed!) ===")
-			f.store_line("Time: " + str(Time.get_ticks_msec()) + "ms")
-			f.store_line("game_camera.current: " + str(game_camera.current))
-			f.store_line("game_camera.global_pos: " + str(game_camera.global_position))
-			f.store_line("Total nodes in subtree: " + str(snapshot.size()))
-			f.store_line("")
-			for line in log_lines:
-				f.store_line(line)
-			f.store_line("")
-			f.store_line("=== MeshInstance3D within 5m of camera ===")
-			var near_meshes = []
-			_find_meshes_near_to_list(get_tree().root, game_camera.global_position, 5.0, 0, 15, near_meshes)
-			for entry in near_meshes:
-				f.store_line(entry)
-			if near_meshes.is_empty():
-				f.store_line("(none found)")
-			f.close()
-
-		print("[VR Mod] CAMERA TREE CHANGED! Nodes: ", snapshot.size(), " (logged to vr_mod_debug.log)")
-		_last_cam_child_snapshot = snapshot
-	else:
-		# No change, just print summary
-		var mgr = game_camera.get_node_or_null("Manager")
-		var mgr_count = mgr.get_child_count() if mgr else -1
-		print("[VR Mod] cam_tree: ", snapshot.size(), " nodes, mgr_children=", mgr_count, " cam.current=", game_camera.current)
 
 
 func _snapshot_tree(node: Node, depth: int, max_depth: int, snapshot: Array, log_lines: Array) -> void:
@@ -3788,7 +3736,9 @@ func _sync_weapon_to_controller() -> void:
 	if _interface_open:
 		return
 
-	var mgr = game_camera.get_node_or_null("Manager")
+	if not _cached_mgr or not is_instance_valid(_cached_mgr):
+		_cached_mgr = game_camera.get_node_or_null("Manager")
+	var mgr := _cached_mgr
 	if not mgr or mgr.get_child_count() == 0:
 		# If we think a weapon is equipped but the rig is gone, the game unequipped it
 		# externally (e.g. via inventory while drawn). Reset without injecting the unequip
