@@ -3600,6 +3600,7 @@ func _update_hand_visibility() -> void:
 			var pointing_at_grabbable := false
 			var pointing_at_interactable := false
 			var pointing_at_furniture := false
+			var pointing_at_transition := false
 			var hover_collider: Node3D = null
 			var hover_hit_pos := Vector3.ZERO
 			if _decor_mode and game_camera and is_instance_valid(game_camera):
@@ -3646,6 +3647,36 @@ func _update_hand_visibility() -> void:
 								hover_hit_pos = interactor.get_collision_point()
 								break
 							check = check.get_parent()
+				# Level transition: Interactor hit something not in "Interactable" — check by script/group/name
+				if not pointing_at_grabbable and not pointing_at_interactable \
+						and game_camera and is_instance_valid(game_camera):
+					var interactor2 = game_camera.get_node_or_null("Interactor")
+					if interactor2 is RayCast3D and interactor2.is_colliding():
+						var check = interactor2.get_collider()
+						for _i in range(6):
+							if not is_instance_valid(check):
+								break
+							if _is_transition_node(check):
+								pointing_at_transition = true
+								hover_collider = check as Node3D
+								hover_hit_pos = interactor2.get_collision_point()
+								break
+							check = check.get_parent()
+				# Also check GrabRay for Area3D transition triggers (collide_with_areas = true)
+				if not pointing_at_transition and not pointing_at_grabbable \
+						and grab_ray and grab_ray.is_colliding():
+					var ac = grab_ray.get_collider()
+					if ac is Area3D:
+						var check = ac
+						for _i in range(6):
+							if not is_instance_valid(check):
+								break
+							if _is_transition_node(check):
+								pointing_at_transition = true
+								hover_collider = check as Node3D
+								hover_hit_pos = grab_ray.get_collision_point()
+								break
+							check = check.get_parent()
 			var mat := _laser_mesh.material_override as StandardMaterial3D
 			if mat:
 				if _decor_mode and pointing_at_furniture:
@@ -3656,6 +3687,8 @@ func _update_hand_visibility() -> void:
 					mat.albedo_color = Color(0.1, 1.0, 0.2, 0.7)   # Green - grabbable item
 				elif pointing_at_interactable:
 					mat.albedo_color = Color(1.0, 0.8, 0.1, 0.7)   # Yellow - B-interact
+				elif pointing_at_transition:
+					mat.albedo_color = Color(0.9, 0.9, 1.0, 0.8)   # White - level transition
 				else:
 					mat.albedo_color = Color(1.0, 0.2, 0.1, 0.6)   # Red - nothing
 			var cyl := _laser_mesh.mesh as CylinderMesh
@@ -3666,7 +3699,7 @@ func _update_hand_visibility() -> void:
 			# Update hover label with target name
 			if _hover_label:
 				if hover_collider != null:
-					if pointing_at_interactable:
+					if pointing_at_interactable or pointing_at_transition:
 						_hover_label.text = _find_interactable_display_name(hover_collider)
 					else:
 						_hover_label.text = _format_node_name(hover_collider.name)
@@ -3674,7 +3707,7 @@ func _update_hand_visibility() -> void:
 					_hover_label.visible = true
 				else:
 					_hover_label.visible = false
-			var has_target := pointing_at_grabbable or pointing_at_interactable or pointing_at_furniture
+			var has_target := pointing_at_grabbable or pointing_at_interactable or pointing_at_furniture or pointing_at_transition
 			_laser_mesh.visible = _laser_always_on or has_target
 		else:
 			if _hover_label:
@@ -4298,6 +4331,21 @@ func _suppress_walk_sway(weapon_rig: Node3D) -> void:
 				else:
 					f.store_line("  " + node_name + " NOT FOUND in chain")
 			f.close()
+
+
+func _is_transition_node(node: Node) -> bool:
+	for g in node.get_groups():
+		var gl := g.to_lower()
+		if gl in ["leveltransition", "zonetransition", "levelexit", "zoneexit", "exit", "transition"]:
+			return true
+	if node.get_script() != null:
+		var sp: String = node.get_script().resource_path
+		if "LevelTransition" in sp or "LevelExit" in sp or "ZoneTransition" in sp or "ZoneExit" in sp:
+			return true
+	var nl := node.name.to_lower()
+	if "leveltransition" in nl or "levelexit" in nl or "zonetransition" in nl or "zoneexit" in nl:
+		return true
+	return false
 
 
 func _format_node_name(raw: String) -> String:
