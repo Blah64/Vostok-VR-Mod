@@ -2416,6 +2416,8 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_save_grip_config()
 					_adjust_mode = false
 					print("[VR Mod] === ADJUST MODE OFF (saved) ===")
+				elif _config_screen_open:
+					_inject_config_click(true)
 				elif _interface_open and _laser_screen_pos.x >= 0:
 					# A = instant button click while menu/inventory is open.
 					# Atomic press+release in the same frame — cursor can't drift between them.
@@ -2601,7 +2603,10 @@ func _on_button_released(button_name: String, hand: String) -> void:
 					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, false)
 					print("[VR Mod] FLASHLIGHT toggled (X short-press)")
 			elif hand == "right":
-				_inject_action("jump", false)
+				if _config_screen_open:
+					_inject_config_click(false)
+				else:
+					_inject_action("jump", false)
 		"by_button":
 			if hand == "left":
 				if not _decor_mode:
