@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod v1.2.0
+# Road to Vostok — VR Mod v1.3.0
 
 A VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
@@ -342,3 +342,6 @@ If the issue persists across sessions, check `vr_mod_debug.log` in `%APPDATA%\Ro
 
 **Can't click buttons in menu screens**
 Click on buttons with 'A' button instead of trigger.
+
+**Weapon sway is terrible**
+Weapon sway can be disabled in the VR mod options menu
