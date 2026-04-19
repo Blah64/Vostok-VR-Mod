@@ -97,6 +97,7 @@ var _nvg_mono_viewport: SubViewport     # mono render SubViewport (created on de
 var _nvg_mono_camera: Camera3D          # mono render camera (centered between eyes)
 var _nvg_brightness := 5.0             # config: brightness multiplier
 var _nvg_overlay_installed := false
+var _cached_nvg_overlay: Node = null   # cached Map/Core/UI/NVG/Overlay; cleared on level transition
 
 # Decor mode (shelter furniture placement)
 var _decor_mode := false
@@ -358,7 +359,9 @@ func _update_nvg_overlay(_delta: float) -> void:
 	# Poll game's NVG overlay visibility as the true NVG state.
 	# We use modulate.a=0 to hide it visually (not visible=false), so the game's
 	# NVG.gd script can still toggle overlay.visible freely and we can read it.
-	var overlay = get_tree().root.get_node_or_null("Map/Core/UI/NVG/Overlay")
+	if not _cached_nvg_overlay or not is_instance_valid(_cached_nvg_overlay):
+		_cached_nvg_overlay = get_tree().root.get_node_or_null("Map/Core/UI/NVG/Overlay")
+	var overlay := _cached_nvg_overlay
 	if not overlay:
 		return
 	var game_nvg_on: bool = overlay.visible
@@ -1782,6 +1785,7 @@ func _on_level_transition() -> void:
 	if _nvg_overlay_mesh:
 		_nvg_overlay_mesh.visible = false
 	_cached_mgr = null
+	_cached_nvg_overlay = null
 	_release_physical_crouch()
 
 	# Re-assert XR camera ownership — the new level's camera sets current=true,
@@ -1811,6 +1815,7 @@ func _on_main_menu_entered() -> void:
 	if _nvg_overlay_mesh:
 		_nvg_overlay_mesh.visible = false
 	_cached_mgr = null
+	_cached_nvg_overlay = null
 	_clear_grenade_state()
 	_esc_menu_active = false
 	_teardown_watch_content()
