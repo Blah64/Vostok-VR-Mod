@@ -1,4 +1,4 @@
-# Road to Vostok — VR Mod v1.3.0
+# Road to Vostok — VR Mod
 
 A VR mod for **Road to Vostok** (Early Access). Play the full game in
 virtual reality with full head tracking, motion controllers, and physical weapon handling.
