@@ -5508,18 +5508,6 @@ func _populate_config_ui() -> void:
 
 	_mk_sep(vbox_gen)
 
-	_mk_header(vbox_gen, "Menu / Inventory")
-	var grid_menu = _mk_grid(vbox_gen)
-	_add_stepper_row(grid_menu, "Distance", _menu_distance, 0.5, 3.0, 0.1, "_on_cfg_menu_dist")
-	_add_stepper_row(grid_menu, "Size", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
-	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
-	_add_stepper_row(grid_menu, "Height", _hud_height_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_hgt")
-	_add_stepper_row(grid_menu, "HUD Spread", _hud_spread, 0.1, 2.0, 0.1, "_on_cfg_hud_spread")
-	_add_stepper_row(grid_menu, "Laser X", _menu_laser_uv_x, -5.0, 5.0, 0.01, "_on_cfg_laser_x")
-	_add_stepper_row(grid_menu, "Laser Y", _menu_laser_uv_y, -5.0, 5.0, 0.01, "_on_cfg_laser_y")
-
-	_mk_sep(vbox_gen)
-
 	_mk_header(vbox_gen, "Controls")
 	var grid_ctrl = _mk_grid(vbox_gen)
 	_add_toggle_row(grid_ctrl, "Dominant Hand", ["Right", "Left"], 0 if _config_dominant_hand == "right" else 1, "_on_cfg_hand")
@@ -5529,6 +5517,18 @@ func _populate_config_ui() -> void:
 	_add_toggle_row(grid_ctrl, "Laser Always On", ["On", "Off"], 0 if _laser_always_on else 1, "_on_cfg_laser_always_on")
 	_add_toggle_row(grid_ctrl, "Move Direction", ["Camera", "Controller"], 0 if _move_direction_mode == "camera" else 1, "_on_cfg_move_direction")
 	_add_toggle_row(grid_ctrl, "Move Controller", ["Left", "Right"], 0 if _move_direction_hand == "left" else 1, "_on_cfg_move_direction_hand")
+
+	_mk_sep(vbox_gen)
+
+	_mk_header(vbox_gen, "Menu / Inventory")
+	var grid_menu = _mk_grid(vbox_gen)
+	_add_stepper_row(grid_menu, "Distance", _menu_distance, 0.5, 3.0, 0.1, "_on_cfg_menu_dist")
+	_add_stepper_row(grid_menu, "Size", _menu_width, 0.5, 5.0, 0.1, "_on_cfg_menu_wid")
+	_add_stepper_row(grid_menu, "Left/Right", _menu_lr_offset, -1.0, 1.0, 0.05, "_on_cfg_menu_lr")
+	_add_stepper_row(grid_menu, "Height", _hud_height_offset, -1.0, 1.0, 0.05, "_on_cfg_hud_hgt")
+	_add_stepper_row(grid_menu, "HUD Spread", _hud_spread, 0.1, 2.0, 0.1, "_on_cfg_hud_spread")
+	_add_stepper_row(grid_menu, "Laser X", _menu_laser_uv_x, -5.0, 5.0, 0.01, "_on_cfg_laser_x")
+	_add_stepper_row(grid_menu, "Laser Y", _menu_laser_uv_y, -5.0, 5.0, 0.01, "_on_cfg_laser_y")
 
 	# ── Tab 1: Zones ──
 	var scroll_zone = ScrollContainer.new()
