@@ -36,6 +36,9 @@ var _throw_samples: Array = []  # Recent [position, time] pairs for throw veloci
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_is_long := false  # True for rifles/shotguns that support two-hand aim
 var _recoil_rest_xform := Transform3D.IDENTITY  # Cached rest pose of recoil chain
+var _rest_capture_prev_sample: Transform3D = Transform3D.IDENTITY  # stability-gate previous sample
+var _rest_capture_stability_count: int = 0  # consecutive stable frames
+var _rest_capture_hard_deadline: float = 0.0  # seconds remaining before force-commit
 var _prev_recoil_mag := 0.0         # recoil chain origin magnitude last frame; rising edge = shot
 var _fire_haptic_cooldown := 0.0    # seconds until next fire haptic allowed
 var _disable_walk_sway := false  # Skip Sway node contribution in chain delta (walk/movement bob); keeps Noise stamina wobble intact
@@ -987,6 +990,7 @@ func _process(delta: float) -> void:
 						_walk_sway_logged = false
 						_rest_capture_pending = true
 						_walk_sway_capture_delay = _WALK_SWAY_CAPTURE_DELAY_LOAD
+						_rest_capture_stability_count = 0
 						# Restore DRAWN state whenever weapon loads and mod isn't controlling it.
 						# Priority: _transition_slot (in-session zone change) → _resume_slot
 						# (persisted to config, survives app restarts) → slot 1 fallback
@@ -4082,16 +4086,45 @@ func _sync_weapon_to_controller() -> void:
 	if _rest_capture_pending:
 		_walk_sway_capture_delay -= get_process_delta_time()
 		if _walk_sway_capture_delay <= 0.0:
-			_rest_capture_pending = false
-			_walk_sway_capture_delay = 0.0
-			_recoil_rest_xform = _sample_recoil_chain(weapon_rig)
-			_walk_sway_rest.clear()
-			for node_name in _WALK_SWAY_NODES:
-				var wn := _walk_chain_node(weapon_rig, node_name)
-				if wn:
-					_walk_sway_rest[node_name] = wn.transform
-			_walk_sway_captured = true
-			_walk_sway_logged = false
+			# Stability gate: require several consecutive frames where the chain
+			# sample barely changes, so we don't bake Handling mid-animation or a
+			# breathing/stamina peak into the rest pose (which becomes permanent
+			# bias in recoil_delta = rest^-1 * chain_now).
+			var sample := _sample_recoil_chain(weapon_rig)
+			if _rest_capture_stability_count == 0:
+				_rest_capture_hard_deadline = 2.0  # hard cap after initial 2s delay
+				_rest_capture_stability_count = 1
+			else:
+				_rest_capture_hard_deadline -= get_process_delta_time()
+				var fwd_now: Vector3 = sample.basis * Vector3(0, 0, 1)
+				var fwd_prev: Vector3 = _rest_capture_prev_sample.basis * Vector3(0, 0, 1)
+				var angle_diff: float = fwd_now.angle_to(fwd_prev)
+				var pos_diff: float = (sample.origin - _rest_capture_prev_sample.origin).length()
+				if pos_diff < 0.003 and angle_diff < 0.003:  # ~3mm, ~0.17°
+					_rest_capture_stability_count += 1
+				else:
+					_rest_capture_stability_count = 1
+			_rest_capture_prev_sample = sample
+			var force_commit: bool = _rest_capture_hard_deadline <= 0.0
+			if _rest_capture_stability_count >= 5 or force_commit:
+				_rest_capture_pending = false
+				_walk_sway_capture_delay = 0.0
+				_recoil_rest_xform = sample
+				_walk_sway_rest.clear()
+				for node_name in _WALK_SWAY_NODES:
+					var wn := _walk_chain_node(weapon_rig, node_name)
+					if wn:
+						_walk_sway_rest[node_name] = wn.transform
+				_walk_sway_captured = true
+				_walk_sway_logged = false
+				var ori: Vector3 = sample.origin
+				var eul: Vector3 = sample.basis.get_euler()
+				_log("REST CAPTURE: weapon=" + _current_weapon_name + " slot=" + str(_weapon_slot)
+					+ " origin=(" + str(snapped(ori.x, 0.0001)) + "," + str(snapped(ori.y, 0.0001)) + "," + str(snapped(ori.z, 0.0001)) + ")"
+					+ " euler_deg=(" + str(snapped(rad_to_deg(eul.x), 0.01)) + "," + str(snapped(rad_to_deg(eul.y), 0.01)) + "," + str(snapped(rad_to_deg(eul.z), 0.01)) + ")"
+					+ " stable_frames=" + str(_rest_capture_stability_count)
+					+ " forced=" + str(force_commit))
+				_rest_capture_stability_count = 0
 
 	# Suppress walk bob at the chain nodes (forced rest pose each frame) so they
 	# neither contribute to the chain sample below nor to the mesh parent chain.
@@ -4120,6 +4153,12 @@ func _sync_weapon_to_controller() -> void:
 			if hap_sup:
 				hap_sup.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.08, 0.0)
 		_fire_haptic_cooldown = 0.08
+		var _rfwd: Vector3 = recoil_delta.basis * Vector3(0, 0, 1)
+		var _rfwd_angle_deg: float = rad_to_deg(_rfwd.angle_to(Vector3(0, 0, 1)))
+		_log("FIRE: weapon=" + _current_weapon_name + " slot=" + str(_weapon_slot)
+			+ " delta_origin_m=" + str(snapped(recoil_delta.origin.length(), 0.0001))
+			+ " delta_fwd_angle_deg=" + str(snapped(_rfwd_angle_deg, 0.01))
+			+ " prev_origin_m=" + str(snapped(_prev_recoil_mag, 0.0001)))
 	_prev_recoil_mag = cur_recoil_mag
 
 	# Pivot compensation: keep the weapon grip at the dominant hand model center.
