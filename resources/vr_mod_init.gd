@@ -2045,7 +2045,7 @@ func _steer_decor_camera_to_controller() -> void:
 	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
 		return
 
-	var correction_strength := 0.8
+	var correction_strength := 0.6
 
 	var mouse_dx = -(yaw_error * correction_strength) / _mouse_sens_estimate
 	var mouse_dy = -(pitch_error * correction_strength) / _mouse_sens_estimate
@@ -2088,7 +2088,7 @@ func _steer_game_camera_via_mouse() -> void:
 		aim_forward = -aim_controller.global_basis.z
 	# Convert to yaw/pitch
 	var target_yaw = atan2(-aim_forward.x, -aim_forward.z)
-	var target_pitch = asin(aim_forward.y)
+	var target_pitch = asin(clampf(aim_forward.y, -1.0, 1.0))
 
 	var game_yaw = game_camera.global_rotation.y
 	var game_pitch = game_camera.global_rotation.x
@@ -2106,16 +2106,21 @@ func _steer_game_camera_via_mouse() -> void:
 		if abs(target_delta) < deg_to_rad(1.0) and prev_dx_big and prev_err_big:
 			var d_yaw: float = _sens_cal_prev_yaw_err - yaw_error
 			var measured: float = (-d_yaw) / _sens_cal_prev_dx
-			if measured > 0.0003 and measured < 0.030:
-				_mouse_sens_estimate = _mouse_sens_estimate + 0.05 * (measured - _mouse_sens_estimate)
+			var mabs: float = abs(measured)
+			if mabs > 0.0003 and mabs < 0.030:
+				# measured < 0 means overshoot (estimate too low) — use larger alpha to escape faster
+				var alpha: float = 0.20 if measured < 0.0 else 0.08
+				_mouse_sens_estimate = _mouse_sens_estimate + alpha * (mabs - _mouse_sens_estimate)
 				_sens_cal_samples += 1
 				if _sens_cal_samples % 20 == 0:
 					_log("Steering sens: " + str(_mouse_sens_estimate) + " rad/px n=" + str(_sens_cal_samples))
+					if _sens_cal_samples <= 100:
+						_save_full_config()
 
 	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
 		return
 
-	var correction_strength := 0.8
+	var correction_strength := 0.6
 
 	var mouse_dx = -(yaw_error * correction_strength) / _mouse_sens_estimate
 	var mouse_dy = -(pitch_error * correction_strength) / _mouse_sens_estimate
@@ -5168,6 +5173,7 @@ func _load_config() -> void:
 			if data.has("xr"):
 				world_scale = data["xr"].get("world_scale", 1.0)
 				_render_scale = data["xr"].get("render_scale", 1.0)
+				_mouse_sens_estimate = data["xr"].get("mouse_sens", 0.003)
 			if data.has("comfort"):
 				use_snap_turn = data["comfort"].get("turn_type", "smooth") == "snap"
 				snap_turn_degrees = data["comfort"].get("snap_turn_degrees", 45.0)
@@ -6544,7 +6550,7 @@ func _save_full_config() -> void:
 			file.close()
 
 	# XR
-	data["xr"] = {"world_scale": world_scale, "render_scale": _render_scale}
+	data["xr"] = {"world_scale": world_scale, "render_scale": _render_scale, "mouse_sens": _mouse_sens_estimate}
 
 	# Comfort
 	var turn_type = "snap"
