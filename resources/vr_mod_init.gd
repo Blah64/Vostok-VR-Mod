@@ -4892,9 +4892,12 @@ func _update_scope_camera() -> void:
 	if not weapon_rig:
 		return
 	var scope_pos = _scope_attachment.global_position
-	# Weapon rig basis has 180° Y flip, so +Z is barrel forward
-	var barrel_forward = weapon_rig.global_basis.z
-	var barrel_up = weapon_rig.global_basis.y
+	# Chain nodes (Handling/Sway/Noise/Tilt/Impulse/Recoil) rotate the barrel;
+	# combine chain basis with weapon_rig basis for the true barrel direction.
+	var chain_xform: Transform3D = _sample_recoil_chain(weapon_rig)
+	var barrel_basis: Basis = weapon_rig.global_basis * chain_xform.basis
+	var barrel_forward: Vector3 = barrel_basis.z
+	var barrel_up: Vector3 = barrel_basis.y
 	_scope_camera.global_position = scope_pos
 	_scope_camera.look_at(scope_pos + barrel_forward * 100.0, barrel_up)
 
