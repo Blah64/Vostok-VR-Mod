@@ -191,6 +191,7 @@ var _rail_scroll_accum := 0.0          # Accumulated movement for physical grab
 var _rail_scroll_cooldown := 0.0       # Cooldown for stick-based scrolling
 
 # Support trigger long-press detection (short = reload, long = ammo check)
+var _fire_trigger_held := false     # true while weapon-hand trigger is held for fire
 var _support_trigger_pending := false
 var _support_trigger_press_time := 0.0
 var _ammo_check_timer := 0.0        # > 0 while ammo panel is visible; counts down to hide
@@ -788,6 +789,7 @@ func _ready() -> void:
 	process_priority = 1000
 	process_physics_priority = 1000
 	process_mode = Node.PROCESS_MODE_ALWAYS  # Keep running even if game pauses (ESC menu)
+	get_tree().node_added.connect(_on_bullet_hole_node_added)
 	print("[VR Mod] === VR Mod initializing (priority=1000) ===")
 
 	xr_interface = XRServer.find_interface("OpenXR")
@@ -1059,10 +1061,15 @@ func _process(delta: float) -> void:
 				_update_comfort_vignette(delta)
 				_update_physical_crouch()
 
-				# Keep game camera from reclaiming "current" (causes blur/glow artifacts)
-				if game_camera and is_instance_valid(game_camera) and game_camera.current:
-					game_camera.current = false
-					xr_camera.current = true
+				# Keep game_camera current so game systems (decal LOD / bullet-hole pool)
+				# use the correct camera. Clear environment and attributes each frame to
+				# prevent glow/DOF artifacts — the game's level scripts re-assign them on
+				# every scene load so we must clear them continuously, not just once.
+				if game_camera and is_instance_valid(game_camera):
+					if game_camera.environment != null:
+						game_camera.environment = null
+					if game_camera.attributes != null:
+						game_camera.attributes = null
 
 				_update_interface_state()
 				_sync_origin_to_game()
@@ -1936,15 +1943,14 @@ func _on_level_transition() -> void:
 	_cached_nvg_overlay = null
 	_release_physical_crouch()
 
-	# Re-assert XR camera ownership — the new level's camera sets current=true,
-	# which makes Godot apply its Environment/CameraAttributes (glow, DOF, etc.)
-	# to the render pipeline, causing blurry menus.
-	if xr_camera:
-		xr_camera.current = true
+	# Re-assert XR. Clear game_camera env/attributes on transition so the new
+	# level's camera doesn't re-introduce glow/DOF. We do NOT force current=false —
+	# game_camera must stay current for decal-pool LOD to work correctly.
 	get_viewport().use_xr = true
 	if game_camera:
-		game_camera.current = false
-	print("[VR Mod] XR camera re-asserted as current")
+		game_camera.environment = null
+		game_camera.attributes = null
+	print("[VR Mod] Level transition: XR re-asserted, game camera env cleared")
 
 	_log("Level transition reset complete, camera at " + str(game_camera.global_position))
 
@@ -2416,11 +2422,12 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							_grenade_replace_pin()
 							print("[VR Mod] Grenade pin replaced")
 					else:
-						# Non-grenade weapons: existing fire logic
-						Input.action_press("fire", 1.0)
-						Input.action_press("left_mouse", 1.0)
-						_inject_action("fire", true)
-						_inject_action("left_mouse", true)
+						# Non-grenade weapons: fire via mouse button only.
+						# inject_mouse_button already triggers "fire"/"left_mouse" actions
+						# via Godot's InputMap — the extra action_press/inject_action calls
+						# send redundant fire signals to the game's _input() handler.
+						_fire_trigger_held = true
+						_mouse_states.erase(MOUSE_BUTTON_LEFT)
 						_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 				elif is_weapon_hand and _holster_state == HolsterState.LOWERED and _weapon_subtype == "Bolt":
 					# Bolt-action: trigger while weapon lowered cycles the bolt (R)
@@ -2669,10 +2676,7 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				_inject_action("left_mouse", false)
 			else:
 				if is_weapon_hand and _weapon_slot != 4:
-					Input.action_release("fire")
-					Input.action_release("left_mouse")
-					_inject_action("fire", false)
-					_inject_action("left_mouse", false)
+					_fire_trigger_held = false
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
 				else:
 					if _rail_active:
@@ -6711,6 +6715,29 @@ func _save_full_config() -> void:
 		out.store_string(JSON.stringify(data, "\t"))
 		out.close()
 		print("[VR Mod] Full config saved to: ", config_path)
+
+
+# ── Bullet hole pool trim (Forward Mobile renders max ~8 decals per mesh) ──
+# SceneTree.node_added fires synchronously inside Hit.gd's add_child() call,
+# so by the time we run the parent already has the new wrapper as a child.
+
+func _on_bullet_hole_node_added(node: Node) -> void:
+	if not node.name.begins_with("@"):
+		return
+	var parent = node.get_parent()
+	if parent == null or not (parent is StaticBody3D):
+		return
+	_trim_body_decals(parent)
+
+
+func _trim_body_decals(body: StaticBody3D) -> void:
+	var visible_holes := []
+	for ch in body.get_children():
+		if ch.name.begins_with("@") and ch.visible:
+			visible_holes.append(ch)
+	while visible_holes.size() > 8:
+		visible_holes[0].visible = false
+		visible_holes.remove_at(0)
 
 
 # ── Weapon tree debug dump (F10) ──────────────────────────────────────────
