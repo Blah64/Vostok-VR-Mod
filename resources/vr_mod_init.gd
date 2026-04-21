@@ -2106,26 +2106,10 @@ func _steer_game_camera_via_mouse() -> void:
 	var yaw_error = fmod(target_yaw - game_yaw + PI, TAU) - PI
 	var pitch_error = target_pitch - game_pitch
 
-	# Auto-calibrate: measure actual camera response to last frame's injection.
-	# Only update when controller aim was stable so camera motion is from our injection.
-	if _sens_cal_pending:
-		_sens_cal_pending = false
-		var target_delta: float = fmod(target_yaw - _sens_cal_prev_target_yaw + PI, TAU) - PI
-		var prev_dx_big: bool = abs(_sens_cal_prev_dx) > 10.0
-		var prev_err_big: bool = abs(_sens_cal_prev_yaw_err) > deg_to_rad(1.0)
-		if abs(target_delta) < deg_to_rad(1.0) and prev_dx_big and prev_err_big:
-			var d_yaw: float = _sens_cal_prev_yaw_err - yaw_error
-			var measured: float = (-d_yaw) / _sens_cal_prev_dx
-			var mabs: float = abs(measured)
-			if mabs > 0.0003 and mabs < 0.030:
-				# measured < 0 means overshoot (estimate too low) — use larger alpha to escape faster
-				var alpha: float = 0.20 if measured < 0.0 else 0.08
-				_mouse_sens_estimate = _mouse_sens_estimate + alpha * (mabs - _mouse_sens_estimate)
-				_sens_cal_samples += 1
-				if _sens_cal_samples % 20 == 0:
-					_log("Steering sens: " + str(_mouse_sens_estimate) + " rad/px n=" + str(_sens_cal_samples))
-					if _sens_cal_samples <= 100:
-						_save_full_config()
+	# Calibration disabled: it was drifting _mouse_sens_estimate toward 0.001 over
+	# sessions (camera sway correlates with yaw_error, biasing the measurement).
+	# Sens is fixed at 0.003 by the load-time bounds check.
+	_sens_cal_pending = false
 
 	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
 		return
@@ -2140,10 +2124,15 @@ func _steer_game_camera_via_mouse() -> void:
 	event.position = get_viewport().get_visible_rect().size / 2
 	Input.parse_input_event(event)
 
-	_sens_cal_pending = true
-	_sens_cal_prev_yaw_err = yaw_error
-	_sens_cal_prev_dx = mouse_dx
-	_sens_cal_prev_target_yaw = target_yaw
+	# Direct rotation override when weapon is drawn — this is what actually makes
+	# bullets land on the laser dot. Execution order within our priority-1000 _process:
+	#   1. _sync_origin_to_game() → _steer_game_camera_via_mouse() → this assignment
+	#   2. _process_input() → trigger injection → parse_input_event → game fire() runs
+	# When fire() reads game_camera.global_rotation, it sees our assignment from step 1
+	# rather than the priority-0 sway-contaminated value. Bullet direction = controller.
+	# Gated to DRAWN + weapon_loaded so it never runs during spawn/load-in (always UNARMED).
+	if _holster_state == HolsterState.DRAWN and _weapon_loaded and is_finite(target_yaw) and is_finite(target_pitch):
+		game_camera.global_rotation = Vector3(target_pitch, target_yaw, 0.0)
 
 
 func _turn_origin(angle_deg: float) -> void:
@@ -4115,6 +4104,13 @@ func _sync_weapon_to_controller() -> void:
 					var wn := _walk_chain_node(weapon_rig, node_name)
 					if wn:
 						_walk_sway_rest[node_name] = wn.transform
+						# Disable sway scripts here, at the moment _walk_sway_captured
+						# transitions to true. _suppress_walk_sway's own init block
+						# checks `if not _walk_sway_captured:` which is already false
+						# by the time it's called — so set_process there is dead code.
+						if _disable_walk_sway:
+							wn.set_process(false)
+							wn.set_physics_process(false)
 				_walk_sway_captured = true
 				_walk_sway_logged = false
 				var ori: Vector3 = sample.origin
