@@ -4358,14 +4358,26 @@ func _walk_chain_node(weapon_rig: Node3D, node_name: String) -> Node3D:
 	return null
 
 func _suppress_walk_sway(weapon_rig: Node3D) -> void:
-	# Capture rest poses once per weapon load, then slam the named nodes back
-	# to rest each frame AFTER the game's scripts have updated them.
+	# Capture rest poses once per weapon load, disable the chain-node scripts,
+	# then clamp their transforms each frame as belt-and-suspenders.
+	#
+	# Why disable scripts rather than just clamping transforms:
+	# Bullets fire at priority 0, AFTER the game's Handling/Sway/Noise/Tilt
+	# _process callbacks have run and re-animated the chain — but BEFORE our
+	# priority-1000 clamp reverts them. So the laser (rendered post-1000) was
+	# steady while bullets read the mid-frame swayed state. Calling
+	# set_process(false) stops the sway animation entirely; the rest transforms
+	# set below persist across the whole frame and bullets fire from rest.
+	# set_process(false) only affects this node's own callback — children
+	# (Impulse, Recoil, Holder, Weapon) keep running so recoil still works.
 	if not _walk_sway_captured:
 		_walk_sway_rest.clear()
 		for node_name in _WALK_SWAY_NODES:
 			var n := _walk_chain_node(weapon_rig, node_name)
 			if n:
 				_walk_sway_rest[node_name] = n.transform
+				n.set_process(false)
+				n.set_physics_process(false)
 		_walk_sway_captured = true
 		_walk_sway_logged = false
 	for node_name in _WALK_SWAY_NODES:
@@ -6117,8 +6129,21 @@ func _on_cfg_2h_smooth_spd(val: float) -> void:
 	_two_hand_smooth_speed = val
 
 
+func _restore_walk_sway_processing(weapon_rig: Node3D) -> void:
+	if not weapon_rig or not is_instance_valid(weapon_rig):
+		return
+	for node_name in _WALK_SWAY_NODES:
+		var n := _walk_chain_node(weapon_rig, node_name)
+		if n:
+			n.set_process(true)
+			n.set_physics_process(true)
+
+
 func _on_cfg_walk_sway(idx: int) -> void:
+	var was_disabled := _disable_walk_sway
 	_disable_walk_sway = (idx == 1)
+	if was_disabled and not _disable_walk_sway and _cached_weapon_rig and is_instance_valid(_cached_weapon_rig):
+		_restore_walk_sway_processing(_cached_weapon_rig)
 
 
 func _on_cfg_hud_dist(val: float) -> void:
