@@ -11,6 +11,7 @@ extends Node
 var _log_path    := "user://vr_mod/vr_mod_debug.log"
 var _config_path := "user://vr_mod/vr_mod_config.json"
 var _assets_base := "res://resources/hands/"
+var _verbose_log := false  # set true to enable high-frequency debug logging
 
 var xr_interface: XRInterface
 var xr_origin: XROrigin3D
@@ -765,13 +766,9 @@ var _vignette_mesh: MeshInstance3D = null
 var _vignette_radius := 1.0   # current inner edge (1.0 = off screen, smaller = more coverage)
 var _vignette_hold := 0.0     # seconds; >0 = vignette active
 
-# Mouse steering auto-calibration
-var _mouse_sens_estimate := 0.003  # learned radians-per-pixel; updated each frame
+# Mouse steering
+var _mouse_sens_estimate := 0.003  # fixed; calibration removed (was drifting toward 0.001)
 var _sens_cal_pending := false
-var _sens_cal_prev_yaw_err := 0.0
-var _sens_cal_prev_dx := 0.0
-var _sens_cal_prev_target_yaw := 0.0
-var _sens_cal_samples := 0
 
 
 # Timing
@@ -957,14 +954,6 @@ func _process(delta: float) -> void:
 				# Shotgun pump gesture: forward+back motion between hands injects R
 				if _weapon_subtype == "Shotgun" and _holster_state == HolsterState.DRAWN and _support_grip_held and not _action_open:
 					_update_pump_gesture(delta)
-
-				# Post-scroll delayed debug dump
-				if _post_scroll_timer > 0:
-					_post_scroll_timer -= delta
-					if _post_scroll_timer <= 0:
-						_post_scroll_timer = -1.0
-						_force_debug_dump("AFTER_SCROLL_3SEC")
-						print("[VR Mod] Post-scroll debug dumped!")
 
 				# Check if weapon just loaded
 				if not _weapon_loaded and game_camera and is_instance_valid(game_camera):
@@ -2182,7 +2171,8 @@ func _process_input(delta: float) -> void:
 		if changed:
 			_set_weapon_grip_offset(offset)
 			_set_weapon_grip_rotation(rot)
-			print("[VR Mod] ADJUST ", _current_weapon_name, ": x=", snapped(offset.x, 0.001), " y=", snapped(offset.y, 0.001), " z=", snapped(offset.z, 0.001), " rot=", snapped(rot, 0.1), "°")
+			if _verbose_log:
+				print("[VR Mod] ADJUST ", _current_weapon_name, ": x=", snapped(offset.x, 0.001), " y=", snapped(offset.y, 0.001), " z=", snapped(offset.z, 0.001), " rot=", snapped(rot, 0.1), "°")
 		# Release movement keys and skip normal input
 		_inject_key(KEY_W, false)
 		_inject_key(KEY_S, false)
@@ -2923,9 +2913,6 @@ func _find_meshes_near_to_list(node: Node, pos: Vector3, radius: float, depth: i
 	if depth < max_depth:
 		for child in node.get_children():
 			_find_meshes_near_to_list(child, pos, radius, depth + 1, max_depth, result)
-
-
-var _post_scroll_timer := -1.0
 
 
 func _extract_hand_assets_from_vmz() -> bool:
@@ -4149,12 +4136,13 @@ func _sync_weapon_to_controller() -> void:
 			if hap_sup:
 				hap_sup.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.08, 0.0)
 		_fire_haptic_cooldown = 0.08
-		var _rfwd: Vector3 = recoil_delta.basis * Vector3(0, 0, 1)
-		var _rfwd_angle_deg: float = rad_to_deg(_rfwd.angle_to(Vector3(0, 0, 1)))
-		_log("FIRE: weapon=" + _current_weapon_name + " slot=" + str(_weapon_slot)
-			+ " delta_origin_m=" + str(snapped(recoil_delta.origin.length(), 0.0001))
-			+ " delta_fwd_angle_deg=" + str(snapped(_rfwd_angle_deg, 0.01))
-			+ " prev_origin_m=" + str(snapped(_prev_recoil_mag, 0.0001)))
+		if _verbose_log:
+			var rfwd: Vector3 = recoil_delta.basis * Vector3(0, 0, 1)
+			var rfwd_angle_deg: float = rad_to_deg(rfwd.angle_to(Vector3(0, 0, 1)))
+			_log("FIRE: weapon=" + _current_weapon_name + " slot=" + str(_weapon_slot)
+				+ " delta_origin_m=" + str(snapped(recoil_delta.origin.length(), 0.0001))
+				+ " delta_fwd_angle_deg=" + str(snapped(rfwd_angle_deg, 0.01))
+				+ " prev_origin_m=" + str(snapped(_prev_recoil_mag, 0.0001)))
 	_prev_recoil_mag = cur_recoil_mag
 
 	# Pivot compensation: keep the weapon grip at the dominant hand model center.
@@ -5094,10 +5082,6 @@ func _force_debug_dump(label: String) -> void:
 	print("[VR Mod] Debug dump: ", label)
 
 
-func _schedule_post_scroll_debug() -> void:
-	_post_scroll_timer = 3.0  # Check 3 seconds after scroll (weapon takes time to load)
-
-
 func _reparent_camera_children() -> void:
 	# We no longer reparent. Instead we sync game_camera transform
 	# to the controller each frame in _sync_origin_to_game().
@@ -5123,66 +5107,6 @@ func _reparent_camera_children() -> void:
 		print("[VR Mod] ", info)
 	_weapons_reparented = true
 	print("[VR Mod] Controller-aim sync ACTIVE")
-
-
-func _dump_weapon_state() -> void:
-	if not game_camera or not is_instance_valid(game_camera):
-		return
-	# Count all MeshInstance3D in entire scene and find ones near camera
-	var cam_pos = game_camera.global_position
-	var all_meshes = _find_all_meshes(get_tree().root, 0)
-	var near_meshes = []
-	for m in all_meshes:
-		if is_instance_valid(m) and m.visible:
-			var dist = m.global_position.distance_to(cam_pos)
-			if dist < 3.0:
-				near_meshes.append([m, dist])
-	print("[VR Mod] WEAPON: total meshes=", all_meshes.size(), " near cam(<3m)=", near_meshes.size())
-	for entry in near_meshes:
-		var m = entry[0]
-		var d = entry[1]
-		print("[VR Mod] WEAPON NEAR: ", m.get_path(), " d=", snapped(d, 0.01), " mesh_type=", m.mesh.get_class() if m.mesh else "null")
-
-
-func _find_all_meshes(node: Node, depth: int) -> Array:
-	var result = []
-	if node == xr_origin:
-		return result
-	if node is MeshInstance3D:
-		result.append(node)
-	if depth < 10:
-		for child in node.get_children():
-			result.append_array(_find_all_meshes(child, depth + 1))
-	return result
-
-
-func _restore_xr_camera() -> void:
-	if xr_camera and is_instance_valid(xr_camera):
-		xr_camera.current = true
-		print("[VR Mod] XR camera restored as current")
-
-
-func _find_meshes_near(node: Node, pos: Vector3, radius: float, depth: int, max_depth: int) -> void:
-	if node == xr_origin:
-		return
-	if node is MeshInstance3D and node.visible:
-		var dist = node.global_position.distance_to(pos)
-		if dist < radius:
-			print("[VR Mod] MESH NEAR CAM: ", node.get_path(), " dist=", snapped(dist, 0.01), " mesh=", node.mesh)
-	if depth < max_depth:
-		for child in node.get_children():
-			_find_meshes_near(child, pos, radius, depth + 1, max_depth)
-
-
-func _dump_tree(node: Node, depth: int, max_depth: int) -> void:
-	var indent = "  ".repeat(depth)
-	var info = indent + node.name + " (" + node.get_class() + ")"
-	if node is Node3D:
-		info += " pos=" + str(node.position)
-	print("[VR Mod] ", info)
-	if depth < max_depth:
-		for child in node.get_children():
-			_dump_tree(child, depth + 1, max_depth)
 
 
 func _find_game_camera(node: Node) -> Camera3D:
