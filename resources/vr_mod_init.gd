@@ -691,6 +691,7 @@ var _laser_screen_pos := Vector2(-1, -1)  # Current cursor position from laser
 var _menu_click_pos := Vector2(-1, -1)    # Cursor position snapshotted at mouse-down for button release
 var _menu_dragging := false               # True once cursor moved far enough from press to be a drag
 var _laser_diag_logged := false  # One-shot diagnostic log on first laser update per menu open
+var _laser_locked_pos := Vector2(-9999.0, -9999.0)  # Dead-zone locked cursor position
 var _esc_hovered_control: Control = null  # Currently hovered ESC menu control (for manual hover)
 
 # HUD sizing (vars so config screen can change them at runtime)
@@ -1579,6 +1580,7 @@ func _on_interface_opened() -> void:
 	_ammo_check_timer = 0.0
 	_cleanup_ammo_panel()
 	_laser_diag_logged = false
+	_laser_locked_pos = Vector2(-9999.0, -9999.0)
 	if not hud_mesh:
 		return
 
@@ -1824,15 +1826,17 @@ func _update_laser_pointer() -> void:
 				(uv_x + _menu_laser_uv_x) * hud_viewport.size.x,
 				(uv_y + _menu_laser_uv_y) * hud_viewport.size.y
 			)
-			_laser_screen_pos = vp_pos
+			# Dead zone: only warp when controller has moved far enough, so Godot's
+			# tooltip hover timer can count down without constant MouseMotion resets.
+			if vp_pos.distance_to(_laser_locked_pos) > hud_viewport.size.y * 0.014:
+				_laser_locked_pos = vp_pos
+				get_viewport().warp_mouse(_laser_locked_pos)
+			_laser_screen_pos = _laser_locked_pos
 
 			if not _laser_diag_logged:
 				_laser_diag_logged = true
 				var main_vp: Viewport = get_viewport()
 				_log("Laser diag: uv=" + str(Vector2(uv_x, uv_y)) + " vp_pos=" + str(vp_pos) + " hud_vp_size=" + str(hud_viewport.size) + " visible_rect=" + str(main_vp.get_visible_rect().size) + " win=" + str(DisplayServer.window_get_size()))
-
-			# warp_mouse always — keeps cursor at laser position for hover and drag.
-			get_viewport().warp_mouse(vp_pos)
 
 			# Laser tip flush with quad surface. no_depth_test=true prevents clipping.
 			var dist = ray_origin.distance_to(hit_pos) - 0.01
@@ -1847,6 +1851,7 @@ func _update_laser_pointer() -> void:
 				_update_esc_hover()
 		else:
 			_laser_screen_pos = Vector2(-1, -1)
+			_laser_locked_pos = Vector2(-9999.0, -9999.0)
 			if _esc_menu_active:
 				_esc_clear_hover()
 
