@@ -10,13 +10,14 @@
 		"walk_sway_enabled": true
 	},
 	"controls": {
+		"auto_recenter": true,
 		"dominant_hand": "right",
 		"gun_config_enabled": false,
 		"holster_zones_mirrored": false,
 		"laser_always_on": false,
 		"move_direction_hand": "left",
 		"move_direction_mode": "camera",
-		"standing_mode": false,
+		"standing_mode": true,
 		"thumbstick_deadzone": 0.15
 	},
 	"foregrip_p_local": {
@@ -561,6 +562,10 @@
 		"radius": 0.25,
 		"y": 0.3
 	},
+	"resume": {
+		"hand": "",
+		"slot": 0
+	},
 	"sling": {
 		"rot": {
 			"x": 0.0,
@@ -625,11 +630,23 @@
 			"y": 0.106,
 			"z": -0.417
 		},
+		"left|Guitar": {
+			"rot": 13.7,
+			"x": -0.175,
+			"y": 0.125,
+			"z": -0.371
+		},
 		"left|HK416": {
 			"rot": 2.1,
 			"x": 0.07,
 			"y": 0.156,
 			"z": -0.255
+		},
+		"left|Jaeger_140": {
+			"rot": -95.8,
+			"x": 0.085,
+			"y": 0.138,
+			"z": -0.374
 		},
 		"left|KAR-21_223": {
 			"rot": 1.1,
@@ -757,11 +774,17 @@
 			"y": 0.124,
 			"z": -0.247
 		},
+		"left|Skrama_200": {
+			"rot": -96.9,
+			"x": 0.073,
+			"y": 0.122,
+			"z": -0.379
+		},
 		"left|Skrama_240": {
-			"rot": -99.8,
-			"x": 0.08,
-			"y": 0.142,
-			"z": -0.361
+			"rot": -98.3,
+			"x": 0.109,
+			"y": 0.133,
+			"z": -0.372
 		},
 		"left|VSS": {
 			"rot": 0.4,
@@ -805,11 +828,23 @@
 			"y": 0.137,
 			"z": -0.405
 		},
+		"right|Guitar": {
+			"rot": -68.4,
+			"x": 0.105,
+			"y": 0.225,
+			"z": -0.35
+		},
 		"right|HK416": {
 			"rot": 6.8,
 			"x": 0.041,
 			"y": 0.176,
 			"z": -0.255
+		},
+		"right|Jaeger_140": {
+			"rot": -110.5,
+			"x": 0.098,
+			"y": 0.156,
+			"z": -0.322
 		},
 		"right|KAR-21_223": {
 			"rot": 3.8,
@@ -937,10 +972,16 @@
 			"y": 0.152,
 			"z": -0.242
 		},
+		"right|Skrama_200": {
+			"rot": -113.7,
+			"x": 0.098,
+			"y": 0.157,
+			"z": -0.306
+		},
 		"right|Skrama_240": {
-			"rot": -101.9,
-			"x": 0.051,
-			"y": 0.151,
+			"rot": -103.2,
+			"x": 0.104,
+			"y": 0.176,
 			"z": -0.335
 		},
 		"right|VSS": {
@@ -951,6 +992,7 @@
 		}
 	},
 	"xr": {
+		"mouse_sens": 0.00114557522140657,
 		"render_scale": 1.0,
 		"world_scale": 1.0
 	}
