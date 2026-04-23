@@ -4494,15 +4494,12 @@ func _patch_reticle_shader(node: Node) -> void:
 				if idx >= 0:
 					_log("reticle: actual code: " + code.substr(idx, 120))
 				continue
+			# Patch the shader in-place on the game's own material so the game's
+			# opacity/parameter animations (run by Optic.gd on this same object) continue
+			# to work - replacing with a new material would freeze those parameters.
 			var new_shader = Shader.new()
 			new_shader.code = patched
-			var new_mat = ShaderMaterial.new()
-			new_mat.shader = new_shader
-			for param in mat.shader.get_shader_uniform_list():
-				var val = mat.get_shader_parameter(param["name"])
-				if val != null:
-					new_mat.set_shader_parameter(param["name"], val)
-			mi.set_surface_override_material(s, new_mat)
+			mat.shader = new_shader
 			_log("reticle: patched fragment surf=" + str(s) + " on " + mi.name)
 		if found_reticle:
 			_fixed_reticle_instances[inst_id] = true
@@ -4874,10 +4871,6 @@ func _setup_scope_pip(weapon_rig: Node3D) -> void:
 			_log("scope: variable zoom fovs=" + str(_scope_zoom_fovs) + " reticle_scales=" + str(_scope_zoom_reticle_scales) + " index=" + str(_scope_zoom_index))
 		else:
 			_scope_camera.fov = scope_fov
-		# Re-enable rendering (may have been disabled by cleanup)
-		_scope_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-		# Disable game's scope viewport to save perf
-		(game_vp as SubViewport).render_target_update_mode = SubViewport.UPDATE_DISABLED
 		# Build PIP shader + material
 		var shader = Shader.new()
 		shader.code = SCOPE_PIP_SHADER
@@ -4902,7 +4895,11 @@ func _setup_scope_pip(weapon_rig: Node3D) -> void:
 				var scope_val = mat.get_shader_parameter("scope")
 				if not scope_val:
 					continue
-			# This is the scope lens surface — replace with PIP+reticle combo
+			# This is the scope lens surface — replace with PIP+reticle combo.
+			# Disable game VP and enable ours on first patched surface only.
+			if patched_count == 0:
+				_scope_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+				(game_vp as SubViewport).render_target_update_mode = SubViewport.UPDATE_DISABLED
 			_scope_overridden_surfaces.append({"surf": s, "original": mat})
 			var pip_mat = ShaderMaterial.new()
 			pip_mat.shader = shader
@@ -4982,6 +4979,11 @@ func _cleanup_scope() -> void:
 			_scope_lens_mesh.set_surface_override_material(entry["surf"], entry["original"])
 	_scope_overridden_surfaces.clear()
 	_scope_lens_mesh = null
+	# Re-enable game's scope viewport so original material has a live texture on next draw
+	if _scope_attachment and is_instance_valid(_scope_attachment):
+		var game_vp = _scope_attachment.get_node_or_null("Viewport")
+		if game_vp and game_vp is SubViewport:
+			(game_vp as SubViewport).render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	_scope_attachment = null
 	_scope_active = false
 	_scope_weapon_slot = 0
