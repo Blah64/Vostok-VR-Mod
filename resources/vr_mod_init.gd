@@ -2446,16 +2446,13 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							_support_trigger_press_time = Time.get_ticks_msec() / 1000.0
 		"grip_click":
 			if _interface_open:
-				if is_weapon_hand:
-					_try_grab(hand)
-				if not _grabbed_object:
-					if is_support_hand:
-						_menu_ctrl_held = true
-						_inject_key(KEY_CTRL, true)
-						print("[VR Mod] MENU: Ctrl held (fast transfer mode)")
-					else:
-						_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
-						_inject_action("context", true)
+				if is_support_hand:
+					_menu_ctrl_held = true
+					_inject_key(KEY_CTRL, true)
+					print("[VR Mod] MENU: Ctrl held (fast transfer mode)")
+				else:
+					_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
+					_inject_action("context", true)
 			elif _decor_mode:
 				return
 			elif _holster_cooldown > 0.0:
