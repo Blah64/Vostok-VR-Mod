@@ -1318,6 +1318,9 @@ func _setup_vr_hud() -> void:
 	hud_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	hud_viewport.world_2d = main_vp.world_2d
 	hud_viewport.gui_disable_input = true
+	# Exclude canvas visibility layer 16 — Effects (Sharpen etc.) are moved there
+	# so their screen-space shaders don't sample our empty SubViewport and go black.
+	hud_viewport.canvas_cull_mask = 0xFFFFFFFF ^ (1 << 16)
 	add_child(hud_viewport)
 
 	# Second viewport for Medical element — same setup, separate canvas_transform
@@ -1329,6 +1332,7 @@ func _setup_vr_hud() -> void:
 	_watch_b_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	_watch_b_vp.world_2d = main_vp.world_2d
 	_watch_b_vp.gui_disable_input = true
+	_watch_b_vp.canvas_cull_mask = 0xFFFFFFFF ^ (1 << 16)
 	add_child(_watch_b_vp)
 
 	hud_mesh = MeshInstance3D.new()
@@ -3332,6 +3336,13 @@ func _compute_watch_crop() -> void:
 	_watch_crop_computed = true
 	_log("Watch crop scale=(" + str(snapped(sx, 0.01)) + "," + str(snapped(sy, 0.01)) + ")")
 
+	# Move all Effects canvas items to visibility layer 16 so watch SubViewports
+	# (which exclude layer 16 via canvas_cull_mask) don't render screen-space
+	# effects that would sample the empty SubViewport and output black.
+	var effects_node = get_node_or_null("/root/Map/Core/UI/Effects")
+	if effects_node:
+		_set_canvas_visibility_recursive(effects_node, 1 << 16)
+
 	if _watch_mesh and is_instance_valid(_watch_mesh):
 		# Each viewport is elem_w x elem_h; stacked vertically = elem_w x (2*elem_h)
 		var stacked_aspect = elem_w / (elem_h * 2.0)
@@ -3339,6 +3350,13 @@ func _compute_watch_crop() -> void:
 		var quad_h = _watch_size
 		(_watch_mesh.mesh as QuadMesh).size = Vector2(quad_w, quad_h)
 		_log("Watch quad: " + str(snapped(quad_w, 0.001)) + "m x " + str(snapped(quad_h, 0.001)) + "m (aspect " + str(snapped(stacked_aspect, 0.01)) + ")")
+
+
+func _set_canvas_visibility_recursive(node: Node, layer: int) -> void:
+	if node is CanvasItem:
+		(node as CanvasItem).visibility_layer = layer
+	for child in node.get_children():
+		_set_canvas_visibility_recursive(child, layer)
 
 
 func _teardown_watch_content() -> void:
