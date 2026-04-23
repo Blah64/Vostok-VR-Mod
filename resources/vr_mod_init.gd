@@ -921,7 +921,7 @@ func _process(delta: float) -> void:
 					var elapsed_dx: float = Time.get_ticks_msec() / 1000.0 - _decor_x_press_time
 					if elapsed_dx >= 0.5:
 						_decor_x_pending = false
-						if _holster_state in [HolsterState.UNARMED, HolsterState.LOWERED] and not _interface_open:
+						if _holster_state in [HolsterState.UNARMED, HolsterState.LOWERED] and not _interface_open and not _is_decor_placing():
 							_toggle_decor_mode()
 							left_controller.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.25, 0.0)
 
