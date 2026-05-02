@@ -4,15 +4,26 @@ extends RefCounted
 # Night vision overlay (3D quad parented to xr_camera, hides the game's 2D
 # overlay via modulate.a so the game's NVG.gd toggle still works), the optional
 # mono SubViewport+camera, and the comfort vignette ring used during turning.
-
-var autoload: Node
-
+#
 # Subsystem-owned state. All scene-graph references and runtime activation
 # bookkeeping live here. The user-tunable knobs (_nvg_brightness, _nvg_mono,
 # _vignette_enabled, _vignette_strength) remain on the autoload because the
-# F8 config screen writes them directly. Vignette hold is also written from
-# many _process_input branches (snap/smooth turn, movement); call sites
-# bump the hold value via the public hold_vignette() helper.
+# F8 config screen writes them directly; this module reads them through ports.
+#
+# Port contract:
+#   tree                       : SceneTree
+#   get_owner_node             : Callable() -> Node
+#   get_main_viewport          : Callable() -> Viewport
+#   get_camera                 : Callable() -> XRCamera3D
+#   get_nvg_brightness         : Callable() -> float
+#   get_nvg_mono               : Callable() -> bool
+#   get_vignette_enabled       : Callable() -> bool
+#   get_vignette_strength      : Callable() -> float
+#   get_overlay_shader_source  : Callable() -> String
+#   get_vignette_shader_source : Callable() -> String
+#   log                        : Callable(msg) -> void
+
+# Subsystem-owned state.
 var nvg_active: bool = false
 var nvg_overlay_installed: bool = false
 var nvg_overlay_mesh: MeshInstance3D = null
@@ -29,8 +40,37 @@ var vignette_hold: float = 0.0    # seconds remaining; bumped by turn/move input
 var hand_in_zone := {"left": false, "right": false}
 
 
-func _init(p_autoload: Node) -> void:
-	autoload = p_autoload
+# Ports
+var _tree: SceneTree
+var _get_owner_node: Callable
+var _get_main_viewport: Callable
+var _get_camera: Callable
+var _get_nvg_brightness: Callable
+var _get_nvg_mono: Callable
+var _get_vignette_enabled: Callable
+var _get_vignette_strength: Callable
+var _get_overlay_shader_source: Callable
+var _get_vignette_shader_source: Callable
+var _log_fn: Callable
+
+
+func _init(tree: SceneTree, ports: Dictionary) -> void:
+	_tree = tree
+	_get_owner_node = ports["get_owner_node"]
+	_get_main_viewport = ports["get_main_viewport"]
+	_get_camera = ports["get_camera"]
+	_get_nvg_brightness = ports["get_nvg_brightness"]
+	_get_nvg_mono = ports["get_nvg_mono"]
+	_get_vignette_enabled = ports["get_vignette_enabled"]
+	_get_vignette_strength = ports["get_vignette_strength"]
+	_get_overlay_shader_source = ports["get_overlay_shader_source"]
+	_get_vignette_shader_source = ports["get_vignette_shader_source"]
+	_log_fn = ports.get("log", Callable())
+
+
+func _log(msg: String) -> void:
+	if _log_fn.is_valid():
+		_log_fn.call(msg)
 
 
 func hold_vignette(min_seconds: float) -> void:
@@ -53,7 +93,7 @@ func update_nvg_overlay(_delta: float) -> void:
 	# We use modulate.a=0 to hide it visually (not visible=false), so the game's
 	# NVG.gd script can still toggle overlay.visible freely and we can read it.
 	if not cached_nvg_overlay or not is_instance_valid(cached_nvg_overlay):
-		cached_nvg_overlay = autoload.get_tree().root.get_node_or_null("Map/Core/UI/NVG/Overlay")
+		cached_nvg_overlay = _tree.root.get_node_or_null("Map/Core/UI/NVG/Overlay")
 	var overlay := cached_nvg_overlay
 	if not overlay:
 		return
@@ -65,8 +105,9 @@ func update_nvg_overlay(_delta: float) -> void:
 		overlay.modulate.a = 0.0  # hide game's 2D overlay from HUD quad (keep visible=true)
 		nvg_overlay_mesh.visible = true
 		var mat = nvg_overlay_mesh.material_override as ShaderMaterial
-		mat.set_shader_parameter("brightness", autoload._nvg_brightness)
-		if autoload._nvg_mono:
+		mat.set_shader_parameter("brightness", _get_nvg_brightness.call())
+		var mono: bool = _get_nvg_mono.call()
+		if mono:
 			create_nvg_mono_viewport()
 			nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 			var vp_tex = nvg_mono_viewport.get_texture()
@@ -79,7 +120,7 @@ func update_nvg_overlay(_delta: float) -> void:
 			# Stereo: close to camera, oversized for SCREEN_UV coverage
 			(nvg_overlay_mesh.mesh as QuadMesh).size = Vector2(4.0, 4.0)
 			nvg_overlay_mesh.position = Vector3(0.0, 0.0, -0.15)
-		autoload._log("[VR Mod] NVG overlay activated (mono=", autoload._nvg_mono, ")")
+		_log("[VR Mod] NVG overlay activated (mono=" + str(mono) + ")")
 
 	# State transition: NVG just turned off
 	elif not game_nvg_on and nvg_active:
@@ -88,7 +129,7 @@ func update_nvg_overlay(_delta: float) -> void:
 		nvg_overlay_mesh.visible = false
 		if nvg_mono_viewport:
 			nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-		autoload._log("[VR Mod] NVG overlay deactivated")
+		_log("[VR Mod] NVG overlay deactivated")
 
 	# While NVG active: update shader time + sync mono camera
 	if nvg_active:
@@ -97,8 +138,9 @@ func update_nvg_overlay(_delta: float) -> void:
 			overlay.modulate.a = 0.0
 		var mat = nvg_overlay_mesh.material_override as ShaderMaterial
 		mat.set_shader_parameter("time_val", Time.get_ticks_msec() / 1000.0)
-		if autoload._nvg_mono and nvg_mono_camera and autoload.xr_camera:
-			nvg_mono_camera.global_transform = autoload.xr_camera.global_transform
+		var cam = _get_camera.call()
+		if _get_nvg_mono.call() and nvg_mono_camera and cam:
+			nvg_mono_camera.global_transform = cam.global_transform
 
 
 func setup_nvg_overlay() -> void:
@@ -109,13 +151,13 @@ func setup_nvg_overlay() -> void:
 	nvg_overlay_mesh.mesh = quad
 
 	var shader = Shader.new()
-	shader.code = autoload.NVG_OVERLAY_SHADER
+	shader.code = _get_overlay_shader_source.call()
 	var mat = ShaderMaterial.new()
 	mat.shader = shader
 	mat.render_priority = 127
 	mat.set_shader_parameter("tint", Color(0.47, 0.67, 0.51, 1.0))
-	mat.set_shader_parameter("brightness", autoload._nvg_brightness)
-	mat.set_shader_parameter("use_mono", autoload._nvg_mono)
+	mat.set_shader_parameter("brightness", _get_nvg_brightness.call())
+	mat.set_shader_parameter("use_mono", _get_nvg_mono.call())
 	nvg_overlay_mesh.material_override = mat
 
 	# Put overlay on layer 20 ONLY so the mono camera can exclude it (prevents feedback loop)
@@ -123,9 +165,10 @@ func setup_nvg_overlay() -> void:
 	nvg_overlay_mesh.layers = (1 << 19)  # layer 20 only
 	nvg_overlay_mesh.position = Vector3(0.0, 0.0, -0.15)
 	nvg_overlay_mesh.visible = false
-	autoload.xr_camera.add_child(nvg_overlay_mesh)
+	var cam = _get_camera.call()
+	cam.add_child(nvg_overlay_mesh)
 	nvg_overlay_installed = true
-	autoload._log("[VR Mod] NVG overlay installed (mono=", autoload._nvg_mono, " brightness=", autoload._nvg_brightness, ")")
+	_log("[VR Mod] NVG overlay installed (mono=" + str(_get_nvg_mono.call()) + " brightness=" + str(_get_nvg_brightness.call()) + ")")
 
 
 func create_nvg_mono_viewport() -> void:
@@ -144,9 +187,9 @@ func create_nvg_mono_viewport() -> void:
 	nvg_mono_viewport.size = vp_size
 	nvg_mono_viewport.transparent_bg = false
 	nvg_mono_viewport.disable_3d = false
-	nvg_mono_viewport.world_3d = autoload.get_viewport().world_3d
+	nvg_mono_viewport.world_3d = _get_main_viewport.call().world_3d
 	nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-	autoload.add_child(nvg_mono_viewport)
+	_get_owner_node.call().add_child(nvg_mono_viewport)
 
 	nvg_mono_camera = Camera3D.new()
 	nvg_mono_camera.name = "NVGMonoCamera"
@@ -156,7 +199,7 @@ func create_nvg_mono_viewport() -> void:
 	# Exclude layer 20 so mono camera doesn't see the NVG overlay quad (prevents feedback loop)
 	nvg_mono_camera.cull_mask = 0xFFFFF & ~(1 << 19)  # all 20 layers except layer 20
 	nvg_mono_viewport.add_child(nvg_mono_camera)
-	autoload._log("[VR Mod] NVG mono viewport created (", vp_size.x, "x", vp_size.y, ")")
+	_log("[VR Mod] NVG mono viewport created (" + str(vp_size.x) + "x" + str(vp_size.y) + ")")
 
 
 func build_vignette_ring_mesh(steps: int) -> ArrayMesh:
@@ -191,7 +234,7 @@ func setup_comfort_vignette() -> void:
 	vignette_mesh.name = "ComfortVignette"
 	vignette_mesh.mesh = build_vignette_ring_mesh(32)
 	var shader = Shader.new()
-	shader.code = autoload.COMFORT_VIGNETTE_SHADER
+	shader.code = _get_vignette_shader_source.call()
 	var mat = ShaderMaterial.new()
 	mat.shader = shader
 	mat.render_priority = 126
@@ -201,18 +244,19 @@ func setup_comfort_vignette() -> void:
 	vignette_mesh.material_override = mat
 	vignette_mesh.layers = (1 << 19)  # layer 20 only
 	vignette_mesh.visible = false
-	autoload.xr_camera.add_child(vignette_mesh)
+	var cam = _get_camera.call()
+	cam.add_child(vignette_mesh)
 	vignette_radius = 1.0
-	autoload._log("[VR Mod] Comfort vignette installed")
+	_log("[VR Mod] Comfort vignette installed")
 
 
 func update_comfort_vignette(delta: float) -> void:
 	if not vignette_mesh or not is_instance_valid(vignette_mesh):
 		return
 	# strength 0.1 -> inner radius 0.85 (subtle), strength 1.0 -> inner radius 0.2 (strong)
-	var target_inner = 1.0 - autoload._vignette_strength * 0.8
+	var target_inner = 1.0 - _get_vignette_strength.call() * 0.8
 	var target_radius := 1.0
-	if autoload._vignette_enabled and vignette_hold > 0.0:
+	if _get_vignette_enabled.call() and vignette_hold > 0.0:
 		vignette_hold -= delta
 		target_radius = target_inner
 	# Fast fade in, slow fade out

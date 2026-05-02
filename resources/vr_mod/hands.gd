@@ -3,13 +3,161 @@ extends RefCounted
 # hands.gd
 # Lowpoly hand GLTF loading, finger curl skeleton animation, and hand
 # visibility logic (which doubles as the per-frame laser-pointer colour
-# selector since both depend on game/mod state). State (skeletons, finger
-# bone caches, wrappers) stays on the autoload.
+# selector since both depend on game/mod state).
+#
+# Subsystem-owned state. Skeleton/finger-bone caches and wrapper refs stay on
+# the autoload because legacy diagnostics and the F8 panel still read them by
+# name; this module reads/writes them through Callable ports.
+#
+# Port contract:
+#   tree                       : SceneTree
+#   get_assets_base            : Callable() -> String   (res://resources/hands/)
+#   get_left_controller        : Callable() -> XRController3D
+#   get_right_controller       : Callable() -> XRController3D
+#   get_controller             : Callable(hand) -> XRController3D
+#   get_game_camera            : Callable() -> Camera3D
+#   get_holster_state          : Callable() -> int
+#   get_state_unarmed          : Callable() -> int
+#   get_state_sling            : Callable() -> int
+#   get_state_lowered          : Callable() -> int
+#   get_decor_mode             : Callable() -> bool
+#   get_grabbed_object         : Callable() -> Node3D
+#   get_dominant_hand          : Callable() -> String
+#   get_menu_open              : Callable() -> bool
+#   get_config_screen_open     : Callable() -> bool
+#   get_laser_mesh             : Callable() -> MeshInstance3D
+#   get_laser_always_on        : Callable() -> bool
+#   get_hover_label            : Callable() -> Label3D
+#   get_grab_ray               : Callable(hand) -> RayCast3D
+#   is_transition_node         : Callable(node) -> bool
+#   find_interactable_name     : Callable(collider) -> String
+#   format_node_name           : Callable(name) -> String
+#   find_node_by_class         : Callable(root, class_name_str) -> Node
+#   get_hand_offset_left       : Callable() -> Vector3
+#   get_hand_offset_right      : Callable() -> Vector3
+#   get_hand_rot_left          : Callable() -> Vector3
+#   get_hand_rot_right         : Callable() -> Vector3
+#   get_curl_axis_thumb        : Callable() -> Vector3
+#   get_curl_axis_finger       : Callable() -> Vector3
+#   get_finger_max_curl        : Callable() -> float
+#   get_thumb_max_curl         : Callable() -> float
+#   get_curl_smooth_speed      : Callable() -> float
+#   get_finger_joint_weight    : Callable() -> Array
+#   get_hand_skel              : Callable(hand) -> Skeleton3D
+#   get_hand_curl              : Callable(hand) -> Dictionary
+#   get_hand_fingers           : Callable(hand) -> Dictionary
+#   get_hand_bone_rest         : Callable(hand) -> Dictionary
+#   get_hand_wrapper           : Callable(hand) -> Node3D
+#   set_hand_wrapper           : Callable(hand, node) -> void
+#   set_hand_skel              : Callable(hand, skel) -> void
+#   set_hand_fingers           : Callable(hand, dict) -> void
+#   set_hand_bone_rest         : Callable(hand, dict) -> void
+#   get_hand_tex               : Callable() -> ImageTexture
+#   set_hand_tex               : Callable(tex) -> void
+#   append_load_error          : Callable(msg) -> void
+#   log                        : Callable(msg) -> void
 
-var autoload: Node
+# Ports
+var _tree: SceneTree
+var _get_assets_base: Callable
+var _get_left_controller: Callable
+var _get_right_controller: Callable
+var _get_controller: Callable
+var _get_game_camera: Callable
+var _get_holster_state: Callable
+var _get_state_unarmed: Callable
+var _get_state_sling: Callable
+var _get_state_lowered: Callable
+var _get_decor_mode: Callable
+var _get_grabbed_object: Callable
+var _get_dominant_hand: Callable
+var _get_menu_open: Callable
+var _get_config_screen_open: Callable
+var _get_laser_mesh: Callable
+var _get_laser_always_on: Callable
+var _get_hover_label: Callable
+var _get_grab_ray: Callable
+var _is_transition_node_fn: Callable
+var _find_interactable_name: Callable
+var _format_node_name_fn: Callable
+var _find_node_by_class: Callable
+var _get_hand_offset_left: Callable
+var _get_hand_offset_right: Callable
+var _get_hand_rot_left: Callable
+var _get_hand_rot_right: Callable
+var _get_curl_axis_thumb: Callable
+var _get_curl_axis_finger: Callable
+var _get_finger_max_curl: Callable
+var _get_thumb_max_curl: Callable
+var _get_curl_smooth_speed: Callable
+var _get_finger_joint_weight: Callable
+var _get_hand_skel: Callable
+var _get_hand_curl: Callable
+var _get_hand_fingers: Callable
+var _get_hand_bone_rest: Callable
+var _get_hand_wrapper: Callable
+var _set_hand_wrapper: Callable
+var _set_hand_skel: Callable
+var _set_hand_fingers: Callable
+var _set_hand_bone_rest: Callable
+var _get_hand_tex: Callable
+var _set_hand_tex: Callable
+var _append_load_error: Callable
+var _log_fn: Callable
 
-func _init(p_autoload: Node) -> void:
-	autoload = p_autoload
+
+func _init(tree: SceneTree, ports: Dictionary) -> void:
+	_tree = tree
+	_get_assets_base = ports["get_assets_base"]
+	_get_left_controller = ports["get_left_controller"]
+	_get_right_controller = ports["get_right_controller"]
+	_get_controller = ports["get_controller"]
+	_get_game_camera = ports["get_game_camera"]
+	_get_holster_state = ports["get_holster_state"]
+	_get_state_unarmed = ports["get_state_unarmed"]
+	_get_state_sling = ports["get_state_sling"]
+	_get_state_lowered = ports["get_state_lowered"]
+	_get_decor_mode = ports["get_decor_mode"]
+	_get_grabbed_object = ports["get_grabbed_object"]
+	_get_dominant_hand = ports["get_dominant_hand"]
+	_get_menu_open = ports["get_menu_open"]
+	_get_config_screen_open = ports["get_config_screen_open"]
+	_get_laser_mesh = ports["get_laser_mesh"]
+	_get_laser_always_on = ports["get_laser_always_on"]
+	_get_hover_label = ports["get_hover_label"]
+	_get_grab_ray = ports["get_grab_ray"]
+	_is_transition_node_fn = ports["is_transition_node"]
+	_find_interactable_name = ports["find_interactable_name"]
+	_format_node_name_fn = ports["format_node_name"]
+	_find_node_by_class = ports["find_node_by_class"]
+	_get_hand_offset_left = ports["get_hand_offset_left"]
+	_get_hand_offset_right = ports["get_hand_offset_right"]
+	_get_hand_rot_left = ports["get_hand_rot_left"]
+	_get_hand_rot_right = ports["get_hand_rot_right"]
+	_get_curl_axis_thumb = ports["get_curl_axis_thumb"]
+	_get_curl_axis_finger = ports["get_curl_axis_finger"]
+	_get_finger_max_curl = ports["get_finger_max_curl"]
+	_get_thumb_max_curl = ports["get_thumb_max_curl"]
+	_get_curl_smooth_speed = ports["get_curl_smooth_speed"]
+	_get_finger_joint_weight = ports["get_finger_joint_weight"]
+	_get_hand_skel = ports["get_hand_skel"]
+	_get_hand_curl = ports["get_hand_curl"]
+	_get_hand_fingers = ports["get_hand_fingers"]
+	_get_hand_bone_rest = ports["get_hand_bone_rest"]
+	_get_hand_wrapper = ports["get_hand_wrapper"]
+	_set_hand_wrapper = ports["set_hand_wrapper"]
+	_set_hand_skel = ports["set_hand_skel"]
+	_set_hand_fingers = ports["set_hand_fingers"]
+	_set_hand_bone_rest = ports["set_hand_bone_rest"]
+	_get_hand_tex = ports["get_hand_tex"]
+	_set_hand_tex = ports["set_hand_tex"]
+	_append_load_error = ports["append_load_error"]
+	_log_fn = ports.get("log", Callable())
+
+
+func _log(msg: String) -> void:
+	if _log_fn.is_valid():
+		_log_fn.call(msg)
 
 
 func process(_frame: Dictionary, delta: float) -> void:
@@ -28,7 +176,7 @@ func extract_hand_assets_from_vmz() -> bool:
 	var reader := ZIPReader.new()
 	var open_err := reader.open(zip_path)
 	if open_err != OK:
-		autoload._hand_load_errors.append("hand: ZIPReader.open failed for " + zip_path + " err=" + str(open_err))
+		_append_load_error.call("hand: ZIPReader.open failed for " + zip_path + " err=" + str(open_err))
 		return false
 
 	# Ensure destination directory exists.
@@ -53,32 +201,32 @@ func extract_hand_assets_from_vmz() -> bool:
 				entry = f
 				break
 		if entry.is_empty():
-			autoload._hand_load_errors.append("hand: entry not found in VMZ: " + asset)
+			_append_load_error.call("hand: entry not found in VMZ: " + asset)
 			reader.close()
 			return false
 		var bytes := reader.read_file(entry)
 		if bytes.is_empty():
-			autoload._hand_load_errors.append("hand: read_file empty for " + entry)
+			_append_load_error.call("hand: read_file empty for " + entry)
 			reader.close()
 			return false
 		var dest_path := "user://vr_mod/hands/" + filename
 		var wf := FileAccess.open(dest_path, FileAccess.WRITE)
 		if not wf:
-			autoload._hand_load_errors.append("hand: cannot write " + dest_path + " err=" + str(FileAccess.get_open_error()))
+			_append_load_error.call("hand: cannot write " + dest_path + " err=" + str(FileAccess.get_open_error()))
 			reader.close()
 			return false
 		wf.store_buffer(bytes)
 		wf.close()
 
 	reader.close()
-	autoload._hand_load_errors.append("hand: extracted assets to user://vr_mod/hands/")
+	_append_load_error.call("hand: extracted assets to user://vr_mod/hands/")
 	return true
 
 
 func create_hand_model(controller: XRController3D, model_name: String) -> void:
 	var is_left := "Left" in model_name
 	var gltf_name := "Hand_Nails_low_L.gltf" if is_left else "Hand_Nails_low_R.gltf"
-	var gltf_path = autoload._assets_base + gltf_name
+	var gltf_path: String = _get_assets_base.call() + gltf_name
 
 	# Runtime GLTF import - append_from_file resolves relative texture references
 	# (hand_col.png) automatically from the same directory.
@@ -86,12 +234,12 @@ func create_hand_model(controller: XRController3D, model_name: String) -> void:
 	var gltf_state := GLTFState.new()
 	var err := gltf_doc.append_from_file(gltf_path, gltf_state)
 	if err != OK:
-		autoload._hand_load_errors.append("hand: append_from_file failed err=" + str(err) + " path=" + gltf_path)
+		_append_load_error.call("hand: append_from_file failed err=" + str(err) + " path=" + gltf_path)
 		create_fallback_box_hand(controller, model_name)
 		return
 	var scene: Node = gltf_doc.generate_scene(gltf_state)
 	if not scene:
-		autoload._hand_load_errors.append("hand: generate_scene returned null for " + gltf_path)
+		_append_load_error.call("hand: generate_scene returned null for " + gltf_path)
 		create_fallback_box_hand(controller, model_name)
 		return
 
@@ -100,16 +248,16 @@ func create_hand_model(controller: XRController3D, model_name: String) -> void:
 	# under the wrapper.
 	var wrapper := Node3D.new()
 	wrapper.name = model_name
-	wrapper.position = autoload.HAND_GLTF_OFFSET_LEFT if is_left else autoload.HAND_GLTF_OFFSET_RIGHT
-	wrapper.rotation_degrees = autoload.HAND_GLTF_ROTATION_LEFT if is_left else autoload.HAND_GLTF_ROTATION_RIGHT
+	wrapper.position = _get_hand_offset_left.call() if is_left else _get_hand_offset_right.call()
+	wrapper.rotation_degrees = _get_hand_rot_left.call() if is_left else _get_hand_rot_right.call()
 	wrapper.add_child(scene)
 	controller.add_child(wrapper)
 	apply_hand_texture(scene)
 
 	# Cache skeleton and finger bone indices for runtime curl animation
-	var skel: Skeleton3D = autoload._find_node_by_class(scene, "Skeleton3D")
+	var skel: Skeleton3D = _find_node_by_class.call(scene, "Skeleton3D")
 	if not skel:
-		autoload._hand_load_errors.append("hand: Skeleton3D not found inside " + gltf_name)
+		_append_load_error.call("hand: Skeleton3D not found inside " + gltf_name)
 		return
 
 	var suffix := "_L" if is_left else "_R"
@@ -132,21 +280,16 @@ func create_hand_model(controller: XRController3D, model_name: String) -> void:
 				indices.append(bi)
 				rest[bi] = skel.get_bone_rest(bi).basis.get_rotation_quaternion()
 			else:
-				autoload._hand_load_errors.append("hand: bone not found: " + bone_base + suffix)
+				_append_load_error.call("hand: bone not found: " + bone_base + suffix)
 		fingers[finger_name] = indices
 
-	if is_left:
-		autoload._hand_wrapper_left = wrapper
-		autoload._hand_skel_left = skel
-		autoload._hand_fingers_left = fingers
-		autoload._hand_bone_rest_left = rest
-	else:
-		autoload._hand_wrapper_right = wrapper
-		autoload._hand_skel_right = skel
-		autoload._hand_fingers_right = fingers
-		autoload._hand_bone_rest_right = rest
+	var hand: String = "left" if is_left else "right"
+	_set_hand_wrapper.call(hand, wrapper)
+	_set_hand_skel.call(hand, skel)
+	_set_hand_fingers.call(hand, fingers)
+	_set_hand_bone_rest.call(hand, rest)
 
-	autoload._log("hand: loaded " + gltf_name + " bones=" + str(skel.get_bone_count()) + " fingers=" + str(fingers.keys()))
+	_log("hand: loaded " + gltf_name + " bones=" + str(skel.get_bone_count()) + " fingers=" + str(fingers.keys()))
 
 
 func create_fallback_box_hand(controller: XRController3D, model_name: String) -> void:
@@ -189,29 +332,31 @@ func create_fallback_box_hand(controller: XRController3D, model_name: String) ->
 	hand.rotation.z = deg_to_rad(90)
 	hand.position = Vector3(0, 0, 0.20)
 	controller.add_child(hand)
-	autoload._log("[VR Mod] Created fallback box hand model: ", model_name)
+	_log("[VR Mod] Created fallback box hand model: " + model_name)
 
 
 func apply_hand_texture(root: Node) -> void:
 	# Load the shared skin texture on first call; reuse for both hands after that.
-	if not autoload._hand_tex:
-		var tex_path = autoload._assets_base + "hand_col.png"
+	var tex: ImageTexture = _get_hand_tex.call()
+	if not tex:
+		var tex_path: String = _get_assets_base.call() + "hand_col.png"
 		if FileAccess.file_exists(tex_path):
 			var img := Image.load_from_file(tex_path)
 			if img:
-				autoload._hand_tex = ImageTexture.create_from_image(img)
-				autoload._hand_load_errors.append("hand: loaded skin texture " + tex_path)
+				tex = ImageTexture.create_from_image(img)
+				_set_hand_tex.call(tex)
+				_append_load_error.call("hand: loaded skin texture " + tex_path)
 			else:
-				autoload._hand_load_errors.append("hand: Image.load_from_file failed for " + tex_path)
+				_append_load_error.call("hand: Image.load_from_file failed for " + tex_path)
 		else:
-			autoload._hand_load_errors.append("hand: skin texture not found at " + tex_path)
+			_append_load_error.call("hand: skin texture not found at " + tex_path)
 	# Build a StandardMaterial3D with the skin texture (or plain skin colour as fallback).
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
 	mat.roughness = 0.85
 	mat.metallic = 0.0
-	if autoload._hand_tex:
-		mat.albedo_texture = autoload._hand_tex
+	if tex:
+		mat.albedo_texture = tex
 	else:
 		mat.albedo_color = Color(0.76, 0.60, 0.46)  # neutral skin fallback
 	# Apply material_override on every MeshInstance3D inside the scene.
@@ -233,10 +378,10 @@ func update_hand_poses(delta: float) -> void:
 
 
 func update_one_hand(hand: String, delta: float) -> void:
-	var skel: Skeleton3D = autoload._hand_skel_left if hand == "left" else autoload._hand_skel_right
+	var skel: Skeleton3D = _get_hand_skel.call(hand)
 	if not skel or not is_instance_valid(skel):
 		return
-	var ctrl = autoload._get_controller(hand)
+	var ctrl = _get_controller.call(hand)
 	if not ctrl or not ctrl.get_is_active():
 		return
 
@@ -261,12 +406,18 @@ func update_one_hand(hand: String, delta: float) -> void:
 		"little": grip_val,
 	}
 
-	var curl_state: Dictionary = autoload._hand_curl_left if hand == "left" else autoload._hand_curl_right
-	var fingers: Dictionary = autoload._hand_fingers_left if hand == "left" else autoload._hand_fingers_right
-	var rest: Dictionary = autoload._hand_bone_rest_left if hand == "left" else autoload._hand_bone_rest_right
-	var alpha := clampf(delta * autoload.HAND_CURL_SMOOTH_SPEED, 0.0, 1.0)
+	var curl_state: Dictionary = _get_hand_curl.call(hand)
+	var fingers: Dictionary = _get_hand_fingers.call(hand)
+	var rest: Dictionary = _get_hand_bone_rest.call(hand)
+	var alpha := clampf(delta * _get_curl_smooth_speed.call(), 0.0, 1.0)
 	# Right hand finger bones are mirrored so their local Z points opposite to the left hand.
-	var finger_axis: Vector3 = autoload.HAND_CURL_AXIS_FINGER if hand == "left" else -autoload.HAND_CURL_AXIS_FINGER
+	var finger_axis_base: Vector3 = _get_curl_axis_finger.call()
+	var finger_axis: Vector3 = finger_axis_base if hand == "left" else -finger_axis_base
+	var thumb_axis: Vector3 = _get_curl_axis_thumb.call()
+	var max_finger_curl: float = _get_finger_max_curl.call()
+	var max_thumb_curl: float = _get_thumb_max_curl.call()
+	var joint_weights: Array = _get_finger_joint_weight.call()
+	var jw_size: int = joint_weights.size()
 
 	for finger_name in fingers.keys():
 		# Smooth the curl value toward its target so fingers animate continuously instead
@@ -279,12 +430,12 @@ func update_one_hand(hand: String, delta: float) -> void:
 		if bones.is_empty():
 			continue
 		var is_thumb: bool = (finger_name == "thumb")
-		var max_curl: float = autoload.HAND_THUMB_MAX_CURL if is_thumb else autoload.HAND_FINGER_MAX_CURL
-		var curl_axis: Vector3 = autoload.HAND_CURL_AXIS_THUMB if is_thumb else finger_axis
+		var max_curl: float = max_thumb_curl if is_thumb else max_finger_curl
+		var curl_axis: Vector3 = thumb_axis if is_thumb else finger_axis
 
 		for i in bones.size():
 			var bi: int = bones[i]
-			var weight: float = autoload.HAND_FINGER_JOINT_WEIGHT[min(i, autoload.HAND_FINGER_JOINT_WEIGHT.size() - 1)]
+			var weight: float = joint_weights[min(i, jw_size - 1)]
 			# Negative angle so the rotation curls toward the palm.
 			var angle: float = -cur * max_curl * weight
 			var rest_q: Quaternion = rest[bi]
@@ -293,18 +444,11 @@ func update_one_hand(hand: String, delta: float) -> void:
 
 
 func update_hand_visibility() -> void:
-	var left_hand = autoload.left_controller.get_node_or_null("LeftHandModel")
-	var right_hand = autoload.right_controller.get_node_or_null("RightHandModel")
+	var lc: XRController3D = _get_left_controller.call()
+	var rc: XRController3D = _get_right_controller.call()
+	var left_hand = lc.get_node_or_null("LeftHandModel") if lc else null
+	var right_hand = rc.get_node_or_null("RightHandModel") if rc else null
 
-	# Check if the game actually has a weapon model visible
-	var game_has_weapon := false
-	if autoload.game_camera and is_instance_valid(autoload.game_camera):
-		var mgr = autoload.game_camera.get_node_or_null("Manager")
-		if mgr and mgr.get_child_count() > 0:
-			game_has_weapon = true
-
-	# Hide weapon hand only when the game actually has a weapon model present.
-	# This prevents hands vanishing during the draw-pending window on empty slots.
 	# Always show VR hand models - the game's first-person arm mesh is
 	# hidden separately via _hide_arms_in_subtree on the weapon rig.
 	if left_hand: left_hand.visible = true
@@ -313,48 +457,57 @@ func update_hand_visibility() -> void:
 	# Reset hand wrappers to their canonical GLTF position/rotation when no weapon
 	# sway is active (UNARMED / SLING), so a stale sway displacement from the last
 	# DRAWN frame does not persist after holstering.
-	if autoload._holster_state == autoload.HolsterState.UNARMED or autoload._holster_state == autoload.HolsterState.SLING:
-		if autoload._hand_wrapper_left:
-			autoload._hand_wrapper_left.position = autoload.HAND_GLTF_OFFSET_LEFT
-			autoload._hand_wrapper_left.rotation_degrees = autoload.HAND_GLTF_ROTATION_LEFT
-		if autoload._hand_wrapper_right:
-			autoload._hand_wrapper_right.position = autoload.HAND_GLTF_OFFSET_RIGHT
-			autoload._hand_wrapper_right.rotation_degrees = autoload.HAND_GLTF_ROTATION_RIGHT
+	var hs: int = _get_holster_state.call()
+	var unarmed: int = _get_state_unarmed.call()
+	var sling: int = _get_state_sling.call()
+	var lowered: int = _get_state_lowered.call()
+	if hs == unarmed or hs == sling:
+		var wrap_l: Node3D = _get_hand_wrapper.call("left")
+		if wrap_l:
+			wrap_l.position = _get_hand_offset_left.call()
+			wrap_l.rotation_degrees = _get_hand_rot_left.call()
+		var wrap_r: Node3D = _get_hand_wrapper.call("right")
+		if wrap_r:
+			wrap_r.position = _get_hand_offset_right.call()
+			wrap_r.rotation_degrees = _get_hand_rot_right.call()
 
 	# Laser pointer: grab range when UNARMED, interact range when LOWERED (weapon hand)
-	if autoload._laser_mesh and not autoload._menu_open and not autoload._config_screen_open:
+	var laser: MeshInstance3D = _get_laser_mesh.call()
+	var menu_open: bool = _get_menu_open.call()
+	var config_open: bool = _get_config_screen_open.call()
+	if laser and not menu_open and not config_open:
 		var show_laser := false
-		var laser_hand = autoload._config_dominant_hand
+		var laser_hand: String = _get_dominant_hand.call()
+		var decor_mode: bool = _get_decor_mode.call()
+		var grabbed = _get_grabbed_object.call()
+		var gc = _get_game_camera.call()
 
-		if autoload._decor_mode:
+		if decor_mode:
 			show_laser = true
-			laser_hand = autoload._config_dominant_hand
-		elif autoload._holster_state == autoload.HolsterState.UNARMED and autoload._grabbed_object == null:
+		elif hs == unarmed and grabbed == null:
 			show_laser = true
-			laser_hand = autoload._config_dominant_hand
-		elif autoload._holster_state == autoload.HolsterState.LOWERED or autoload._holster_state == autoload.HolsterState.SLING:
+		elif hs == lowered or hs == sling:
 			show_laser = true
-			laser_hand = autoload._config_dominant_hand
 
 		if show_laser:
 			# Reparent laser to correct controller if needed
-			var target_ctrl = autoload._get_controller(laser_hand)
-			if target_ctrl and autoload._laser_mesh.get_parent() != target_ctrl:
-				autoload._laser_mesh.get_parent().remove_child(autoload._laser_mesh)
-				target_ctrl.add_child(autoload._laser_mesh)
-				autoload._laser_mesh.rotation.x = deg_to_rad(90)
+			var target_ctrl = _get_controller.call(laser_hand)
+			if target_ctrl and laser.get_parent() != target_ctrl:
+				laser.get_parent().remove_child(laser)
+				target_ctrl.add_child(laser)
+				laser.rotation.x = deg_to_rad(90)
 
 			# Check what the ray is pointing at
-			var grab_ray = autoload._grab_ray_right if laser_hand == "right" else autoload._grab_ray_left
+			var grab_ray = _get_grab_ray.call(laser_hand)
 			var pointing_at_grabbable := false
 			var pointing_at_interactable := false
 			var pointing_at_furniture := false
 			var pointing_at_transition := false
 			var hover_collider: Node3D = null
 			var hover_hit_pos := Vector3.ZERO
-			if autoload._decor_mode and autoload.game_camera and is_instance_valid(autoload.game_camera):
+			if decor_mode and gc and is_instance_valid(gc):
 				# Use the game's Interactor raycast (driven by game camera we steer)
-				var interactor = autoload.game_camera.get_node_or_null("Interactor")
+				var interactor = gc.get_node_or_null("Interactor")
 				if interactor is RayCast3D and interactor.is_colliding():
 					var col = interactor.get_collider()
 					if col:
@@ -382,8 +535,8 @@ func update_hand_visibility() -> void:
 						hover_collider = c as Node3D
 						hover_hit_pos = grab_ray.get_collision_point()
 				# B-button interactable: use game's Interactor so yellow = B actually works
-				if not pointing_at_grabbable and autoload.game_camera and is_instance_valid(autoload.game_camera):
-					var interactor = autoload.game_camera.get_node_or_null("Interactor")
+				if not pointing_at_grabbable and gc and is_instance_valid(gc):
+					var interactor = gc.get_node_or_null("Interactor")
 					if interactor is RayCast3D and interactor.is_colliding():
 						var ic = interactor.get_collider()
 						var check = ic
@@ -398,14 +551,14 @@ func update_hand_visibility() -> void:
 							check = check.get_parent()
 				# Level transition: Interactor hit something not in "Interactable" - check by script/group/name
 				if not pointing_at_grabbable and not pointing_at_interactable \
-						and autoload.game_camera and is_instance_valid(autoload.game_camera):
-					var interactor2 = autoload.game_camera.get_node_or_null("Interactor")
+						and gc and is_instance_valid(gc):
+					var interactor2 = gc.get_node_or_null("Interactor")
 					if interactor2 is RayCast3D and interactor2.is_colliding():
 						var check = interactor2.get_collider()
 						for _i in range(6):
 							if not is_instance_valid(check):
 								break
-							if autoload._is_transition_node(check):
+							if _is_transition_node_fn.call(check):
 								pointing_at_transition = true
 								hover_collider = check as Node3D
 								hover_hit_pos = interactor2.get_collision_point()
@@ -420,17 +573,17 @@ func update_hand_visibility() -> void:
 						for _i in range(6):
 							if not is_instance_valid(check):
 								break
-							if autoload._is_transition_node(check):
+							if _is_transition_node_fn.call(check):
 								pointing_at_transition = true
 								hover_collider = check as Node3D
 								hover_hit_pos = grab_ray.get_collision_point()
 								break
 							check = check.get_parent()
-			var mat := autoload._laser_mesh.material_override as StandardMaterial3D
+			var mat := laser.material_override as StandardMaterial3D
 			if mat:
-				if autoload._decor_mode and pointing_at_furniture:
+				if decor_mode and pointing_at_furniture:
 					mat.albedo_color = Color(1.0, 0.65, 0.1, 0.8)  # Orange - furniture targeted
-				elif autoload._decor_mode:
+				elif decor_mode:
 					mat.albedo_color = Color(0.2, 0.8, 1.0, 0.7)   # Cyan - decor placement
 				elif pointing_at_grabbable:
 					mat.albedo_color = Color(0.1, 1.0, 0.2, 0.7)   # Green - grabbable item
@@ -440,25 +593,27 @@ func update_hand_visibility() -> void:
 					mat.albedo_color = Color(0.9, 0.9, 1.0, 0.8)   # White - level transition
 				else:
 					mat.albedo_color = Color(1.0, 0.2, 0.1, 0.6)   # Red - nothing
-			var cyl := autoload._laser_mesh.mesh as CylinderMesh
+			var cyl := laser.mesh as CylinderMesh
 			if cyl:
 				cyl.height = 1.0
-				autoload._laser_mesh.position.z = -0.5
+				laser.position.z = -0.5
 
 			# Update hover label with target name
-			if autoload._hover_label:
+			var hover_label: Label3D = _get_hover_label.call()
+			if hover_label:
 				if hover_collider != null:
 					if pointing_at_interactable or pointing_at_transition:
-						autoload._hover_label.text = autoload._find_interactable_display_name(hover_collider)
+						hover_label.text = _find_interactable_name.call(hover_collider)
 					else:
-						autoload._hover_label.text = autoload._format_node_name(hover_collider.name)
-					autoload._hover_label.global_position = hover_hit_pos + Vector3.UP * 0.15
-					autoload._hover_label.visible = true
+						hover_label.text = _format_node_name_fn.call(hover_collider.name)
+					hover_label.global_position = hover_hit_pos + Vector3.UP * 0.15
+					hover_label.visible = true
 				else:
-					autoload._hover_label.visible = false
+					hover_label.visible = false
 			var has_target := pointing_at_grabbable or pointing_at_interactable or pointing_at_furniture or pointing_at_transition
-			autoload._laser_mesh.visible = autoload._laser_always_on or has_target
+			laser.visible = _get_laser_always_on.call() or has_target
 		else:
-			if autoload._hover_label:
-				autoload._hover_label.visible = false
-			autoload._laser_mesh.visible = false
+			var hover_label: Label3D = _get_hover_label.call()
+			if hover_label:
+				hover_label.visible = false
+			laser.visible = false

@@ -5,12 +5,24 @@ extends RefCounted
 # patches its lens material with a SCOPE_PIP_SHADER that samples our own
 # stereo-correct viewport, and patches the reticle shader to use a VR-correct
 # ray-plane intersection. Also handles variable-zoom cycling.
-
-var autoload: Node
-
+#
 # Subsystem-owned state. The autoload is no longer the storage for any of
-# the scope PIP scene graph or the variable-zoom bookkeeping. Reads from
-# weapon_sync (foregrip/recoil chain) go through autoload.* accessors.
+# the scope PIP scene graph or the variable-zoom bookkeeping.
+#
+# Port contract:
+#   tree                       : SceneTree
+#   get_owner_node             : Callable() -> Node            (parent for our SubViewport — autoload)
+#   get_main_viewport          : Callable() -> Viewport        (for shared World3D)
+#   get_game_camera            : Callable() -> Camera3D
+#   get_weapon_slot            : Callable() -> int
+#   get_weapon_hand            : Callable() -> String
+#   get_controller             : Callable(hand) -> XRController3D
+#   get_weapon_cache           : Callable(weapon_rig) -> Dictionary
+#   sample_recoil_chain        : Callable(weapon_rig) -> Transform3D
+#   get_pip_shader_source      : Callable() -> String
+#   log                        : Callable(msg) -> void
+
+# Subsystem-owned state.
 var camera: Camera3D = null              # Our scope render camera
 var viewport: SubViewport = null         # Our SubViewport
 var attachment: Node3D = null            # The visible scope attachment node
@@ -25,8 +37,38 @@ var zoom_reticle_scales: Array = []
 var zoom_index: int = 0
 var fixed_reticle_instances: Dictionary = {}  # MeshInstance3D instance_id -> true
 
-func _init(p_autoload: Node) -> void:
-	autoload = p_autoload
+
+# Ports
+var _tree: SceneTree
+var _get_owner_node: Callable
+var _get_main_viewport: Callable
+var _get_game_camera: Callable
+var _get_weapon_slot: Callable
+var _get_weapon_hand: Callable
+var _get_controller: Callable
+var _get_weapon_cache: Callable
+var _sample_recoil_chain: Callable
+var _get_pip_shader_source: Callable
+var _log_fn: Callable
+
+
+func _init(tree: SceneTree, ports: Dictionary) -> void:
+	_tree = tree
+	_get_owner_node = ports["get_owner_node"]
+	_get_main_viewport = ports["get_main_viewport"]
+	_get_game_camera = ports["get_game_camera"]
+	_get_weapon_slot = ports["get_weapon_slot"]
+	_get_weapon_hand = ports["get_weapon_hand"]
+	_get_controller = ports["get_controller"]
+	_get_weapon_cache = ports["get_weapon_cache"]
+	_sample_recoil_chain = ports["sample_recoil_chain"]
+	_get_pip_shader_source = ports["get_pip_shader_source"]
+	_log_fn = ports.get("log", Callable())
+
+
+func _log(msg: String) -> void:
+	if _log_fn.is_valid():
+		_log_fn.call(msg)
 
 
 func process(_frame: Dictionary, _delta: float) -> void:
@@ -42,7 +84,7 @@ func fix_reticle_parallax(weapon_rig: Node3D) -> void:
 	# for UV, which is an approximation that breaks in stereo VR. Replace with a proper
 	# ray-plane intersection (Addmix collimator method) that uses only rotation matrices
 	# (same for both eyes) and the per-eye VIEW direction for correct collimation.
-	var attachments = autoload._ensure_weapon_cache(weapon_rig).get("attachments")
+	var attachments = _get_weapon_cache.call(weapon_rig).get("attachments")
 	if not attachments or not is_instance_valid(attachments):
 		return
 	for child in attachments.get_children():
@@ -74,16 +116,16 @@ func patch_reticle_shader(node: Node) -> void:
 			var new_frag = "// vr_reticle_fix: ray-plane intersection for VR collimation\n\tmat3 _mvr = mat3(VIEW_MATRIX[0].xyz, VIEW_MATRIX[1].xyz, VIEW_MATRIX[2].xyz) * mat3(MODEL_MATRIX[0].xyz, MODEL_MATRIX[1].xyz, MODEL_MATRIX[2].xyz);\n\tvec3 _sn = _mvr * vec3(0.0, 0.0, -1.0);\n\tvec3 _su = _mvr * vec3(1.0, 0.0, 0.0);\n\tvec3 _sv = _mvr * vec3(0.0, 1.0, 0.0);\n\tvec3 _vp = VIEW / dot(VIEW, _sn);\n\tvec2 reticleUV = vec2(-dot(_vp, _su), dot(_vp, _sv)) / (-size);"
 			var patched = code.replace(old_frag, new_frag)
 			if patched == code:
-				autoload._log("reticle: WARNING - fragment target not found")
+				_log("reticle: WARNING - fragment target not found")
 				var idx = code.find("reticleOffset")
 				if idx >= 0:
-					autoload._log("reticle: actual code: " + code.substr(idx, 120))
+					_log("reticle: actual code: " + code.substr(idx, 120))
 				continue
 			# Patch the shader in-place on the game's own material
 			var new_shader = Shader.new()
 			new_shader.code = patched
 			mat.shader = new_shader
-			autoload._log("reticle: patched fragment surf=" + str(s) + " on " + mi.name)
+			_log("reticle: patched fragment surf=" + str(s) + " on " + mi.name)
 		if found_reticle:
 			fixed_reticle_instances[inst_id] = true
 	for child in node.get_children():
@@ -91,14 +133,14 @@ func patch_reticle_shader(node: Node) -> void:
 
 
 func setup_scope_pip(weapon_rig: Node3D) -> void:
-	if active and weapon_slot == autoload._weapon_slot:
+	if active and weapon_slot == _get_weapon_slot.call():
 		# Check if current scope attachment is still valid and visible
 		if attachment and is_instance_valid(attachment) and attachment.visible:
 			return
 		# Scope changed - re-detect
 	cleanup_scope()
 	# Skeleton3D + Attachments resolved once in the weapon cache
-	var attachments = autoload._ensure_weapon_cache(weapon_rig).get("attachments")
+	var attachments = _get_weapon_cache.call(weapon_rig).get("attachments")
 	if not attachments or not is_instance_valid(attachments):
 		return
 	for child in attachments.get_children():
@@ -116,7 +158,7 @@ func setup_scope_pip(weapon_rig: Node3D) -> void:
 			continue
 		attachment = child
 		lens_mesh = mi
-		weapon_slot = autoload._weapon_slot
+		weapon_slot = _get_weapon_slot.call()
 		active = true
 		# Detect variable zoom capability and build per-level FOV/reticle arrays
 		var att_data = child.get("attachmentData")
@@ -148,8 +190,8 @@ func setup_scope_pip(weapon_rig: Node3D) -> void:
 			viewport.size = Vector2i(512, 512)
 			viewport.transparent_bg = false
 			viewport.disable_3d = false
-			viewport.world_3d = autoload.get_viewport().world_3d
-			autoload.add_child(viewport)
+			viewport.world_3d = _get_main_viewport.call().world_3d
+			_get_owner_node.call().add_child(viewport)
 			camera = Camera3D.new()
 			camera.name = "ScopeCamera"
 			camera.fov = 3.0
@@ -157,7 +199,7 @@ func setup_scope_pip(weapon_rig: Node3D) -> void:
 			camera.far = 4000.0
 			viewport.add_child(camera)
 			vp_created = true
-			autoload._log("scope: created own SubViewport + Camera, world_3d=" + str(viewport.world_3d))
+			_log("scope: created own SubViewport + Camera, world_3d=" + str(viewport.world_3d))
 		# Read FOV from the game's scope camera
 		var game_cam: Camera3D = null
 		for vp_child in game_vp.get_children():
@@ -175,12 +217,12 @@ func setup_scope_pip(weapon_rig: Node3D) -> void:
 				var ratio: float = zoom_reticle_scales[i] / base_scale if base_scale > 0.0 else 1.0
 				zoom_fovs[i] = scope_fov / ratio
 			camera.fov = zoom_fovs[zoom_index]
-			autoload._log("scope: variable zoom fovs=" + str(zoom_fovs) + " reticle_scales=" + str(zoom_reticle_scales) + " index=" + str(zoom_index))
+			_log("scope: variable zoom fovs=" + str(zoom_fovs) + " reticle_scales=" + str(zoom_reticle_scales) + " index=" + str(zoom_index))
 		else:
 			camera.fov = scope_fov
 		# Build PIP shader + material
 		var shader = Shader.new()
-		shader.code = autoload.SCOPE_PIP_SHADER
+		shader.code = _get_pip_shader_source.call()
 		# Find the scope lens surface (has "reticle" uniform AND "scope" = true)
 		overridden_surfaces.clear()
 		var patched_count := 0
@@ -219,8 +261,8 @@ func setup_scope_pip(weapon_rig: Node3D) -> void:
 				pip_mat.set_shader_parameter("intensity", ret_intensity)
 			mi.set_surface_override_material(s, pip_mat)
 			patched_count += 1
-			autoload._log("scope: patched lens surf " + str(s) + " scope_flag=" + str(scope_flag))
-		autoload._log("scope: activated on " + child.name + " patched=" + str(patched_count) + " fov=" + str(scope_fov))
+			_log("scope: patched lens surf " + str(s) + " scope_flag=" + str(scope_flag))
+		_log("scope: activated on " + child.name + " patched=" + str(patched_count) + " fov=" + str(scope_fov))
 		return
 
 
@@ -232,9 +274,10 @@ func update_scope_camera() -> void:
 		active = false
 		return
 	# Position scope camera at the scope, looking along weapon barrel
-	if not autoload.game_camera or not is_instance_valid(autoload.game_camera):
+	var gc = _get_game_camera.call()
+	if not gc or not is_instance_valid(gc):
 		return
-	var mgr = autoload.game_camera.get_node_or_null("Manager")
+	var mgr = gc.get_node_or_null("Manager")
 	if not mgr or mgr.get_child_count() == 0:
 		return
 	var weapon_rig = mgr.get_child(0)
@@ -242,7 +285,7 @@ func update_scope_camera() -> void:
 		return
 	var scope_pos = attachment.global_position
 	# Chain nodes (Handling/Sway/Noise/Tilt/Impulse/Recoil) rotate the barrel
-	var chain_xform: Transform3D = autoload._sample_recoil_chain(weapon_rig)
+	var chain_xform: Transform3D = _sample_recoil_chain.call(weapon_rig)
 	var barrel_basis: Basis = weapon_rig.global_basis * chain_xform.basis
 	var barrel_forward: Vector3 = barrel_basis.z
 	var barrel_up: Vector3 = barrel_basis.y
@@ -266,16 +309,17 @@ func cycle_scope_zoom(direction: int) -> void:
 				if mat and mat is ShaderMaterial:
 					mat.set_shader_parameter("reticle_scale", ret_scale)
 	# Sync game's weapon rig zoomLevel so reticle size etc. stays consistent
-	if autoload.game_camera and is_instance_valid(autoload.game_camera):
-		var mgr = autoload.game_camera.get_node_or_null("Manager")
+	var gc = _get_game_camera.call()
+	if gc and is_instance_valid(gc):
+		var mgr = gc.get_node_or_null("Manager")
 		if mgr and mgr.get_child_count() > 0:
 			var wr = mgr.get_child(0)
 			wr.set("zoomLevel", zoom_index)
 	# Haptic feedback on weapon hand
-	var ctrl = autoload._get_controller(autoload._weapon_hand)
+	var ctrl = _get_controller.call(_get_weapon_hand.call())
 	if ctrl:
 		ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.1, 0.0)
-	autoload._log("scope zoom: level=" + str(zoom_index) + " fov=" + str(zoom_fovs[zoom_index]))
+	_log("scope zoom: level=" + str(zoom_index) + " fov=" + str(zoom_fovs[zoom_index]))
 
 
 func cleanup_scope() -> void:
