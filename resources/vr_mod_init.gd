@@ -13,6 +13,18 @@ var _config_path := "user://vr_mod/vr_mod_config.json"
 var _assets_base := "res://resources/hands/"
 var _verbose_log := false  # set true to enable high-frequency debug logging
 
+# Tunables — class-level const uses = not := per GDScript 4
+const RAIL_MODE_LONG_PRESS_SEC = 0.3
+const DECOR_MODE_LONG_PRESS_SEC = 0.5
+const AUTO_RECENTER_DIST_M = 0.45
+const TWO_HAND_MIN_DIST_M = 0.1
+const RECOIL_FIRE_RISE_EDGE = 0.003
+const HOLSTER_KEY_DELAY_SEC = 0.15
+const HOLSTER_KEY_RELEASE_SEC = 0.1
+const GRENADE_TAP_SEC = 0.080
+const GRENADE_AUTO_HOLSTER_SEC = 0.5
+const KEY_TAP_RELEASE_SEC = 0.08
+
 var xr_interface: XRInterface
 var xr_origin: XROrigin3D
 var xr_camera: XRCamera3D
@@ -37,6 +49,7 @@ var _throw_samples: Array = []  # Recent [position, time] pairs for throw veloci
 var _weapon_loaded := false  # Track if weapon appeared
 var _weapon_is_long := false  # True for rifles/shotguns that support two-hand aim
 var _recoil_rest_xform := Transform3D.IDENTITY  # Cached rest pose of recoil chain
+var _recoil_rest_inv := Transform3D.IDENTITY    # affine_inverse of _recoil_rest_xform; updated alongside it
 var _rest_capture_prev_sample: Transform3D = Transform3D.IDENTITY  # stability-gate previous sample
 var _rest_capture_stability_count: int = 0  # consecutive stable frames
 var _rest_capture_hard_deadline: float = 0.0  # seconds remaining before force-commit
@@ -85,8 +98,7 @@ var _holster_holo_nodes: Dictionary = {}  # slot -> Node3D container
 var _holster_holos_enabled := true
 var _sling_offset := Vector3(0.2, -0.31, -0.06)    # primary weapon sling pos relative to head (yaw only)
 var _sling_rot_offset := Vector3(0.0, 60.0, 0.0)   # extra pitch/yaw/roll applied on top of slot rotation (degrees)
-var _left_in_zone := 0   # Which zone left controller is in (0 = none)
-var _right_in_zone := 0  # Which zone right controller is in (0 = none)
+var _hand_in_zone := {"left": 0, "right": 0}  # Which holster zone each hand is in (0 = none)
 
 # Bag zone: reach behind the right shoulder to add a held item to inventory
 var _bag_zone_offset := Vector3(0.15, -0.10, 0.35)  # Right-back, upper body (yaw-relative)
@@ -246,19 +258,61 @@ func _get_controller(hand: String) -> XRController3D:
 	return right_controller if hand == "right" else left_controller
 
 
-func _get_nearby_holster_zone(controller_pos: Vector3) -> int:
-	if not xr_camera or not is_instance_valid(xr_camera):
-		return 0
-	var head_pos = xr_camera.global_position
-	var head_yaw = xr_camera.global_rotation.y
-	var yaw_basis = Basis(Vector3.UP, head_yaw)
-	var closest_zone := 0
-	var closest_dist := _holster_zone_radius
+# Per-frame transform snapshot. Refreshed lazily on first access each frame.
+# Available so any update function can avoid re-reading XR node global_* properties
+# (each property crosses the script→engine boundary). Currently consumed by the
+# holster zone cache; future subsystem extractions (Phase 4) should adopt it too.
+var _vrframe := {
+	"frame": -1,
+	"cam_valid": false,
+	"cam_pos": Vector3.ZERO,
+	"cam_basis": Basis.IDENTITY,
+	"yaw_basis": Basis.IDENTITY,
+}
+
+func _refresh_vrframe() -> Dictionary:
+	var f := Engine.get_process_frames()
+	if _vrframe["frame"] == f:
+		return _vrframe
+	_vrframe["frame"] = f
+	if xr_camera and is_instance_valid(xr_camera):
+		_vrframe["cam_valid"] = true
+		_vrframe["cam_pos"] = xr_camera.global_position
+		_vrframe["cam_basis"] = xr_camera.global_basis
+		_vrframe["yaw_basis"] = Basis(Vector3.UP, xr_camera.global_rotation.y)
+	else:
+		_vrframe["cam_valid"] = false
+	return _vrframe
+
+
+var _holster_zone_world_cache := {}     # slot -> Vector3 zone world pos for the current frame
+var _holster_zone_cache_frame := -1     # Engine frame number when cache was last computed
+
+func _refresh_holster_zone_cache() -> void:
+	var frame := Engine.get_process_frames()
+	if frame == _holster_zone_cache_frame:
+		return
+	_holster_zone_cache_frame = frame
+	_holster_zone_world_cache.clear()
+	var snap := _refresh_vrframe()
+	if not snap["cam_valid"]:
+		return
+	var head_pos: Vector3 = snap["cam_pos"]
+	var yaw_basis: Basis = snap["yaw_basis"]
 	for slot in HOLSTER_ZONES:
 		var o: Vector3 = _holster_offsets[slot]
 		var eff := Vector3(-o.x, o.y, o.z) if _holster_zones_mirrored else o
-		var zone_world_pos = head_pos + yaw_basis * eff
-		var dist = controller_pos.distance_to(zone_world_pos)
+		_holster_zone_world_cache[slot] = head_pos + yaw_basis * eff
+
+
+func _get_nearby_holster_zone(controller_pos: Vector3) -> int:
+	_refresh_holster_zone_cache()
+	if _holster_zone_world_cache.is_empty():
+		return 0
+	var closest_zone := 0
+	var closest_dist := _holster_zone_radius
+	for slot in HOLSTER_ZONES:
+		var dist: float = controller_pos.distance_to(_holster_zone_world_cache[slot])
 		if dist < closest_dist:
 			closest_dist = dist
 			closest_zone = slot
@@ -328,16 +382,13 @@ func _update_holster_zone_haptics() -> void:
 		if not ctrl or not ctrl.get_is_active():
 			continue
 		var zone = _get_nearby_holster_zone(ctrl.global_position)
-		var prev_zone = _left_in_zone if hand == "left" else _right_in_zone
+		var prev_zone: int = _hand_in_zone[hand]
 		if zone != prev_zone:
 			if zone > 0 and _holster_cooldown <= 0.0:
 				# Entered a new zone — haptic buzz (suppressed during holster cooldown)
 				ctrl.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.15, 0.0)
-				print("[VR Mod] ", hand, " hand entered zone: ", HOLSTER_ZONES[zone]["name"])
-			if hand == "left":
-				_left_in_zone = zone
-			else:
-				_right_in_zone = zone
+				_log("[VR Mod] ", hand, " hand entered zone: ", HOLSTER_ZONES[zone]["name"])
+			_hand_in_zone[hand] = zone
 
 	# Bag zone haptic: buzz when the grabbing hand enters the bag zone while holding a loose item
 	if _grabbed_object and is_instance_valid(_grabbed_object) and _grab_hand != "":
@@ -346,7 +397,7 @@ func _update_holster_zone_haptics() -> void:
 			var in_zone := _is_in_bag_zone(grab_ctrl.global_position)
 			if in_zone and not _grab_in_bag_zone:
 				grab_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.6, 0.2, 0.0)
-				print("[VR Mod] Grab hand entered bag zone")
+				_log("[VR Mod] Grab hand entered bag zone")
 			_grab_in_bag_zone = in_zone
 	else:
 		_grab_in_bag_zone = false
@@ -360,7 +411,7 @@ func _update_holster_zone_haptics() -> void:
 		var in_zone := _is_in_nvg_zone(ctrl.global_position)
 		if in_zone and not _hand_in_nvg_zone[hand]:
 			ctrl.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.15, 0.0)
-			print("[VR Mod] ", hand, " hand entered NVG zone")
+			_log("[VR Mod] ", hand, " hand entered NVG zone")
 		_hand_in_nvg_zone[hand] = in_zone
 
 
@@ -514,7 +565,7 @@ func _update_nvg_overlay(_delta: float) -> void:
 			# Stereo: close to camera, oversized for SCREEN_UV coverage
 			(_nvg_overlay_mesh.mesh as QuadMesh).size = Vector2(4.0, 4.0)
 			_nvg_overlay_mesh.position = Vector3(0.0, 0.0, -0.15)
-		print("[VR Mod] NVG overlay activated (mono=", _nvg_mono, ")")
+		_log("[VR Mod] NVG overlay activated (mono=", _nvg_mono, ")")
 
 	# State transition: NVG just turned off
 	elif not game_nvg_on and _nvg_active:
@@ -523,7 +574,7 @@ func _update_nvg_overlay(_delta: float) -> void:
 		_nvg_overlay_mesh.visible = false
 		if _nvg_mono_viewport:
 			_nvg_mono_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-		print("[VR Mod] NVG overlay deactivated")
+		_log("[VR Mod] NVG overlay deactivated")
 
 	# While NVG active: update shader time + sync mono camera
 	if _nvg_active:
@@ -537,7 +588,7 @@ func _update_nvg_overlay(_delta: float) -> void:
 
 
 func _draw_weapon(hand: String, slot: int) -> void:
-	print("[VR Mod] DRAW weapon slot ", slot, " (", HOLSTER_ZONES[slot]["name"], ") with ", hand, " hand")
+	_log("[VR Mod] DRAW weapon slot ", slot, " (", HOLSTER_ZONES[slot]["name"], ") with ", hand, " hand")
 	_holster_state = HolsterState.DRAWN
 	_weapon_hand = hand
 	_weapon_slot = slot
@@ -558,6 +609,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 	_weapon_loaded = false
 	_weapon_is_long = false
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_recoil_rest_inv = Transform3D.IDENTITY
 	_prev_recoil_mag = 0.0
 	_fire_haptic_cooldown = 0.0
 	_walk_sway_captured = false
@@ -573,7 +625,7 @@ func _draw_weapon(hand: String, slot: int) -> void:
 
 
 func _lower_weapon() -> void:
-	print("[VR Mod] LOWER weapon (slot ", _weapon_slot, ")")
+	_log("[VR Mod] LOWER weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
 	_fg_adjust_mode = false
 	if _rail_mode:
@@ -595,7 +647,7 @@ func _lower_weapon() -> void:
 
 
 func _enter_sling() -> void:
-	print("[VR Mod] SLING weapon (slot ", _weapon_slot, ")")
+	_log("[VR Mod] SLING weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
 	_fg_adjust_mode = false
 	if _rail_mode:
@@ -616,7 +668,7 @@ func _enter_sling() -> void:
 
 
 func _raise_weapon() -> void:
-	print("[VR Mod] RAISE weapon (slot ", _weapon_slot, ")")
+	_log("[VR Mod] RAISE weapon (slot ", _weapon_slot, ")")
 	_holster_state = HolsterState.DRAWN
 	# Re-raise the weapon
 	_inject_action("weapon_high", true)
@@ -624,7 +676,7 @@ func _raise_weapon() -> void:
 
 
 func _holster_weapon() -> void:
-	print("[VR Mod] HOLSTER weapon (slot ", _weapon_slot, ")")
+	_log("[VR Mod] HOLSTER weapon (slot ", _weapon_slot, ")")
 	_adjust_mode = false
 	_fg_adjust_mode = false
 	if _rail_mode:
@@ -641,11 +693,11 @@ func _holster_weapon() -> void:
 	if _weapon_slot > 0 and HOLSTER_ZONES.has(_weapon_slot):
 		var key: int = HOLSTER_ZONES[_weapon_slot]["key"]
 		_pending_holster_key = key
-		get_tree().create_timer(0.15).timeout.connect(func():
+		get_tree().create_timer(HOLSTER_KEY_DELAY_SEC).timeout.connect(func():
 			if _pending_holster_key == key:
 				_pending_holster_key = -1
 				_inject_key(key, true)
-				get_tree().create_timer(0.1).timeout.connect(func(): _inject_key(key, false))
+				get_tree().create_timer(HOLSTER_KEY_RELEASE_SEC).timeout.connect(func(): _inject_key(key, false))
 		)
 
 	_holster_state = HolsterState.UNARMED
@@ -661,6 +713,7 @@ func _holster_weapon() -> void:
 	_pump_prev_pos = Vector3.ZERO
 	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_recoil_rest_inv = Transform3D.IDENTITY
 	_prev_recoil_mag = 0.0
 	_fire_haptic_cooldown = 0.0
 	_walk_sway_captured = false
@@ -782,7 +835,7 @@ const MENU_SETTLE_FRAMES := 90  # ~1.5s; proceed to VR even without game camera
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_ENTER_TREE:
 		get_viewport().use_xr = false
-		print("[VR Mod] Viewport use_xr = FALSE (waiting for gameplay)")
+		_log("[VR Mod] Viewport use_xr = FALSE (waiting for gameplay)")
 
 
 func _ready() -> void:
@@ -791,22 +844,22 @@ func _ready() -> void:
 	process_physics_priority = 1000
 	process_mode = Node.PROCESS_MODE_ALWAYS  # Keep running even if game pauses (ESC menu)
 	get_tree().node_added.connect(_on_bullet_hole_node_added)
-	print("[VR Mod] === VR Mod initializing (priority=1000) ===")
+	_log("[VR Mod] === VR Mod initializing (priority=1000) ===")
 
 	xr_interface = XRServer.find_interface("OpenXR")
 	if xr_interface:
-		print("[VR Mod] Found OpenXR interface")
+		_log("[VR Mod] Found OpenXR interface")
 		if not xr_interface.is_initialized():
 			if xr_interface.initialize():
-				print("[VR Mod] OpenXR interface initialized")
+				_log("[VR Mod] OpenXR interface initialized")
 			else:
 				printerr("[VR Mod] ERROR: Failed to initialize OpenXR interface")
 				return
 		else:
-			print("[VR Mod] OpenXR interface already initialized")
+			_log("[VR Mod] OpenXR interface already initialized")
 		XRServer.primary_interface = xr_interface
 		_xr_ready = true
-		print("[VR Mod] OpenXR ready (view count: ", xr_interface.get_view_count(), ")")
+		_log("[VR Mod] OpenXR ready (view count: ", xr_interface.get_view_count(), ")")
 	else:
 		printerr("[VR Mod] ERROR: OpenXR interface not found!")
 		return
@@ -826,10 +879,10 @@ func _ready() -> void:
 	# Apply tracking mode from config now that the interface is ready.
 	if _standing_mode and xr_interface:
 		xr_interface.play_area_mode = XRInterface.XR_PLAY_AREA_ROOMSCALE
-		print("[VR Mod] Tracking: standing (roomscale)")
+		_log("[VR Mod] Tracking: standing (roomscale)")
 	else:
-		print("[VR Mod] Tracking: sitting (local)")
-	print("[VR Mod] Waiting for 3D camera (gameplay start)...")
+		_log("[VR Mod] Tracking: sitting (local)")
+	_log("[VR Mod] Waiting for 3D camera (gameplay start)...")
 	# Show reminder about VR options menu at startup; persists (hidden) for main menu reuse
 	_config_reminder_label = Label3D.new()
 	_config_reminder_label.text = "VR OPTIONS MENU:\nToggle In-Game \nBy Clicking Both Thumbsticks"
@@ -845,7 +898,7 @@ func _ready() -> void:
 	_config_reminder_label.layers = 1 << 19
 	xr_camera.add_child(_config_reminder_label)
 	_config_reminder_label.position = Vector3(0, 0, -0.75)
-	print("[VR Mod] Showing config reminder")
+	_log("[VR Mod] Showing config reminder")
 	get_tree().create_timer(3.0).timeout.connect(_anchor_config_reminder)
 
 
@@ -860,12 +913,12 @@ func _process(delta: float) -> void:
 			if _frames_waited % CAMERA_POLL_INTERVAL == 0:
 				game_camera = _find_game_camera(get_tree().root)
 				if game_camera:
-					print("[VR Mod] === Game camera detected! ===")
-					print("[VR Mod] Camera: ", game_camera.get_path())
+					_log("[VR Mod] === Game camera detected! ===")
+					_log("[VR Mod] Camera: ", game_camera.get_path())
 					_phase = 1
 					_frames_waited = 0
 				elif _frames_waited >= MENU_SETTLE_FRAMES:
-					print("[VR Mod] No gameplay camera after settle — enabling VR at main menu")
+					_log("[VR Mod] No gameplay camera after settle — enabling VR at main menu")
 					_in_menu_mode = true
 					_phase = 1
 					_frames_waited = 0
@@ -883,13 +936,13 @@ func _process(delta: float) -> void:
 					_camera_lost_frames += 1
 					if _frames_waited % CAMERA_POLL_INTERVAL == 0:
 						if game_camera:
-							print("[VR Mod] Game camera lost (level transition?) — searching...")
+							_log("[VR Mod] Game camera lost (level transition?) — searching...")
 						game_camera = _find_game_camera(get_tree().root)
 						if game_camera:
 							_attach_rig_to_camera()
 							_on_level_transition()
 							_camera_lost_frames = 0
-							print("[VR Mod] Camera found again")
+							_log("[VR Mod] Camera found again")
 					# After ~2 seconds without a camera, enter main menu mode (once)
 					elif _camera_lost_frames > 120 and not _in_menu_mode:
 						_on_main_menu_entered()
@@ -912,14 +965,14 @@ func _process(delta: float) -> void:
 				# Rail mode: long-press detection for X button
 				if _rail_x_pending:
 					var elapsed = Time.get_ticks_msec() / 1000.0 - _rail_x_press_time
-					if elapsed >= 0.3:
+					if elapsed >= RAIL_MODE_LONG_PRESS_SEC:
 						_rail_x_pending = false
 						_enter_rail_mode()
 
 				# Decor mode: long-press X while unarmed/lowered
 				if _decor_x_pending:
 					var elapsed_dx: float = Time.get_ticks_msec() / 1000.0 - _decor_x_press_time
-					if elapsed_dx >= 0.5:
+					if elapsed_dx >= DECOR_MODE_LONG_PRESS_SEC:
 						_decor_x_pending = false
 						if _holster_state in [HolsterState.UNARMED, HolsterState.LOWERED] and not _interface_open and not _is_decor_placing():
 							_toggle_decor_mode()
@@ -936,7 +989,7 @@ func _process(delta: float) -> void:
 						if support_ctrl:
 							support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.2, 0.1, 0.0)
 						_ammo_read_delay = 3
-						print("[VR Mod] AMMO CHECK (support trigger long-press)")
+						_log("[VR Mod] AMMO CHECK (support trigger long-press)")
 
 				# Ammo check: wait a few frames for game to update labels after KEY_V
 				if _ammo_read_delay > 0:
@@ -962,7 +1015,7 @@ func _process(delta: float) -> void:
 					if mgr and mgr.get_child_count() > 0:
 						_weapon_loaded = true
 						var wep = mgr.get_child(0)
-						print("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
+						_log("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
 						_weapon_is_long = _classify_weapon_is_long(wep)
 						_weapon_subtype = _get_weapon_subtype(wep)
 						_weapon_uses_r_reload = _weapon_subtype == "Shotgun" or _weapon_subtype == "Bolt"
@@ -976,6 +1029,7 @@ func _process(delta: float) -> void:
 						# _recoil_rest_xform at (0,-0.5,-0.5) which creates a ~0.7m
 						# jump whenever walk-sway is toggled.
 						_recoil_rest_xform = Transform3D.IDENTITY
+						_recoil_rest_inv = Transform3D.IDENTITY
 						_walk_sway_captured = false
 						_walk_sway_logged = false
 						_rest_capture_pending = true
@@ -993,14 +1047,14 @@ func _process(delta: float) -> void:
 							_holster_state = HolsterState.DRAWN
 							_weapon_slot = restore_slot
 							_weapon_hand = restore_hand
-							print("[VR Mod] Restoring DRAWN state: slot=", _weapon_slot, " hand=", _weapon_hand)
+							_log("[VR Mod] Restoring DRAWN state: slot=", _weapon_slot, " hand=", _weapon_hand)
 							_transition_slot = 0
 							_transition_hand = ""
 							_resume_slot = 0
 							_resume_hand = ""
 						# Auto-raise weapon after short delay
 						_weapon_raise_timer = 0.5
-						print("[VR Mod] Will auto-raise weapon in 0.5s")
+						_log("[VR Mod] Will auto-raise weapon in 0.5s")
 
 				# Auto-raise weapon timer (only if weapon is still DRAWN)
 				if _weapon_raise_timer > 0:
@@ -1010,13 +1064,13 @@ func _process(delta: float) -> void:
 						if _holster_state == HolsterState.DRAWN:
 							if not _weapon_loaded:
 								# Slot was empty — abort and revert to unarmed
-								print("[VR Mod] Slot ", _weapon_slot, " empty, reverting to UNARMED")
+								_log("[VR Mod] Slot ", _weapon_slot, " empty, reverting to UNARMED")
 								_holster_state = HolsterState.UNARMED
 								_weapon_hand = ""
 								_weapon_slot = 0
 								_support_grip_held = false
 							else:
-								print("[VR Mod] Auto-raising weapon (weapon_high)")
+								_log("[VR Mod] Auto-raising weapon (weapon_high)")
 								_inject_action("weapon_high", true)
 								get_tree().create_timer(0.1).timeout.connect(
 									func(): _inject_action("weapon_high", false)
@@ -1031,12 +1085,12 @@ func _process(delta: float) -> void:
 					_standing_mode_resnap -= 1
 					if _standing_mode_resnap == 0:
 						_attach_rig_to_camera()
-						print("[VR Mod] Origin re-snapped after tracking mode change")
+						_log("[VR Mod] Origin re-snapped after tracking mode change")
 						if _standing_mode and xr_camera:
 							_standing_height_ref = xr_camera.position.y
 							if _standing_height_ref < 0.3:
 								_standing_height_ref = 1.6
-							print("[VR Mod] Standing height reference: ", _standing_height_ref, "m")
+							_log("[VR Mod] Standing height reference: ", _standing_height_ref, "m")
 
 				if _physical_crouch_resnap > 0:
 					_physical_crouch_resnap -= 1
@@ -1046,7 +1100,7 @@ func _process(delta: float) -> void:
 							_standing_height_ref = xr_camera.position.y
 							if _standing_height_ref < 0.3:
 								_standing_height_ref = 1.6
-						print("[VR Mod] Origin re-snapped after physical crouch release")
+						_log("[VR Mod] Origin re-snapped after physical crouch release")
 
 				# Holster zone haptic feedback
 				_update_holster_zone_haptics()
@@ -1074,7 +1128,7 @@ func _process(delta: float) -> void:
 				elif _auto_recenter_enabled and not _interface_open and not _config_screen_open and not _decor_mode:
 					var _ar_hmd := xr_camera.global_position
 					var _ar_cam := game_camera.global_position
-					if Vector2(_ar_hmd.x - _ar_cam.x, _ar_hmd.z - _ar_cam.z).length() > 0.45:
+					if Vector2(_ar_hmd.x - _ar_cam.x, _ar_hmd.z - _ar_cam.z).length() > AUTO_RECENTER_DIST_M:
 						_attach_rig_to_camera()
 
 				_process_input(delta)
@@ -1112,7 +1166,7 @@ func _process(delta: float) -> void:
 
 
 func _install_xr_rig() -> void:
-	print("[VR Mod] Installing XR rig...")
+	_log("[VR Mod] Installing XR rig...")
 
 	# xr_origin and xr_camera were created in _ready() for early HMD output.
 	# Just update settings and add controllers to the existing rig.
@@ -1142,7 +1196,7 @@ func _install_xr_rig() -> void:
 		_hand_load_errors.append("hand: VMZ extraction failed — hands will use box fallback")
 
 	# Create simple controller hand models (visible when no weapon equipped)
-	print("[VR Mod] Creating hand models...")
+	_log("[VR Mod] Creating hand models...")
 	_create_hand_model(left_controller, "LeftHandModel")
 	_create_hand_model(right_controller, "RightHandModel")
 
@@ -1158,7 +1212,7 @@ func _install_xr_rig() -> void:
 		ctrl.add_child(ray)
 	_grab_ray_left = left_controller.get_node("GrabRay")
 	_grab_ray_right = right_controller.get_node("GrabRay")
-	print("[VR Mod] Grab raycasts added to both controllers")
+	_log("[VR Mod] Grab raycasts added to both controllers")
 
 
 	# xr_origin is already parented to self (done in _ready()).
@@ -1170,9 +1224,9 @@ func _install_xr_rig() -> void:
 		var actual_head_height := xr_camera.position.y
 		if actual_head_height < 0.3:
 			actual_head_height = 1.6  # fallback: tracking not yet settled
-			print("[VR Mod] Head tracking not ready, using fallback 1.6m")
+			_log("[VR Mod] Head tracking not ready, using fallback 1.6m")
 		else:
-			print("[VR Mod] Tracked head height: ", actual_head_height, "m")
+			_log("[VR Mod] Tracked head height: ", actual_head_height, "m")
 		var cam_pos = game_camera.global_position
 		xr_origin.global_position = Vector3(cam_pos.x, cam_pos.y - actual_head_height, cam_pos.z)
 		xr_origin.global_rotation = Vector3.ZERO
@@ -1183,8 +1237,8 @@ func _install_xr_rig() -> void:
 		# Copy game camera's cull mask to XR camera so we can see
 		# weapon viewmodels rendered on special visual layers
 		xr_camera.cull_mask = game_camera.cull_mask
-		print("[VR Mod] XR rig placed: origin=", xr_origin.global_position)
-		print("[VR Mod] Copied cull_mask from game_camera: ", game_camera.cull_mask)
+		_log("[VR Mod] XR rig placed: origin=", xr_origin.global_position)
+		_log("[VR Mod] Copied cull_mask from game_camera: ", game_camera.cull_mask)
 	else:
 		xr_origin.global_position = Vector3.ZERO
 		_last_game_cam_pos = Vector3(0, 1.7, 0)
@@ -1196,7 +1250,7 @@ func _install_xr_rig() -> void:
 	var loader = get_tree().root.get_node_or_null("Loader")
 	if loader:
 		loader.visible = false
-		print("[VR Mod] Hid Loader CanvasLayer")
+		_log("[VR Mod] Hid Loader CanvasLayer")
 
 	_reparent_camera_children()
 
@@ -1241,7 +1295,7 @@ func _install_xr_rig() -> void:
 			else:
 				f.store_line(action_name + " (NOT FOUND)")
 		f.close()
-		print("[VR Mod] Debug log reset: ", dump_path)
+		_log("[VR Mod] Debug log reset: ", dump_path)
 
 	# Flush buffered hand load messages (written before the reset above)
 	for msg in _hand_load_errors:
@@ -1289,11 +1343,11 @@ func _install_xr_rig() -> void:
 	_setup_comfort_vignette()
 	_create_holster_holos()
 
-	print("[VR Mod] === VR rig active ===")
+	_log("[VR Mod] === VR rig active ===")
 
 
 func _setup_vr_hud() -> void:
-	print("[VR Mod] Setting up VR HUD (World2D sharing)...")
+	_log("[VR Mod] Setting up VR HUD (World2D sharing)...")
 
 	var main_vp = get_viewport()
 	# Use the main viewport's visible rect as the canvas design size. This is the
@@ -1308,7 +1362,7 @@ func _setup_vr_hud() -> void:
 	_log("HUD sizes: visible_rect=" + str(vp_size) + " win=" + str(win_size_for_log) + " content_scale=" + str(cs_size) + " canvas_xform=" + str(main_vp.canvas_transform) + " global_canvas_xform=" + str(main_vp.global_canvas_transform))
 	var ui_node = get_tree().root.get_node_or_null("Map/Core/UI")
 	if ui_node:
-		print("[VR Mod] UI node: ", ui_node.get_path(), " vis=", ui_node.visible)
+		_log("[VR Mod] UI node: ", ui_node.get_path(), " vis=", ui_node.visible)
 
 	hud_viewport = SubViewport.new()
 	hud_viewport.name = "VRHudViewport"
@@ -1373,11 +1427,11 @@ func _setup_vr_hud() -> void:
 	else:
 		_log("WARNING: watch mesh is null after _create_watch_mesh!")
 
-	print("[VR Mod] VR HUD installed (wrist watch mode)")
+	_log("[VR Mod] VR HUD installed (wrist watch mode)")
 
 	_setup_nvg_overlay()
 	
-	print("[VR Mod] === VR fully active ===")
+	_log("[VR Mod] === VR fully active ===")
 
 func _setup_nvg_overlay() -> void:
 	_nvg_overlay_mesh = MeshInstance3D.new()
@@ -1403,7 +1457,7 @@ func _setup_nvg_overlay() -> void:
 	_nvg_overlay_mesh.visible = false
 	xr_camera.add_child(_nvg_overlay_mesh)
 	_nvg_overlay_installed = true
-	print("[VR Mod] NVG overlay installed (mono=", _nvg_mono, " brightness=", _nvg_brightness, ")")
+	_log("[VR Mod] NVG overlay installed (mono=", _nvg_mono, " brightness=", _nvg_brightness, ")")
 
 
 func _build_vignette_ring_mesh(steps: int) -> ArrayMesh:
@@ -1450,7 +1504,7 @@ func _setup_comfort_vignette() -> void:
 	_vignette_mesh.visible = false
 	xr_camera.add_child(_vignette_mesh)
 	_vignette_radius = 1.0
-	print("[VR Mod] Comfort vignette installed")
+	_log("[VR Mod] Comfort vignette installed")
 
 
 func _update_comfort_vignette(delta: float) -> void:
@@ -1487,14 +1541,14 @@ func _update_physical_crouch() -> void:
 			_physical_crouch_active = true
 			_inject_action("crouch", true)   # toggle ON
 			_inject_action("crouch", false)  # clear held state
-			print("[VR Mod] Physical crouch: start (drop=", drop, "m)")
+			_log("[VR Mod] Physical crouch: start (drop=", drop, "m)")
 	else:
 		if drop < _physical_crouch_threshold * 0.6:
 			_physical_crouch_active = false
 			_physical_crouch_resnap = 8
 			_inject_action("crouch", true)   # toggle OFF
 			_inject_action("crouch", false)  # clear held state
-			print("[VR Mod] Physical crouch: end (drop=", drop, "m)")
+			_log("[VR Mod] Physical crouch: end (drop=", drop, "m)")
 
 
 func _create_nvg_mono_viewport() -> void:
@@ -1525,7 +1579,7 @@ func _create_nvg_mono_viewport() -> void:
 	# Exclude layer 20 so mono camera doesn't see the NVG overlay quad (prevents feedback loop)
 	_nvg_mono_camera.cull_mask = 0xFFFFF & ~(1 << 19)  # all 20 layers except layer 20
 	_nvg_mono_viewport.add_child(_nvg_mono_camera)
-	print("[VR Mod] NVG mono viewport created (", vp_size.x, "x", vp_size.y, ")")
+	_log("[VR Mod] NVG mono viewport created (", vp_size.x, "x", vp_size.y, ")")
 
 
 func _update_interface_state() -> void:
@@ -1580,7 +1634,7 @@ func _update_interface_state() -> void:
 
 
 func _on_interface_opened() -> void:
-	print("[VR Mod] Interface OPENED - switching to world-fixed mode")
+	_log("[VR Mod] Interface OPENED - switching to world-fixed mode")
 	_ammo_check_timer = 0.0
 	_cleanup_ammo_panel()
 	_laser_diag_logged = false
@@ -1644,11 +1698,11 @@ func _on_interface_opened() -> void:
 			_laser_mesh.position.z = -cyl.height / 2.0
 		_laser_mesh.visible = true
 
-	print("[VR Mod] Menu placed at ", menu_pos)
+	_log("[VR Mod] Menu placed at ", menu_pos)
 
 
 func _on_interface_closed() -> void:
-	print("[VR Mod] Interface CLOSED - switching to wrist watch mode")
+	_log("[VR Mod] Interface CLOSED - switching to wrist watch mode")
 	if not hud_mesh:
 		return
 
@@ -1750,7 +1804,7 @@ func _show_ammo_check_panel() -> void:
 	get_tree().root.add_child(_ammo_panel_mesh)
 	_update_ammo_panel_position()
 	_ammo_check_timer = 3.0
-	print("[VR Mod] Ammo check: MAG=", mag_text, " CHB=", chb_text)
+	_log("[VR Mod] Ammo check: MAG=", mag_text, " CHB=", chb_text)
 
 
 func _hide_ammo_check_panel() -> void:
@@ -1896,18 +1950,18 @@ func _attach_rig_to_camera() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if _config_reminder_label and is_instance_valid(_config_reminder_label):
 		_config_reminder_label.visible = false
-	print("[VR Mod] Rig recentered to camera at ", cam_pos)
+	_log("[VR Mod] Rig recentered to camera at ", cam_pos)
 
 
 func _on_level_transition() -> void:
 	# Reset state that depends on game scene nodes (freed during level change).
 	_level_transition_count += 1
-	print("[VR Mod] Level transition #", _level_transition_count, " — resetting scene-dependent state")
+	_log("[VR Mod] Level transition #", _level_transition_count, " — resetting scene-dependent state")
 	# Save weapon slot/hand so we can re-take control after the new scene loads.
 	if _holster_state != HolsterState.UNARMED and _weapon_slot > 0:
 		_transition_slot = _weapon_slot
 		_transition_hand = _weapon_hand if _weapon_hand != "" else _config_dominant_hand
-		print("[VR Mod] Saving pre-transition state: slot=", _transition_slot, " hand=", _transition_hand)
+		_log("[VR Mod] Saving pre-transition state: slot=", _transition_slot, " hand=", _transition_hand)
 	else:
 		_transition_slot = 0
 		_transition_hand = ""
@@ -1921,6 +1975,7 @@ func _on_level_transition() -> void:
 	_pump_prev_pos = Vector3.ZERO
 	_pump_cooldown = 0.0
 	_recoil_rest_xform = Transform3D.IDENTITY
+	_recoil_rest_inv = Transform3D.IDENTITY
 	_prev_recoil_mag = 0.0
 	_fire_haptic_cooldown = 0.0
 	_walk_sway_captured = false
@@ -1952,13 +2007,13 @@ func _on_level_transition() -> void:
 	if game_camera:
 		game_camera.environment = null
 		game_camera.attributes = null
-	print("[VR Mod] Level transition: XR re-asserted, game camera env cleared")
+	_log("[VR Mod] Level transition: XR re-asserted, game camera env cleared")
 
 	_log("Level transition reset complete, camera at " + str(game_camera.global_position))
 
 
 func _on_main_menu_entered() -> void:
-	print("[VR Mod] Main menu detected — VR stays active, polling for game camera")
+	_log("[VR Mod] Main menu detected — VR stays active, polling for game camera")
 	_holster_state = HolsterState.UNARMED
 	_weapon_slot = 0
 	_weapons_reparented = false
@@ -2030,6 +2085,13 @@ func _sync_origin_to_game() -> void:
 				_steer_game_camera_via_mouse()
 
 
+var _steer_decor_last_aim := Vector3.ZERO
+var _steer_game_last_aim := Vector3.ZERO
+var _steer_game_last_target_yaw := 0.0
+var _steer_game_last_target_pitch := 0.0
+var _steer_game_have_target := false
+const _STEER_AIM_DEADZONE_SQ = 1.0e-6  # ~0.001 rad (~0.06 deg) of aim change
+
 func _steer_decor_camera_to_controller() -> void:
 	# In decor mode, steer game camera to match dominant hand controller aim.
 	# The game uses game camera direction for furniture placement, so this makes
@@ -2041,6 +2103,10 @@ func _steer_decor_camera_to_controller() -> void:
 		return
 
 	var aim_forward = -ctrl.global_basis.z
+	# Deadzone: if controller aim has not moved this frame, skip the trig + injection.
+	if (aim_forward - _steer_decor_last_aim).length_squared() < _STEER_AIM_DEADZONE_SQ:
+		return
+	_steer_decor_last_aim = aim_forward
 	var target_yaw = atan2(-aim_forward.x, -aim_forward.z)
 	var target_pitch = asin(clampf(aim_forward.y, -1.0, 1.0))
 
@@ -2085,7 +2151,7 @@ func _steer_game_camera_via_mouse() -> void:
 		var off_controller = _get_controller(_get_support_hand())
 		if off_controller and off_controller.get_is_active():
 			var hand_dist = aim_controller.global_position.distance_to(off_controller.global_position)
-			if hand_dist > 0.1:
+			if hand_dist > TWO_HAND_MIN_DIST_M:
 				aim_forward = (off_controller.global_position - aim_controller.global_position).normalized()
 			else:
 				aim_forward = -aim_controller.global_basis.z
@@ -2094,33 +2160,46 @@ func _steer_game_camera_via_mouse() -> void:
 	else:
 		# Use raw controller forward for steering — slot grip rotations are visual offsets only
 		aim_forward = -aim_controller.global_basis.z
-	# Convert to yaw/pitch
-	var target_yaw = atan2(-aim_forward.x, -aim_forward.z)
-	var target_pitch = asin(clampf(aim_forward.y, -1.0, 1.0))
-
-	var game_yaw = game_camera.global_rotation.y
-	var game_pitch = game_camera.global_rotation.x
-
-	var yaw_error = fmod(target_yaw - game_yaw + PI, TAU) - PI
-	var pitch_error = target_pitch - game_pitch
+	# Aim deadzone: if controller hasn't moved this frame, reuse the cached
+	# yaw/pitch and skip mouse injection — but still run the direct camera
+	# override below, because the game's sway scripts move game_camera every
+	# frame regardless of whether we did. Skipping the override would let the
+	# game camera drift away from the controller direction even when the
+	# player holds the controller perfectly still, and bullets would miss.
+	var aim_unchanged := _steer_game_have_target and (aim_forward - _steer_game_last_aim).length_squared() < _STEER_AIM_DEADZONE_SQ
+	var target_yaw: float
+	var target_pitch: float
+	if aim_unchanged:
+		target_yaw = _steer_game_last_target_yaw
+		target_pitch = _steer_game_last_target_pitch
+	else:
+		target_yaw = atan2(-aim_forward.x, -aim_forward.z)
+		target_pitch = asin(clampf(aim_forward.y, -1.0, 1.0))
+		_steer_game_last_aim = aim_forward
+		_steer_game_last_target_yaw = target_yaw
+		_steer_game_last_target_pitch = target_pitch
+		_steer_game_have_target = true
 
 	# Calibration disabled: it was drifting _mouse_sens_estimate toward 0.001 over
 	# sessions (camera sway correlates with yaw_error, biasing the measurement).
 	# Sens is fixed at 0.003 by the load-time bounds check.
 	_sens_cal_pending = false
 
-	if abs(yaw_error) < deg_to_rad(0.3) and abs(pitch_error) < deg_to_rad(0.3):
-		return
-
-	var correction_strength := 0.6
-
-	var mouse_dx = -(yaw_error * correction_strength) / _mouse_sens_estimate
-	var mouse_dy = -(pitch_error * correction_strength) / _mouse_sens_estimate
-
-	var event = InputEventMouseMotion.new()
-	event.relative = Vector2(mouse_dx, mouse_dy)
-	event.position = get_viewport().get_visible_rect().size / 2
-	Input.parse_input_event(event)
+	# Mouse injection: skip when aim hasn't changed (no error to correct that
+	# wasn't already corrected last frame) and when within the small-error band.
+	if not aim_unchanged:
+		var game_yaw = game_camera.global_rotation.y
+		var game_pitch = game_camera.global_rotation.x
+		var yaw_error = fmod(target_yaw - game_yaw + PI, TAU) - PI
+		var pitch_error = target_pitch - game_pitch
+		if abs(yaw_error) >= deg_to_rad(0.3) or abs(pitch_error) >= deg_to_rad(0.3):
+			var correction_strength := 0.6
+			var mouse_dx = -(yaw_error * correction_strength) / _mouse_sens_estimate
+			var mouse_dy = -(pitch_error * correction_strength) / _mouse_sens_estimate
+			var event = InputEventMouseMotion.new()
+			event.relative = Vector2(mouse_dx, mouse_dy)
+			event.position = get_viewport().get_visible_rect().size / 2
+			Input.parse_input_event(event)
 
 	# Direct rotation override when weapon is drawn — this is what actually makes
 	# bullets land on the laser dot. Execution order within our priority-1000 _process:
@@ -2129,6 +2208,8 @@ func _steer_game_camera_via_mouse() -> void:
 	# When fire() reads game_camera.global_rotation, it sees our assignment from step 1
 	# rather than the priority-0 sway-contaminated value. Bullet direction = controller.
 	# Gated to DRAWN + weapon_loaded so it never runs during spawn/load-in (always UNARMED).
+	# Runs every frame even when aim is steady; the game's sway scripts move the camera
+	# regardless of our input.
 	if _holster_state == HolsterState.DRAWN and _weapon_loaded and is_finite(target_yaw) and is_finite(target_pitch):
 		game_camera.global_rotation = Vector3(target_pitch, target_yaw, 0.0)
 
@@ -2181,7 +2262,11 @@ func _process_input(delta: float) -> void:
 			_set_weapon_grip_offset(offset)
 			_set_weapon_grip_rotation(rot)
 			if _verbose_log:
-				print("[VR Mod] ADJUST ", _current_weapon_name, ": x=", snapped(offset.x, 0.001), " y=", snapped(offset.y, 0.001), " z=", snapped(offset.z, 0.001), " rot=", snapped(rot, 0.1), "°")
+				_log("[VR Mod] ADJUST " + _current_weapon_name
+					+ ": x=" + str(snapped(offset.x, 0.001))
+					+ " y=" + str(snapped(offset.y, 0.001))
+					+ " z=" + str(snapped(offset.z, 0.001))
+					+ " rot=" + str(snapped(rot, 0.1)) + " deg")
 		# Release movement keys and skip normal input
 		_inject_key(KEY_W, false)
 		_inject_key(KEY_S, false)
@@ -2334,13 +2419,13 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 			"trigger_click":
 				if is_weapon_hand:
 					_inject_key(KEY_G, true)  # Place furniture
-					print("[VR Mod] DECOR: Place (G pressed)")
+					_log("[VR Mod] DECOR: Place (G pressed)")
 			"ax_button":
 				if hand == "right":
 					# A button = surface magnet toggle (left click)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 					_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
-					print("[VR Mod] DECOR: Surface magnet toggled")
+					_log("[VR Mod] DECOR: Surface magnet toggled")
 				elif hand == "left" and not _is_decor_placing():
 					# X button = exit decor mode (blocked while placing)
 					_toggle_decor_mode()
@@ -2350,12 +2435,12 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					# Single dispatch only — _inject_key double-sends (parse+push_input)
 					# which toggles the furniture inventory open then immediately closed.
 					_tab_single_press()
-					print("[VR Mod] DECOR: Furniture inventory (Tab)")
+					_log("[VR Mod] DECOR: Furniture inventory (Tab)")
 				elif hand == "right":
 					# B button = store item to furniture inventory (middle mouse)
 					_inject_mouse_button(MOUSE_BUTTON_MIDDLE, true)
 					_inject_mouse_button(MOUSE_BUTTON_MIDDLE, false)
-					print("[VR Mod] DECOR: Store to furniture inv (middle click)")
+					_log("[VR Mod] DECOR: Store to furniture inv (middle click)")
 			"grip_click":
 				# Both grips = exit decor mode (blocked while placing)
 				if _left_grip_held and _right_grip_held and not _is_decor_placing():
@@ -2393,7 +2478,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					_inject_mouse_button(MOUSE_BUTTON_XBUTTON1, true)
 					_inject_mouse_button(MOUSE_BUTTON_XBUTTON1, false)
 					_trig_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.15, 0.0)
-					print("[VR Mod] NVG toggled (trigger above head)")
+					_log("[VR Mod] NVG toggled (trigger above head)")
 				elif is_weapon_hand and _holster_state == HolsterState.DRAWN and not (_weapon_uses_r_reload and _action_open):
 					if _weapon_slot == 4:
 						if not _grenade_pin_pulled:
@@ -2403,16 +2488,16 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							_inject_action("left_mouse", true)
 							Input.action_press("fire", 1.0)
 							Input.action_press("left_mouse", 1.0)
-							get_tree().create_timer(0.08).timeout.connect(_grenade_tap_release)
+							get_tree().create_timer(GRENADE_TAP_SEC).timeout.connect(_grenade_tap_release)
 							_grenade_pin_pulled = true
 							var ctrl = _get_controller(hand)
 							if ctrl:
 								ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.1, 0.0)
-							print("[VR Mod] Grenade pin pulled")
+							_log("[VR Mod] Grenade pin pulled")
 						else:
 							# Second trigger: right click = replace pin (cancel)
 							_grenade_replace_pin()
-							print("[VR Mod] Grenade pin replaced")
+							_log("[VR Mod] Grenade pin replaced")
 					else:
 						# Non-grenade weapons: fire via mouse button only.
 						# inject_mouse_button already triggers "fire"/"left_mouse" actions
@@ -2425,7 +2510,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					# Bolt-action: trigger while weapon lowered cycles the bolt (R)
 					_inject_action("reload", true)
 					_inject_action("reload", false)
-					print("[VR Mod] BOLT CYCLED (dominant trigger, LOWERED)")
+					_log("[VR Mod] BOLT CYCLED (dominant trigger, LOWERED)")
 					var bolt_ctrl = _get_controller(_weapon_hand)
 					if bolt_ctrl:
 						bolt_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.1, 0.0)
@@ -2437,13 +2522,13 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					elif _support_grip_held and not _weapon_uses_r_reload:
 						_inject_key(KEY_T, true)
 						_inject_key(KEY_T, false)
-						print("[VR Mod] LASER toggled (support trigger + grip)")
+						_log("[VR Mod] LASER toggled (support trigger + grip)")
 					else:
 						if _weapon_uses_r_reload and _action_open:
 							# Action open: support trigger loads one round/shell (LMB)
 							_inject_mouse_button(MOUSE_BUTTON_LEFT, true)
 							_inject_mouse_button(MOUSE_BUTTON_LEFT, false)
-							print("[VR Mod] LOAD AMMO (support trigger, action open)")
+							_log("[VR Mod] LOAD AMMO (support trigger, action open)")
 						else:
 							# Start long-press timer — short = reload, long = ammo check (KEY_V)
 							_support_trigger_pending = true
@@ -2453,14 +2538,14 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 				if is_support_hand:
 					_menu_ctrl_held = true
 					_inject_key(KEY_CTRL, true)
-					print("[VR Mod] MENU: Ctrl held (fast transfer mode)")
+					_log("[VR Mod] MENU: Ctrl held (fast transfer mode)")
 				else:
 					_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
 					_inject_action("context", true)
 			elif _decor_mode:
 				return
 			elif _holster_cooldown > 0.0:
-				print("[VR Mod] Grip blocked - holster cooldown (" + str(snappedf(_holster_cooldown, 0.01)) + "s remaining)")
+				_log("[VR Mod] Grip blocked - holster cooldown (" + str(snappedf(_holster_cooldown, 0.01)) + "s remaining)")
 			else:
 				var ctrl = _get_controller(hand)
 				var zone = _get_nearby_holster_zone(ctrl.global_position) if ctrl else 0
@@ -2487,9 +2572,9 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 									_support_grip_held = true
 									_pump_gesture_active = false
 									_pump_prev_pos = Vector3.ZERO
-									print("[VR Mod] Support grip: two-hand aim ON")
+									_log("[VR Mod] Support grip: two-hand aim ON")
 								else:
-									print("[VR Mod] Support grip ignored — short weapon, no two-hand aim")
+									_log("[VR Mod] Support grip ignored — short weapon, no two-hand aim")
 					HolsterState.LOWERED:
 						if is_weapon_hand:
 							_try_grab(hand)
@@ -2531,13 +2616,13 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						_set_weapon_fg_r(_fg_adjust_saved_r)
 					_fg_grip_captured = false
 					_fg_adjust_mode = false
-					print("[VR Mod] === FG ADJUST MODE OFF (discarded) ===")
+					_log("[VR Mod] === FG ADJUST MODE OFF (discarded) ===")
 				elif _adjust_mode:
 					# X again = discard changes and exit
 					_set_weapon_grip_offset(_adjust_saved_offset)
 					_set_weapon_grip_rotation(_adjust_saved_rotation)
 					_adjust_mode = false
-					print("[VR Mod] === ADJUST MODE OFF (discarded) ===")
+					_log("[VR Mod] === ADJUST MODE OFF (discarded) ===")
 				elif _holster_state == HolsterState.DRAWN:
 					# Start long-press detection — will resolve on release or timeout
 					_rail_x_pending = true
@@ -2546,7 +2631,7 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 					# X = rotate dragged item (R key); flashlight/decor disabled while menu is open
 					_inject_key(KEY_R, true)
 					_inject_key(KEY_R, false)
-					print("[VR Mod] INVENTORY: Rotate item (R)")
+					_log("[VR Mod] INVENTORY: Rotate item (R)")
 				else:
 					# X button when unarmed/lowered: long-press (0.5s) = decor mode, short-press = flashlight
 					_decor_x_pending = true
@@ -2565,15 +2650,15 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 						var fg_r := wr.global_basis.inverse() * hb
 						_set_weapon_fg_p(fg_p)
 						_set_weapon_fg_r(fg_r)
-						print("[VR Mod] FG ADJUST saved ", _current_weapon_name, ": p=", snapped(fg_p.x, 0.001), ",", snapped(fg_p.y, 0.001), ",", snapped(fg_p.z, 0.001))
+						_log("[VR Mod] FG ADJUST saved ", _current_weapon_name, ": p=", snapped(fg_p.x, 0.001), ",", snapped(fg_p.y, 0.001), ",", snapped(fg_p.z, 0.001))
 					_fg_grip_captured = false
 					_fg_adjust_mode = false
 					_save_grip_config()
-					print("[VR Mod] === FG ADJUST MODE OFF (saved) ===")
+					_log("[VR Mod] === FG ADJUST MODE OFF (saved) ===")
 				elif _adjust_mode:
 					_save_grip_config()
 					_adjust_mode = false
-					print("[VR Mod] === ADJUST MODE OFF (saved) ===")
+					_log("[VR Mod] === ADJUST MODE OFF (saved) ===")
 				elif _config_screen_open:
 					_inject_config_click(true)
 				elif _interface_open and _laser_screen_pos.x >= 0:
@@ -2608,11 +2693,11 @@ func _on_button_pressed(button_name: String, hand: String) -> void:
 							# Reset pump baseline so gesture doesn't misfire from stale position
 							_pump_prev_pos = Vector3.ZERO
 							_pump_gesture_active = false
-						print("[VR Mod] ACTION ", "OPENED" if _action_open else "CLOSED", " (B, Ctrl)")
+						_log("[VR Mod] ACTION ", "OPENED" if _action_open else "CLOSED", " (B, Ctrl)")
 					else:
 						_inject_key(KEY_F, true)
 						_inject_key(KEY_F, false)
-						print("[VR Mod] FIRE MODE toggled (B button)")
+						_log("[VR Mod] FIRE MODE toggled (B button)")
 				else:
 					_inject_action("interact", true)
 		"menu_button":
@@ -2675,7 +2760,7 @@ func _on_button_released(button_name: String, hand: String) -> void:
 						_support_trigger_pending = false
 						_inject_action("reload", true)
 						_inject_action("reload", false)
-						print("[VR Mod] RELOAD (support trigger short-press)")
+						_log("[VR Mod] RELOAD (support trigger short-press)")
 					else:
 						_inject_action("reload", false)
 		"grip_click":
@@ -2686,7 +2771,7 @@ func _on_button_released(button_name: String, hand: String) -> void:
 				if is_support_hand:
 					_menu_ctrl_held = false
 					_inject_key(KEY_CTRL, false)
-					print("[VR Mod] MENU: Ctrl released")
+					_log("[VR Mod] MENU: Ctrl released")
 				else:
 					_inject_mouse_button(MOUSE_BUTTON_RIGHT, false)
 					_inject_action("context", false)
@@ -2697,7 +2782,7 @@ func _on_button_released(button_name: String, hand: String) -> void:
 					if _weapon_slot == 4 and _grenade_pin_pulled:
 						# Pin pulled: tap fire = throw (game click 2)
 						_grenade_throw_tap()
-						print("[VR Mod] Grenade thrown (grip release)")
+						_log("[VR Mod] Grenade thrown (grip release)")
 					elif not _weapon_loaded:
 						# Slot was empty — revert to unarmed regardless of position
 						_holster_weapon()
@@ -2721,8 +2806,8 @@ func _on_button_released(button_name: String, hand: String) -> void:
 					_pump_fwd_dir = Vector3.ZERO
 					if _fg_adjust_mode:
 						_fg_adjust_mode = false
-						print("[VR Mod] === FG ADJUST MODE OFF (support released) ===")
-					print("[VR Mod] Support grip: two-hand aim OFF")
+						_log("[VR Mod] === FG ADJUST MODE OFF (support released) ===")
+					_log("[VR Mod] Support grip: two-hand aim OFF")
 				# Always try to drop grabbed objects from this hand
 				if _grab_hand == hand:
 					_drop_grabbed()
@@ -2741,22 +2826,22 @@ func _on_button_released(button_name: String, hand: String) -> void:
 								_fg_grip_captured = false
 								if _cached_weapon_rig and is_instance_valid(_cached_weapon_rig):
 									_fg_adjust_frozen_xform = _cached_weapon_rig.global_transform
-								print("[VR Mod] === FG ADJUST MODE ON (slot ", _weapon_slot, ") ===")
-								print("[VR Mod] Gun frozen. Move support hand to foregrip, then A=Save, X=Discard")
+								_log("[VR Mod] === FG ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+								_log("[VR Mod] Gun frozen. Move support hand to foregrip, then A=Save, X=Discard")
 							else:
 								# Main hand only — enter grip adjust mode
 								_adjust_mode = true
 								_adjust_saved_offset = _get_weapon_grip_offset()
 								_adjust_saved_rotation = _get_weapon_grip_rotation()
-								print("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
-								print("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
-								print("[VR Mod] A=Save, X=Discard")
+								_log("[VR Mod] === ADJUST MODE ON (slot ", _weapon_slot, ") ===")
+								_log("[VR Mod] Left stick=X/Y, Right stick X=Z Y=Rotation")
+								_log("[VR Mod] A=Save, X=Discard")
 				elif _decor_x_pending:
 					_decor_x_pending = false
 					# Short press — toggle flashlight
 					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, true)
 					_inject_mouse_button(MOUSE_BUTTON_XBUTTON2, false)
-					print("[VR Mod] FLASHLIGHT toggled (X short-press)")
+					_log("[VR Mod] FLASHLIGHT toggled (X short-press)")
 			elif hand == "right":
 				if _config_screen_open:
 					_inject_config_click(false)
@@ -2858,7 +2943,7 @@ func _inject_scroll(direction: int) -> void:
 func _inject_action(action_name: String, pressed: bool, strength: float = 1.0) -> void:
 	if not InputMap.has_action(action_name):
 		if pressed:
-			print("[VR Mod] Action not found: ", action_name)
+			_log("[VR Mod] Action not found: ", action_name)
 		return
 	var event = InputEventAction.new()
 	event.action = action_name
@@ -3092,7 +3177,7 @@ func _create_fallback_box_hand(controller: XRController3D, model_name: String) -
 	hand.rotation.z = deg_to_rad(90)
 	hand.position = Vector3(0, 0, 0.20)
 	controller.add_child(hand)
-	print("[VR Mod] Created fallback box hand model: ", model_name)
+	_log("[VR Mod] Created fallback box hand model: ", model_name)
 
 
 func _apply_hand_texture(root: Node) -> void:
@@ -3471,21 +3556,21 @@ func _toggle_esc_menu() -> void:
 		# A subsequent menu button press (after it closes) will open the ESC menu.
 		_key_states.erase(KEY_ESCAPE)
 		Input.parse_input_event(ev_press)
-		get_tree().create_timer(0.08).timeout.connect(func(): Input.parse_input_event(ev_release))
-		print("[VR Mod] Menu button: closing open interface screen")
+		get_tree().create_timer(KEY_TAP_RELEASE_SEC).timeout.connect(func(): Input.parse_input_event(ev_release))
+		_log("[VR Mod] Menu button: closing open interface screen")
 	elif not _esc_menu_active:
 		_esc_menu_active = true
 		_key_states.erase(KEY_ESCAPE)
 		Input.parse_input_event(ev_press)
 		# No release — menu stays open until next press.
-		print("[VR Mod] ESC menu opened")
+		_log("[VR Mod] ESC menu opened")
 	else:
 		_esc_clear_hover()
 		_esc_menu_active = false
 		_key_states.erase(KEY_ESCAPE)
 		Input.parse_input_event(ev_press)
-		get_tree().create_timer(0.08).timeout.connect(func(): Input.parse_input_event(ev_release))
-		print("[VR Mod] ESC menu closed (menu button)")
+		get_tree().create_timer(KEY_TAP_RELEASE_SEC).timeout.connect(func(): Input.parse_input_event(ev_release))
+		_log("[VR Mod] ESC menu closed (menu button)")
 
 
 func _dump_visible_canvas_nodes() -> void:
@@ -3545,7 +3630,7 @@ func _grenade_tap_release() -> void:
 func _grenade_replace_pin() -> void:
 	_grenade_pin_pulled = false
 	_inject_mouse_button(MOUSE_BUTTON_RIGHT, true)
-	get_tree().create_timer(0.08).timeout.connect(_grenade_replace_pin_release)
+	get_tree().create_timer(GRENADE_TAP_SEC).timeout.connect(_grenade_replace_pin_release)
 
 
 func _grenade_replace_pin_release() -> void:
@@ -3559,8 +3644,8 @@ func _grenade_throw_tap() -> void:
 	_inject_action("left_mouse", true)
 	Input.action_press("fire", 1.0)
 	Input.action_press("left_mouse", 1.0)
-	get_tree().create_timer(0.08).timeout.connect(_grenade_tap_release)
-	get_tree().create_timer(0.5).timeout.connect(_grenade_auto_holster)
+	get_tree().create_timer(GRENADE_TAP_SEC).timeout.connect(_grenade_tap_release)
+	get_tree().create_timer(GRENADE_AUTO_HOLSTER_SEC).timeout.connect(_grenade_auto_holster)
 
 
 func _update_hand_visibility() -> void:
@@ -3768,7 +3853,7 @@ func _try_grab(hand: String) -> void:
 	_grab_hand = hand
 	_throw_samples.clear()
 	# No freeze — override position each frame at process_priority=1000
-	print("[VR Mod] Grabbed: ", collider.name, " with ", hand, " hand")
+	_log("[VR Mod] Grabbed: ", collider.name, " with ", hand, " hand")
 
 
 func _drop_grabbed() -> void:
@@ -3798,7 +3883,7 @@ func _drop_grabbed() -> void:
 		rb.linear_velocity = throw_vel
 		rb.angular_velocity = Vector3.ZERO
 
-	print("[VR Mod] Dropped: ", _grabbed_object.name, " vel=", throw_vel)
+	_log("[VR Mod] Dropped: ", _grabbed_object.name, " vel=", throw_vel)
 	_grabbed_object = null
 	_grab_hand = ""
 	_grab_offset = Vector3.ZERO
@@ -3809,7 +3894,7 @@ func _pickup_to_inventory() -> void:
 	if not _grabbed_object or not is_instance_valid(_grabbed_object):
 		return
 
-	print("[VR Mod] INVENTORY PICKUP: ", _grabbed_object.name)
+	_log("[VR Mod] INVENTORY PICKUP: ", _grabbed_object.name)
 
 	# Haptic confirmation
 	var ctrl = _get_controller(_grab_hand) if _grab_hand != "" else null
@@ -3878,23 +3963,88 @@ func _update_grabbed() -> void:
 
 var _invis_mat: StandardMaterial3D = null
 
-func _hide_arms_in_subtree(node: Node) -> void:
+# Per-weapon cache keyed by weapon_rig instance id. Invalidated on swap.
+# Stores arm meshes (one-shot hide) and the recoil chain node references.
+var _weapon_cache_id := 0
+var _weapon_cache: Dictionary = {}
+
+func _collect_arms_meshes(node: Node, out: Array) -> void:
 	if node is MeshInstance3D and node.name == "Arms":
-		if not _invis_mat:
-			_invis_mat = StandardMaterial3D.new()
-			_invis_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			_invis_mat.albedo_color = Color(0, 0, 0, 0)
-		var mesh := node as MeshInstance3D
-		# Hide ALL surfaces — arms (0-1) AND hands (2+). The game's hand surfaces can't be
-		# individually detached so we hide the whole Arms mesh; our skeletal VR hands on the
-		# controllers are visible in all states (including when the support hand releases
-		# the weapon), which is why both need to go together.
-		if mesh.mesh:
-			for i in mesh.mesh.get_surface_count():
-				mesh.set_surface_override_material(i, _invis_mat)
-		return  # Arms found, no need to go deeper
+		out.append(node)
+		return  # arms found at this branch — don't recurse below
 	for child in node.get_children():
-		_hide_arms_in_subtree(child)
+		_collect_arms_meshes(child, out)
+
+func _ensure_weapon_cache(weapon_rig: Node3D) -> Dictionary:
+	var id := weapon_rig.get_instance_id()
+	# Reuse cache only when (a) same weapon_rig and (b) the chain was complete
+	# last time. An incomplete chain means the game was still loading the weapon,
+	# so we keep retrying each frame until all chain nodes are present.
+	if id == _weapon_cache_id and _weapon_cache.get("chain_complete", false):
+		return _weapon_cache
+	var prev_arms_hidden: bool = _weapon_cache.get("arms_hidden", false) if id == _weapon_cache_id else false
+	_weapon_cache_id = id
+	var chain: Dictionary = {}
+	var complete := true
+	var current: Node3D = weapon_rig
+	for chain_name in _RECOIL_CHAIN_NAMES:
+		var child = current.get_node_or_null(chain_name)
+		if not child or not child is Node3D:
+			complete = false
+			break
+		chain[chain_name] = child
+		current = child
+	var arms: Array = []
+	_collect_arms_meshes(weapon_rig, arms)
+	# Resolve Skeleton3D + Attachments once chain is complete. These are walked
+	# every frame by _fix_reticle_parallax and _setup_scope_pip; caching them
+	# eliminates the per-frame _find_node_by_class recursion.
+	var skeleton: Node = null
+	var attachments: Node = null
+	if complete:
+		skeleton = _find_node_by_class(weapon_rig, "Skeleton3D")
+		if skeleton:
+			attachments = skeleton.get_node_or_null("Attachments")
+	_weapon_cache = {
+		"chain": chain,
+		"chain_complete": complete,
+		"arms": arms,
+		"arms_hidden": prev_arms_hidden,
+		"skeleton": skeleton,
+		"attachments": attachments,
+	}
+	return _weapon_cache
+
+func _hide_arms_in_subtree(weapon_rig: Node3D) -> void:
+	var cache := _ensure_weapon_cache(weapon_rig)
+	if cache["arms_hidden"]:
+		return
+	# Hide ALL surfaces — arms (0-1) AND hands (2+). The game's hand surfaces can't be
+	# individually detached so we hide the whole Arms mesh; our skeletal VR hands on the
+	# controllers are visible in all states (including when the support hand releases
+	# the weapon), which is why both need to go together.
+	if not _invis_mat:
+		_invis_mat = StandardMaterial3D.new()
+		_invis_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_invis_mat.albedo_color = Color(0, 0, 0, 0)
+	var any_hidden := false
+	for arms_mi in cache["arms"]:
+		if not is_instance_valid(arms_mi):
+			continue
+		var mesh := arms_mi as MeshInstance3D
+		if not mesh.mesh:
+			continue
+		for i in mesh.mesh.get_surface_count():
+			mesh.set_surface_override_material(i, _invis_mat)
+		any_hidden = true
+	if any_hidden:
+		cache["arms_hidden"] = true
+	else:
+		# Arms not yet present — re-walk the subtree on next call so we pick them up
+		# once the game finishes loading the weapon.
+		var fresh: Array = []
+		_collect_arms_meshes(weapon_rig, fresh)
+		cache["arms"] = fresh
 
 
 func _weapon_key() -> String:
@@ -3956,7 +4106,7 @@ func _sync_weapon_to_controller() -> void:
 		# externally (e.g. via inventory while drawn). Reset without injecting the unequip
 		# key — the game already handled the unequip.
 		if _holster_state != HolsterState.UNARMED and _weapon_loaded:
-			print("[VR Mod] Weapon rig gone externally — resetting to UNARMED")
+			_log("[VR Mod] Weapon rig gone externally — resetting to UNARMED")
 			_pending_holster_key = -1
 			_adjust_mode = false
 			_fg_adjust_mode = false
@@ -4021,7 +4171,7 @@ func _sync_weapon_to_controller() -> void:
 
 	if _support_grip_held and off_controller and off_controller.get_is_active():
 		var hand_dist = controller.global_position.distance_to(off_controller.global_position)
-		if hand_dist > 0.1:
+		if hand_dist > TWO_HAND_MIN_DIST_M:
 			use_two_hand = true
 			# Aim direction: from dominant hand model center toward off-hand controller.
 			# Only the dominant side uses the GLTF offset (weapon grip is attached there).
@@ -4106,6 +4256,7 @@ func _sync_weapon_to_controller() -> void:
 				_rest_capture_pending = false
 				_walk_sway_capture_delay = 0.0
 				_recoil_rest_xform = sample
+				_recoil_rest_inv = sample.affine_inverse()
 				_walk_sway_rest.clear()
 				for node_name in _WALK_SWAY_NODES:
 					var wn := _walk_chain_node(weapon_rig, node_name)
@@ -4140,14 +4291,14 @@ func _sync_weapon_to_controller() -> void:
 	# controller+local_offset (matches the post-capture steady state).
 	var recoil_delta := Transform3D.IDENTITY
 	if not _rest_capture_pending:
-		recoil_delta = _recoil_rest_xform.affine_inverse() * _sample_recoil_chain(weapon_rig)
+		recoil_delta = _recoil_rest_inv * _sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
 
 	# Fire haptics: rising recoil_delta magnitude = shot actually fired.
 	# Works for empty chamber (no recoil) and full-auto (one pulse per shot).
 	_fire_haptic_cooldown -= get_process_delta_time()
 	var cur_recoil_mag := recoil_delta.origin.length()
-	if cur_recoil_mag - _prev_recoil_mag > 0.003 and _fire_haptic_cooldown <= 0.0:
+	if cur_recoil_mag - _prev_recoil_mag > RECOIL_FIRE_RISE_EDGE and _fire_haptic_cooldown <= 0.0:
 		var hap_dom := _get_controller(_weapon_hand)
 		if hap_dom:
 			hap_dom.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.08, 0.0)
@@ -4319,14 +4470,18 @@ func _sync_weapon_to_sling(weapon_rig: Node3D) -> void:
 const _RECOIL_CHAIN_NAMES: Array = ["Handling", "Sway", "Noise", "Tilt", "Impulse", "Recoil"]
 
 func _sample_recoil_chain(weapon_rig: Node3D) -> Transform3D:
+	var chain: Dictionary = _ensure_weapon_cache(weapon_rig)["chain"]
 	var composed := Transform3D.IDENTITY
-	var current: Node3D = weapon_rig
 	for chain_name in _RECOIL_CHAIN_NAMES:
-		var child = current.get_node_or_null(chain_name)
-		if not child or not child is Node3D:
+		if not chain.has(chain_name):
 			break
-		composed = composed * child.transform
-		current = child
+		var node: Node3D = chain[chain_name]
+		if not is_instance_valid(node):
+			# Cache stale (game replaced the chain); drop it and rebuild next frame.
+			_weapon_cache.clear()
+			_weapon_cache_id = 0
+			break
+		composed = composed * node.transform
 	return composed
 
 
@@ -4349,17 +4504,16 @@ const _WALK_SWAY_CAPTURE_DELAY_LOAD := 2.0
 const _WALK_SWAY_CAPTURE_DELAY_TOGGLE := 0.1
 
 func _walk_chain_node(weapon_rig: Node3D, node_name: String) -> Node3D:
-	# Walk the chain parent-to-child until we hit node_name. Returns null if
-	# the chain terminates early.
-	var current: Node3D = weapon_rig
-	for chain_name in _RECOIL_CHAIN_NAMES:
-		var child = current.get_node_or_null(chain_name)
-		if not child or not child is Node3D:
-			return null
-		if chain_name == node_name:
-			return child
-		current = child
-	return null
+	# Returns the chain node by name, or null if the chain terminates before it.
+	var chain: Dictionary = _ensure_weapon_cache(weapon_rig)["chain"]
+	if not chain.has(node_name):
+		return null
+	var node: Node3D = chain[node_name]
+	if not is_instance_valid(node):
+		_weapon_cache.clear()
+		_weapon_cache_id = 0
+		return null
+	return node
 
 func _suppress_walk_sway(weapon_rig: Node3D) -> void:
 	# Capture rest poses once per weapon load, disable the chain-node scripts,
@@ -4454,7 +4608,15 @@ func _find_interactable_display_name(collider: Node) -> String:
 	return _format_node_name(collider.name)
 
 
-func _log(msg: String) -> void:
+func _log(arg0 = "", arg1 = null, arg2 = null, arg3 = null, arg4 = null, arg5 = null, arg6 = null, arg7 = null) -> void:
+	var msg := str(arg0)
+	if arg1 != null: msg += str(arg1)
+	if arg2 != null: msg += str(arg2)
+	if arg3 != null: msg += str(arg3)
+	if arg4 != null: msg += str(arg4)
+	if arg5 != null: msg += str(arg5)
+	if arg6 != null: msg += str(arg6)
+	if arg7 != null: msg += str(arg7)
 	var path = _log_path
 	var f = FileAccess.open(path, FileAccess.READ_WRITE)
 	if not f:
@@ -4465,16 +4627,29 @@ func _log(msg: String) -> void:
 		f.close()
 
 
+# One-shot error logger for production-visible failures (missing nodes, etc).
+# Subsequent calls with the same key are silently ignored, so repeated per-frame
+# failures don't flood the log. Keys persist for the autoload's lifetime.
+var _log_missing_once_seen := {}
+func _log_missing_once(key: String, msg: String) -> void:
+	if _log_missing_once_seen.has(key):
+		return
+	_log_missing_once_seen[key] = true
+	_log("[missing] ", key, ": ", msg)
+
+
 func _fix_reticle_parallax(weapon_rig: Node3D) -> void:
 	# VR parallax fix: the game's Reticle shader uses normalize(reticlePosition)+NORMAL
 	# for UV, which is an approximation that breaks in stereo VR. Replace with a proper
 	# ray-plane intersection (Addmix collimator method) that uses only rotation matrices
 	# (same for both eyes) and the per-eye VIEW direction for correct collimation.
-	var skel = _find_node_by_class(weapon_rig, "Skeleton3D")
-	if not skel:
-		return
-	var attachments = skel.get_node_or_null("Attachments")
-	if not attachments:
+	#
+	# Skeleton3D / Attachments are resolved once during weapon-cache population.
+	# We still iterate Attachments children every frame because the player can
+	# attach a new optic mid-game; per-mesh dedup lives in _patch_reticle_shader
+	# via _fixed_reticle_instances.
+	var attachments = _ensure_weapon_cache(weapon_rig).get("attachments")
+	if not attachments or not is_instance_valid(attachments):
 		return
 	for child in attachments.get_children():
 		if not child is Node3D or not child.visible:
@@ -4601,7 +4776,7 @@ func _update_pump_gesture(delta: float) -> void:
 		if pos.distance_to(_pump_prev_pos) > PUMP_OUT:
 			_pump_gesture_active = true
 			_pump_gesture_timer = 1.2
-			print("[VR Mod] PUMP: fwd phase dist=", snappedf(pos.distance_to(_pump_prev_pos) * 100.0, 0.1), "cm")
+			_log("[VR Mod] PUMP: fwd phase dist=", snappedf(pos.distance_to(_pump_prev_pos) * 100.0, 0.1), "cm")
 	else:
 		_pump_gesture_timer -= delta
 		var dist: float = pos.distance_to(_pump_prev_pos)
@@ -4609,7 +4784,7 @@ func _update_pump_gesture(delta: float) -> void:
 			if _pump_cooldown <= 0.0:
 				_inject_action("reload", true)
 				_inject_action("reload", false)
-				print("[VR Mod] PUMP — shell cycled (R)")
+				_log("[VR Mod] PUMP — shell cycled (R)")
 				var dom_ctrl = _get_controller(_weapon_hand)
 				if dom_ctrl:
 					dom_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.12, 0.0)
@@ -4617,7 +4792,7 @@ func _update_pump_gesture(delta: float) -> void:
 			_pump_gesture_active = false
 			_pump_prev_pos = pos
 		elif _pump_gesture_timer <= 0.0:
-			print("[VR Mod] PUMP: timeout dist=", snappedf(dist * 100.0, 0.1), "cm")
+			_log("[VR Mod] PUMP: timeout dist=", snappedf(dist * 100.0, 0.1), "cm")
 			_pump_gesture_active = false
 			_pump_prev_pos = pos
 
@@ -4804,11 +4979,10 @@ func _setup_scope_pip(weapon_rig: Node3D) -> void:
 			return
 		# Scope changed — re-detect
 	_cleanup_scope()
-	var skel = _find_node_by_class(weapon_rig, "Skeleton3D")
-	if not skel:
-		return
-	var attachments = skel.get_node_or_null("Attachments")
-	if not attachments:
+	# Skeleton3D + Attachments resolved once in the weapon cache; per-frame work
+	# is now just iterating Attachments children to find the visible scope.
+	var attachments = _ensure_weapon_cache(weapon_rig).get("attachments")
+	if not attachments or not is_instance_valid(attachments):
 		return
 	for child in attachments.get_children():
 		if not child is Node3D or not child.visible:
@@ -5023,14 +5197,14 @@ func _enter_rail_mode() -> void:
 	var ctrl = _get_controller(_get_support_hand())
 	if ctrl:
 		ctrl.trigger_haptic_pulse("haptic", 0.0, 0.4, 0.15, 0.0)
-	print("[VR Mod] === RAIL MODE ON ===")
+	_log("[VR Mod] === RAIL MODE ON ===")
 
 func _exit_rail_mode() -> void:
 	if _rail_active:
 		_end_rail_slide()
 	_rail_mode = false
 	_rail_x_pending = false
-	print("[VR Mod] === RAIL MODE OFF ===")
+	_log("[VR Mod] === RAIL MODE OFF ===")
 
 func _start_rail_slide() -> void:
 	_rail_active = true
@@ -5043,13 +5217,13 @@ func _start_rail_slide() -> void:
 	_inject_key(KEY_CTRL, true)
 	if support_ctrl:
 		support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.1, 0.0)
-	print("[VR Mod] Rail slide started (trigger grab)")
+	_log("[VR Mod] Rail slide started (trigger grab)")
 
 func _end_rail_slide() -> void:
 	_rail_active = false
 	_inject_key(KEY_CTRL, false)
 	_rail_scroll_accum = 0.0
-	print("[VR Mod] Rail slide ended")
+	_log("[VR Mod] Rail slide ended")
 
 func _update_rail_slide() -> void:
 	if not _rail_active:
@@ -5101,7 +5275,7 @@ func _force_debug_dump(label: String) -> void:
 		if cam_meshes.is_empty():
 			f.store_line("(none)")
 		f.close()
-	print("[VR Mod] Debug dump: ", label)
+	_log("[VR Mod] Debug dump: ", label)
 
 
 func _reparent_camera_children() -> void:
@@ -5117,8 +5291,8 @@ func _reparent_camera_children() -> void:
 	if game_camera.get_child_count() == 0:
 		return  # Wait for weapon nodes to be populated
 
-	print("[VR Mod] Weapon strategy: sync game_camera to controller (no reparent)")
-	print("[VR Mod] Game camera children: ", game_camera.get_child_count())
+	_log("[VR Mod] Weapon strategy: sync game_camera to controller (no reparent)")
+	_log("[VR Mod] Game camera children: ", game_camera.get_child_count())
 	for i in game_camera.get_child_count():
 		var c = game_camera.get_child(i)
 		var info = "  " + c.name + " (" + c.get_class() + ")"
@@ -5126,9 +5300,9 @@ func _reparent_camera_children() -> void:
 			info += " vis=" + str(c.visible)
 		if c.get_child_count() > 0:
 			info += " [" + str(c.get_child_count()) + " children]"
-		print("[VR Mod] ", info)
+		_log("[VR Mod] ", info)
 	_weapons_reparented = true
-	print("[VR Mod] Controller-aim sync ACTIVE")
+	_log("[VR Mod] Controller-aim sync ACTIVE")
 
 
 func _find_game_camera(node: Node) -> Camera3D:
@@ -5154,9 +5328,9 @@ func _load_config() -> void:
 				if dst:
 					dst.store_string(content)
 					dst.close()
-					print("[VR Mod] Seeded config from bundled defaults: ", config_path)
+					_log("[VR Mod] Seeded config from bundled defaults: ", config_path)
 		if not FileAccess.file_exists(config_path):
-			print("[VR Mod] Config not found at: ", config_path, ", using defaults")
+			_log("[VR Mod] Config not found at: ", config_path, ", using defaults")
 			return
 
 	var file = FileAccess.open(config_path, FileAccess.READ)
@@ -5272,14 +5446,14 @@ func _load_config() -> void:
 			if data.has("resume"):
 				_resume_slot = data["resume"].get("slot", 0)
 				_resume_hand = data["resume"].get("hand", "")
-			print("[VR Mod] Config loaded successfully")
+			_log("[VR Mod] Config loaded successfully")
 	file.close()
 
 
 func _save_grip_config() -> void:
 	var config_path = _config_path
 	if not FileAccess.file_exists(config_path):
-		print("[VR Mod] Config not found, cannot save: ", config_path)
+		_log("[VR Mod] Config not found, cannot save: ", config_path)
 		return
 
 	var file = FileAccess.open(config_path, FileAccess.READ)
@@ -5324,10 +5498,15 @@ func _save_grip_config() -> void:
 	if out:
 		out.store_string(JSON.stringify(data, "\t"))
 		out.close()
-		print("[VR Mod] Grip config saved to: ", config_path)
+		_log("[VR Mod] Grip config saved to: ", config_path)
 		for wname in _weapon_grip_offsets:
 			var o = _weapon_grip_offsets[wname]
-			print("[VR Mod]   ", wname, ": grip x=", snapped(o.x, 0.001), " y=", snapped(o.y, 0.001), " z=", snapped(o.z, 0.001), " rot=", snapped(_weapon_grip_rotations.get(wname, 0.0), 0.1), "° foregrip_configured=", _weapon_fg_p_local.has(wname))
+			_log("[VR Mod]   " + str(wname)
+				+ ": grip x=" + str(snapped(o.x, 0.001))
+				+ " y=" + str(snapped(o.y, 0.001))
+				+ " z=" + str(snapped(o.z, 0.001))
+				+ " rot=" + str(snapped(_weapon_grip_rotations.get(wname, 0.0), 0.1))
+				+ " deg foregrip_configured=" + str(_weapon_fg_p_local.has(wname)))
 
 
 # ── Smooth HUD follow ──────────────────────────────────────────────────────────
@@ -5442,7 +5621,7 @@ func _open_config_screen() -> void:
 			cyl.height = 5.0
 			_laser_mesh.position.z = -cyl.height / 2.0
 		_laser_mesh.visible = true
-	print("[VR Mod] Config screen opened")
+	_log("[VR Mod] Config screen opened")
 
 
 func _close_config_screen() -> void:
@@ -5457,7 +5636,7 @@ func _close_config_screen() -> void:
 		_config_panel_vp = null
 	if _laser_mesh and not _interface_open:
 		_laser_mesh.visible = false
-	print("[VR Mod] Config screen closed")
+	_log("[VR Mod] Config screen closed")
 
 
 func _build_config_panel() -> void:
@@ -6165,20 +6344,20 @@ func _on_cfg_gun_config(idx: int) -> void:
 	if not _gun_config_enabled:
 		_adjust_mode = false
 		_fg_adjust_mode = false
-	print("[VR Mod] Gun config: ", "on" if _gun_config_enabled else "off")
+	_log("[VR Mod] Gun config: ", "on" if _gun_config_enabled else "off")
 
 
 func _on_cfg_laser_always_on(idx: int) -> void:
 	_laser_always_on = (idx == 0)
-	print("[VR Mod] Laser always on: ", _laser_always_on)
+	_log("[VR Mod] Laser always on: ", _laser_always_on)
 
 func _on_cfg_move_direction(idx: int) -> void:
 	_move_direction_mode = "camera" if idx == 0 else "controller"
-	print("[VR Mod] Move direction: ", _move_direction_mode)
+	_log("[VR Mod] Move direction: ", _move_direction_mode)
 
 func _on_cfg_move_direction_hand(idx: int) -> void:
 	_move_direction_hand = "left" if idx == 0 else "right"
-	print("[VR Mod] Move direction hand: ", _move_direction_hand)
+	_log("[VR Mod] Move direction hand: ", _move_direction_hand)
 
 
 func _on_cfg_standing_mode(idx: int) -> void:
@@ -6197,7 +6376,7 @@ func _on_cfg_standing_mode(idx: int) -> void:
 		_standing_height_ref = 0.0
 	# Re-snap origin after a few frames so the new reference space has settled
 	_standing_mode_resnap = 3
-	print("[VR Mod] Tracking mode: ", "standing" if _standing_mode else "sitting")
+	_log("[VR Mod] Tracking mode: ", "standing" if _standing_mode else "sitting")
 
 
 func _on_cfg_holster_holos(idx: int) -> void:
@@ -6472,9 +6651,16 @@ func _apply_hud_spread() -> void:
 
 # ── Config laser & click ────────────────────────────────────────────────────
 
+const CONFIG_LASER_INTERVAL_MSEC = 33  # ~30 Hz; eye-rate (90 Hz) is overkill for a UI cursor
+var _config_laser_next_msec := 0
+
 func _update_config_laser() -> void:
 	if not _config_panel_quad or not _config_panel_vp or not _laser_mesh:
 		return
+	var now_msec := Time.get_ticks_msec()
+	if now_msec < _config_laser_next_msec:
+		return
+	_config_laser_next_msec = now_msec + CONFIG_LASER_INTERVAL_MSEC
 	var controller = _get_controller(_config_dominant_hand)
 	if not controller or not controller.get_is_active():
 		return
@@ -6720,7 +6906,7 @@ func _save_full_config() -> void:
 	if out:
 		out.store_string(JSON.stringify(data, "\t"))
 		out.close()
-		print("[VR Mod] Full config saved to: ", config_path)
+		_log("[VR Mod] Full config saved to: ", config_path)
 
 
 # ── Bullet hole pool trim (Forward Mobile renders max ~8 decals per mesh) ──
@@ -6754,7 +6940,7 @@ func _dump_weapon_tree() -> void:
 	if not f:
 		f = FileAccess.open(log_path, FileAccess.WRITE)
 	if not f:
-		print("[VR Mod] Cannot open debug log for weapon dump")
+		_log("[VR Mod] Cannot open debug log for weapon dump")
 		return
 	f.seek_end(0)
 	f.store_line("")
@@ -6776,7 +6962,7 @@ func _dump_weapon_tree() -> void:
 	_dump_weapon_node(f, weapon_rig, 0, 30)
 	f.store_line("")
 	f.close()
-	print("[VR Mod] Weapon tree dumped to vr_mod_debug.log")
+	_log("[VR Mod] Weapon tree dumped to vr_mod_debug.log")
 
 
 func _dump_weapon_node(f: FileAccess, node: Node, depth: int, max_depth: int) -> void:
@@ -6940,7 +7126,7 @@ func _dump_ray_target() -> void:
 		f.store_line("    Parent chain:")
 		f.store_line(parent_chain)
 	f.close()
-	print("[VR Mod] Ray target dumped to log (F12)")
+	_log("[VR Mod] Ray target dumped to log (F12)")
 
 func _bits_str(val: int) -> String:
 	var s := ""
@@ -6958,7 +7144,7 @@ func _dump_hud_tree() -> void:
 	if not f:
 		f = FileAccess.open(log_path, FileAccess.WRITE)
 	if not f:
-		print("[VR Mod] Cannot open debug log for HUD dump")
+		_log("[VR Mod] Cannot open debug log for HUD dump")
 		return
 	f.seek_end(0)
 	f.store_line("")
@@ -7006,7 +7192,7 @@ func _dump_hud_tree() -> void:
 	_dump_node_recursive(f, hud_node, 0)
 	f.store_line("=== END HUD TREE DUMP ===")
 	f.close()
-	print("[VR Mod] HUD tree dumped to vr_mod_debug.log")
+	_log("[VR Mod] HUD tree dumped to vr_mod_debug.log")
 
 
 func _dump_node_recursive(f: FileAccess, node: Node, depth: int) -> void:
@@ -7037,7 +7223,7 @@ func _dump_nvg_and_environment() -> void:
 	if not f:
 		f = FileAccess.open(log_path, FileAccess.WRITE)
 	if not f:
-		print("[VR Mod] Cannot open debug log for NVG dump")
+		_log("[VR Mod] Cannot open debug log for NVG dump")
 		return
 	f.seek_end(0)
 	f.store_line("")
@@ -7193,7 +7379,7 @@ func _dump_nvg_and_environment() -> void:
 	f.store_line("")
 	f.store_line("=== END NVG & ENVIRONMENT DUMP ===")
 	f.close()
-	print("[VR Mod] NVG & environment dump written to vr_mod_debug.log (F11)")
+	_log("[VR Mod] NVG & environment dump written to vr_mod_debug.log (F11)")
 
 
 func _dump_nvg_node(f: FileAccess, node: Node, depth: int, max_depth: int) -> void:

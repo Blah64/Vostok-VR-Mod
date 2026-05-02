@@ -1,6 +1,5 @@
 #include "command_line_patch.h"
 #include "extension_deployer.h"
-#include "vulkan_hook_installer.h"
 
 #include <filesystem>
 #include <string>
@@ -104,18 +103,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             return FALSE;
         }
 
-        // Vulkan hooks are optional for now; failure is non-fatal.
-        if (!rtv_vr::bootstrap::install_vulkan_hooks()) {
-            spdlog::warn("Vulkan hook installation failed (non-fatal)");
-        }
-
         spdlog::info("Bootstrap initialization complete");
         break;
     }
 
     case DLL_PROCESS_DETACH: {
         spdlog::info("Bootstrap DLL unloading...");
-        rtv_vr::bootstrap::remove_vulkan_hooks();
         rtv_vr::bootstrap::remove_command_line_patch();
         shutdown_minhook();
         spdlog::info("Shutdown complete");

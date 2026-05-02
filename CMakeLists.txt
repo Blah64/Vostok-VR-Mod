@@ -12,16 +12,12 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 # Options
 option(RTV_VR_BUILD_INJECTOR "Build the injector utility" ON)
 option(RTV_VR_BUILD_TESTS "Build unit tests" OFF)
-option(RTV_VR_VULKAN_HOOKS "Enable Vulkan hook layer" ON)
 
 # CMake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
 
 # --- External Dependencies ---
-
-# Vulkan SDK (headers only)
-find_package(Vulkan REQUIRED)
 
 # spdlog
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog/CMakeLists.txt")
@@ -73,10 +69,6 @@ include(GodotCPP)
 # --- Sub-projects ---
 add_subdirectory(src/bootstrap)
 add_subdirectory(src/gdextension)
-
-if(RTV_VR_VULKAN_HOOKS)
-    add_subdirectory(src/vulkan_layer)
-endif()
 
 if(RTV_VR_BUILD_INJECTOR)
     add_subdirectory(src/injector)

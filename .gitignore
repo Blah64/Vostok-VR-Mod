@@ -10,5 +10,6 @@ logs/
 *.vcxproj.user
 CLAUDE.md
 HANDOVER.md
+AGENTS.md
 build.bat
 releases/

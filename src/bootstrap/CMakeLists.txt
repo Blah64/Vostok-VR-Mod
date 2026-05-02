@@ -2,12 +2,10 @@ add_library(rtv_vr_bootstrap SHARED
     dllmain.cpp
     command_line_patch.cpp
     extension_deployer.cpp
-    vulkan_hook_installer.cpp
 )
 
 target_include_directories(rtv_vr_bootstrap PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${Vulkan_INCLUDE_DIRS}
 )
 
 target_link_libraries(rtv_vr_bootstrap PRIVATE

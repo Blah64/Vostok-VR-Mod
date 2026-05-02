@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/^func /{name=$2; start=NR} /^func / && NR>1{if\\(NR-start>100\\){print start\"-\"NR\": \"prev_name\" \\(\"\\(NR-start\\)\" lines\\)\"}} {prev_name=name}' \"C:/Program Files \\(x86\\)/Steam/steamapps/common/Road to Vostok/VR Mod/resources/vr_mod_init.gd\")"
+    ]
+  }
+}
