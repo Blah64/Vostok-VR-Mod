@@ -1,0 +1,20 @@
+; project.godot
+;
+; Minimal Godot project file used ONLY by the headless test harness
+; (tests/run_gdscript_tests.bat). Lets res:// resolve to the VR Mod
+; repo root so tests can preload the production subsystem files.
+;
+; NOT shipped: build.bat does not copy project.godot into the VMZ. The
+; game's own project.godot lives in the Road to Vostok install dir;
+; Metro Mod Loader mounts the VMZ into THAT project at runtime.
+;
+; If you ever add features to this file, keep it harness-only — never
+; introduce an autoload or rendering setting that would diverge from
+; the host game's expectations.
+
+config_version=5
+
+[application]
+
+config/name="Road to Vostok VR Mod tests"
+config/features=PackedStringArray("4.6")

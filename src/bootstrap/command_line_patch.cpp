@@ -1,4 +1,5 @@
 #include "command_line_patch.h"
+#include "command_line_logic.h"
 
 #include <string>
 
@@ -26,12 +27,12 @@ LPWSTR WINAPI hooked_GetCommandLineW() {
     }
 
     std::wstring cmd_line(original);
+    bool was_patched_already = is_patched_command_line(cmd_line);
+    g_modified_command_line = compute_patched_command_line(cmd_line);
 
-    if (cmd_line.find(L"--rendering-method") != std::wstring::npos) {
+    if (was_patched_already) {
         spdlog::info("Command line already contains --rendering-method, no patch needed");
-        g_modified_command_line = std::move(cmd_line);
     } else {
-        g_modified_command_line = cmd_line + L" --rendering-method mobile --rendering-driver vulkan";
         spdlog::info("Appended '--rendering-method mobile --rendering-driver vulkan' to command line");
     }
 
