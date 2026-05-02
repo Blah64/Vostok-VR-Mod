@@ -1,6 +1,7 @@
 #include "command_line_patch.h"
 #include "command_line_logic.h"
 
+#include <mutex>
 #include <string>
 
 #include <Windows.h>
@@ -16,26 +17,38 @@ GetCommandLineW_t g_original_GetCommandLineW = nullptr;
 std::wstring g_modified_command_line;
 bool g_hook_installed = false;
 
+// Guards the lazy initialization of g_modified_command_line. The hook is
+// installed before Godot starts (single-threaded today) but std::call_once
+// makes the first-call branch race-free against any future caller that
+// invokes GetCommandLineW from a worker thread before the engine thread has
+// populated the cache. After initialization, g_modified_command_line is
+// only ever read, so subsequent calls do not need synchronization.
+std::once_flag g_command_line_init_flag;
+
 LPWSTR WINAPI hooked_GetCommandLineW() {
-    if (!g_modified_command_line.empty()) {
-        return g_modified_command_line.data();
+    std::call_once(g_command_line_init_flag, []() {
+        LPWSTR original = g_original_GetCommandLineW
+            ? g_original_GetCommandLineW()
+            : nullptr;
+        if (!original) {
+            return;
+        }
+        std::wstring cmd_line(original);
+        bool was_patched_already = is_patched_command_line(cmd_line);
+        g_modified_command_line = compute_patched_command_line(cmd_line);
+
+        if (was_patched_already) {
+            spdlog::info("Command line already contains --rendering-method, no patch needed");
+        } else {
+            spdlog::info("Appended '--rendering-method mobile --rendering-driver vulkan' to command line");
+        }
+    });
+
+    if (g_modified_command_line.empty()) {
+        // Initialization couldn't read an original command line — fall back
+        // to whatever the OS returns directly.
+        return g_original_GetCommandLineW ? g_original_GetCommandLineW() : nullptr;
     }
-
-    LPWSTR original = g_original_GetCommandLineW();
-    if (!original) {
-        return original;
-    }
-
-    std::wstring cmd_line(original);
-    bool was_patched_already = is_patched_command_line(cmd_line);
-    g_modified_command_line = compute_patched_command_line(cmd_line);
-
-    if (was_patched_already) {
-        spdlog::info("Command line already contains --rendering-method, no patch needed");
-    } else {
-        spdlog::info("Appended '--rendering-method mobile --rendering-driver vulkan' to command line");
-    }
-
     return g_modified_command_line.data();
 }
 

@@ -205,12 +205,26 @@ func install_xr_rig() -> void:
 
 	# Reset debug log - MUST stay here; hand creation above logs to the old file,
 	# those messages are erased. _hand_load_errors buffers them across this reset.
+	#
+	# Buffered hand-load messages are flushed INSIDE the reset block via
+	# store_line() so they land atomically with the truncate. If we instead
+	# flushed via _log() AFTER closing f, an early return between f.close()
+	# and the flush loop would silently drop the messages.
 	var dump_path = autoload._log_path
 	var f = FileAccess.open(dump_path, FileAccess.WRITE)
 	if f:
 		f.store_line("=== VR Mod Debug Log ===")
 		f.store_line("Session start: " + str(Time.get_ticks_msec()) + "ms")
 		f.store_line("")
+		# Flush buffered errors first so they survive even if the
+		# InputMap dump below raises (defensive: dump touches scripted
+		# resources and is the riskiest part of this block).
+		if not autoload._hand_load_errors.is_empty():
+			f.store_line("=== Hand Load Errors ===")
+			for msg in autoload._hand_load_errors:
+				f.store_line(msg)
+			f.store_line("")
+			autoload._hand_load_errors.clear()
 		f.store_line("=== InputMap Bindings for Fire-Related Actions ===")
 		var fire_actions = ["fire", "left_mouse", "aim", "interact", "primary", "secondary"]
 		for action_name in fire_actions:
@@ -232,11 +246,13 @@ func install_xr_rig() -> void:
 				f.store_line(action_name + " (NOT FOUND)")
 		f.close()
 		autoload._log("[VR Mod] Debug log reset: ", dump_path)
-
-	# Flush buffered hand load messages (written before the reset above)
-	for msg in autoload._hand_load_errors:
-		autoload._log(msg)
-	autoload._hand_load_errors.clear()
+	else:
+		# Fallback: f failed to open. Route buffered messages through
+		# _log() so they at least try the original log path before being
+		# lost. This is the best we can do without a writable file.
+		for msg in autoload._hand_load_errors:
+			autoload._log(msg)
+		autoload._hand_load_errors.clear()
 
 	# Create laser pointer mesh (hidden by default)
 	autoload._laser_mesh = MeshInstance3D.new()

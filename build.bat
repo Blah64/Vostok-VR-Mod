@@ -11,6 +11,22 @@ set "BUILD=%ROOT%\build"
 if not exist "%OUT%" mkdir "%OUT%"
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
 
+rem -- Rebuild native artifacts so the VMZ + zip never ship stale DLLs --------
+rem
+rem We don't reconfigure cmake here (that's a one-time setup); we just rerun
+rem the build so any edits to src/bootstrap or src/gdextension are picked up.
+rem Skipped silently if no build/ tree exists yet (first-time GDScript-only
+rem builds are still supported) or if cmake isn't on PATH. The freshness
+rem checks in tests/packaging/test_packaging.ps1 catch any stale DLLs that
+rem slip through.
+rem
+rem Note: cmd.exe's IF parser hates unquoted parens inside string literals
+rem (Visual Studio's path contains "(x86)"). We use call-into-label to keep
+rem the conditional logic outside the affected scope.
+
+call :rebuild_native
+if errorlevel 1 goto :error
+
 rem ── Stage VMZ contents ───────────────────────────────────────────────────────
 echo Staging VMZ...
 
@@ -87,6 +103,42 @@ echo.
 echo ERROR: build failed.
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
 exit /b 1
+
+rem -- Subroutine: rebuild native artifacts if cmake + a build/ tree exist ---
+rem
+rem Returns errorlevel 0 on success or skip; nonzero only if cmake itself
+rem fails (which the caller treats as a build error). Isolated in a label
+rem so the cmd.exe IF parser doesn't choke on the parens in the VS path.
+:rebuild_native
+if not exist "%BUILD%\CMakeCache.txt" goto :rebuild_no_tree
+
+set "CMAKE_EXE="
+where cmake >nul 2>&1
+if not errorlevel 1 set "CMAKE_EXE=cmake"
+if defined CMAKE_EXE goto :rebuild_run
+
+set "VS64=C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+if exist "%VS64%" set "CMAKE_EXE=%VS64%"
+if defined CMAKE_EXE goto :rebuild_run
+
+set "VS86=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+if exist "%VS86%" set "CMAKE_EXE=%VS86%"
+if defined CMAKE_EXE goto :rebuild_run
+
+echo WARNING: cmake not found, skipping native rebuild.
+echo          DLLs in %BUILD% may be stale relative to src/.
+exit /b 0
+
+:rebuild_no_tree
+echo No build/ tree found, skipping native rebuild.
+echo Run: cmake -S . -B build
+echo to enable auto-rebuild on subsequent build.bat runs.
+exit /b 0
+
+:rebuild_run
+echo Rebuilding native artifacts...
+"%CMAKE_EXE%" --build "%BUILD%" --config Release
+exit /b %ERRORLEVEL%
 
 :end
 endlocal
