@@ -473,164 +473,9 @@ func _hands_port_append_load_error(msg: String) -> void:
 
 func _ensure_hud_watch():
 	if not _hud_watch:
-		_hud_watch = HudWatch.new(get_tree(), {
-			# Scene refs
-			"get_owner_node": Callable(self, "_hud_port_get_owner"),
-			"get_main_viewport": Callable(self, "_hud_port_get_main_viewport"),
-			"get_window": Callable(self, "_hud_port_get_window"),
-			"get_camera": Callable(self, "_hud_port_get_camera"),
-			"get_controller": Callable(self, "_get_controller"),
-			"get_hud_viewport": Callable(self, "_hud_port_get_hud_viewport"),
-			"set_hud_viewport": Callable(self, "_hud_port_set_hud_viewport"),
-			"get_hud_mesh": Callable(self, "_hud_port_get_hud_mesh"),
-			"set_hud_mesh": Callable(self, "_hud_port_set_hud_mesh"),
-			"get_watch_mesh": Callable(self, "_hud_port_get_watch_mesh"),
-			"set_watch_mesh": Callable(self, "_hud_port_set_watch_mesh"),
-			"get_laser_mesh": Callable(self, "_hud_port_get_laser_mesh"),
-			"get_ammo_panel_vp": Callable(self, "_hud_port_get_ammo_panel_vp"),
-			"set_ammo_panel_vp": Callable(self, "_hud_port_set_ammo_panel_vp"),
-			"get_ammo_panel_mesh": Callable(self, "_hud_port_get_ammo_panel_mesh"),
-			"set_ammo_panel_mesh": Callable(self, "_hud_port_set_ammo_panel_mesh"),
-			# Per-frame state
-			"get_hud_installed": Callable(self, "_hud_port_get_hud_installed"),
-			"set_hud_installed": Callable(self, "_hud_port_set_hud_installed"),
-			"get_frames_waited": Callable(self, "_hud_port_get_frames_waited"),
-			"get_in_menu_mode": Callable(self, "_hud_port_get_in_menu_mode"),
-			"get_prev_interface_open": Callable(self, "_hud_port_get_prev_interface_open"),
-			"set_prev_interface_open": Callable(self, "_hud_port_set_prev_interface_open"),
-			"get_interface_open": Callable(self, "_hud_port_get_interface_open"),
-			"set_interface_open": Callable(self, "_hud_port_set_interface_open"),
-			"get_esc_menu_active": Callable(self, "_hud_port_get_esc_menu_active"),
-			"set_esc_menu_active": Callable(self, "_hud_port_set_esc_menu_active"),
-			"get_menu_open": Callable(self, "_hud_port_get_menu_open"),
-			"set_menu_open": Callable(self, "_hud_port_set_menu_open"),
-			"get_menu_ctrl_held": Callable(self, "_hud_port_get_menu_ctrl_held"),
-			"set_menu_ctrl_held": Callable(self, "_hud_port_set_menu_ctrl_held"),
-			"get_config_screen_open": Callable(self, "_hud_port_get_config_screen_open"),
-			"get_support_trigger_pending": Callable(self, "_hud_port_get_support_trigger_pending"),
-			"set_support_trigger_pending": Callable(self, "_hud_port_set_support_trigger_pending"),
-			"get_support_trigger_press_time": Callable(self, "_hud_port_get_support_trigger_press_time"),
-			"get_ammo_check_timer": Callable(self, "_hud_port_get_ammo_check_timer"),
-			"set_ammo_check_timer": Callable(self, "_hud_port_set_ammo_check_timer"),
-			"get_ammo_read_delay": Callable(self, "_hud_port_get_ammo_read_delay"),
-			"set_ammo_read_delay": Callable(self, "_hud_port_set_ammo_read_delay"),
-			"get_laser_diag_logged": Callable(self, "_hud_port_get_laser_diag_logged"),
-			"set_laser_diag_logged": Callable(self, "_hud_port_set_laser_diag_logged"),
-			"get_laser_locked_pos": Callable(self, "_hud_port_get_laser_locked_pos"),
-			"set_laser_locked_pos": Callable(self, "_hud_port_set_laser_locked_pos"),
-			"set_laser_screen_pos": Callable(self, "_hud_port_set_laser_screen_pos"),
-			"get_hud_yaw": Callable(self, "_hud_port_get_hud_yaw"),
-			"set_hud_yaw": Callable(self, "_hud_port_set_hud_yaw"),
-			# Tunables
-			"get_hud_smooth_follow": Callable(self, "_hud_port_get_hud_smooth_follow"),
-			"get_hud_smooth_speed": Callable(self, "_hud_port_get_hud_smooth_speed"),
-			"get_hud_lr_offset": Callable(self, "_hud_port_get_hud_lr_offset"),
-			"get_hud_height_offset": Callable(self, "_hud_port_get_hud_height_offset"),
-			"get_hud_distance": Callable(self, "_hud_port_get_hud_distance"),
-			"get_menu_distance": Callable(self, "_hud_port_get_menu_distance"),
-			"get_menu_lr_offset": Callable(self, "_hud_port_get_menu_lr_offset"),
-			"get_menu_width": Callable(self, "_hud_port_get_menu_width"),
-			"get_menu_laser_uv_x": Callable(self, "_hud_port_get_menu_laser_uv_x"),
-			"get_menu_laser_uv_y": Callable(self, "_hud_port_get_menu_laser_uv_y"),
-			"get_hud_width": Callable(self, "_hud_port_get_hud_width"),
-			"get_hud_spread": Callable(self, "_hud_port_get_hud_spread"),
-			"set_hud_spread_active": Callable(self, "_hud_port_set_hud_spread_active"),
-			"get_watch_spread": Callable(self, "_hud_port_get_watch_spread"),
-			"get_watch_size": Callable(self, "_hud_port_get_watch_size"),
-			"get_watch_offset": Callable(self, "_hud_port_get_watch_offset"),
-			"get_watch_glance_enabled": Callable(self, "_hud_port_get_watch_glance_enabled"),
-			"get_watch_glance_angle": Callable(self, "_hud_port_get_watch_glance_angle"),
-			"get_watch_fade_speed": Callable(self, "_hud_port_get_watch_fade_speed"),
-			"get_dominant_hand": Callable(self, "_hud_port_get_dominant_hand"),
-			"get_support_hand": Callable(self, "_get_support_hand"),
-			"get_weapon_hand": Callable(self, "_hud_port_get_weapon_hand"),
-			# Constants
-			"get_hud_setup_delay": Callable(self, "_hud_port_get_setup_delay"),
-			"get_watch_crop_shader": Callable(self, "_hud_port_get_watch_crop_shader"),
-			# Side effects
-			"inject_key": Callable(self, "_inject_key"),
-			"apply_hud_spread": Callable(self, "_apply_hud_spread"),
-			"setup_nvg_overlay": Callable(self, "_setup_nvg_overlay"),
-			"watch_rot_basis": Callable(self, "_watch_rot_basis"),
-			"esc_clear_hover": Callable(self, "_esc_clear_hover"),
-			"update_esc_hover": Callable(self, "_update_esc_hover"),
-			"log": Callable(self, "_log_str"),
-		})
+		_hud_watch = HudWatch.new(self)
 	return _hud_watch
 
-
-# Ports for hud_watch.gd
-func _hud_port_get_owner() -> Node: return self
-func _hud_port_get_main_viewport() -> Viewport: return get_viewport()
-func _hud_port_get_window() -> Window: return get_window()
-func _hud_port_get_camera() -> XRCamera3D: return xr_camera
-
-func _hud_port_get_hud_viewport() -> SubViewport: return hud_viewport
-func _hud_port_set_hud_viewport(vp: SubViewport) -> void: hud_viewport = vp
-func _hud_port_get_hud_mesh() -> MeshInstance3D: return hud_mesh
-func _hud_port_set_hud_mesh(m: MeshInstance3D) -> void: hud_mesh = m
-func _hud_port_get_watch_mesh() -> MeshInstance3D: return _watch_mesh
-func _hud_port_set_watch_mesh(m: MeshInstance3D) -> void: _watch_mesh = m
-func _hud_port_get_laser_mesh() -> MeshInstance3D: return _laser_mesh
-func _hud_port_get_ammo_panel_vp() -> SubViewport: return _ammo_panel_vp
-func _hud_port_set_ammo_panel_vp(vp: SubViewport) -> void: _ammo_panel_vp = vp
-func _hud_port_get_ammo_panel_mesh() -> MeshInstance3D: return _ammo_panel_mesh
-func _hud_port_set_ammo_panel_mesh(m: MeshInstance3D) -> void: _ammo_panel_mesh = m
-
-func _hud_port_get_hud_installed() -> bool: return _hud_installed
-func _hud_port_set_hud_installed(v: bool) -> void: _hud_installed = v
-func _hud_port_get_frames_waited() -> int: return _frames_waited
-func _hud_port_get_in_menu_mode() -> bool: return _in_menu_mode
-func _hud_port_get_prev_interface_open() -> bool: return _prev_interface_open
-func _hud_port_set_prev_interface_open(v: bool) -> void: _prev_interface_open = v
-func _hud_port_get_interface_open() -> bool: return _interface_open
-func _hud_port_set_interface_open(v: bool) -> void: _interface_open = v
-func _hud_port_get_esc_menu_active() -> bool: return _esc_menu_active
-func _hud_port_set_esc_menu_active(v: bool) -> void: _esc_menu_active = v
-func _hud_port_get_menu_open() -> bool: return _menu_open
-func _hud_port_set_menu_open(v: bool) -> void: _menu_open = v
-func _hud_port_get_menu_ctrl_held() -> bool: return _menu_ctrl_held
-func _hud_port_set_menu_ctrl_held(v: bool) -> void: _menu_ctrl_held = v
-func _hud_port_get_config_screen_open() -> bool: return _config_screen_open
-func _hud_port_get_support_trigger_pending() -> bool: return _support_trigger_pending
-func _hud_port_set_support_trigger_pending(v: bool) -> void: _support_trigger_pending = v
-func _hud_port_get_support_trigger_press_time() -> float: return _support_trigger_press_time
-func _hud_port_get_ammo_check_timer() -> float: return _ammo_check_timer
-func _hud_port_set_ammo_check_timer(v: float) -> void: _ammo_check_timer = v
-func _hud_port_get_ammo_read_delay() -> int: return _ammo_read_delay
-func _hud_port_set_ammo_read_delay(v: int) -> void: _ammo_read_delay = v
-func _hud_port_get_laser_diag_logged() -> bool: return _laser_diag_logged
-func _hud_port_set_laser_diag_logged(v: bool) -> void: _laser_diag_logged = v
-func _hud_port_get_laser_locked_pos() -> Vector2: return _laser_locked_pos
-func _hud_port_set_laser_locked_pos(v: Vector2) -> void: _laser_locked_pos = v
-func _hud_port_set_laser_screen_pos(v: Vector2) -> void: _laser_screen_pos = v
-func _hud_port_get_hud_yaw() -> float: return _hud_yaw
-func _hud_port_set_hud_yaw(v: float) -> void: _hud_yaw = v
-
-func _hud_port_get_hud_smooth_follow() -> bool: return _hud_smooth_follow
-func _hud_port_get_hud_smooth_speed() -> float: return _hud_smooth_speed
-func _hud_port_get_hud_lr_offset() -> float: return _hud_lr_offset
-func _hud_port_get_hud_height_offset() -> float: return _hud_height_offset
-func _hud_port_get_hud_distance() -> float: return _hud_distance
-func _hud_port_get_menu_distance() -> float: return _menu_distance
-func _hud_port_get_menu_lr_offset() -> float: return _menu_lr_offset
-func _hud_port_get_menu_width() -> float: return _menu_width
-func _hud_port_get_menu_laser_uv_x() -> float: return _menu_laser_uv_x
-func _hud_port_get_menu_laser_uv_y() -> float: return _menu_laser_uv_y
-func _hud_port_get_hud_width() -> float: return _hud_width
-func _hud_port_get_hud_spread() -> float: return _hud_spread
-func _hud_port_set_hud_spread_active(v: float) -> void: _hud_spread_active = v
-func _hud_port_get_watch_spread() -> float: return _watch_spread
-func _hud_port_get_watch_size() -> float: return _watch_size
-func _hud_port_get_watch_offset() -> Vector3: return _watch_offset
-func _hud_port_get_watch_glance_enabled() -> bool: return _watch_glance_enabled
-func _hud_port_get_watch_glance_angle() -> float: return _watch_glance_angle
-func _hud_port_get_watch_fade_speed() -> float: return _watch_fade_speed
-func _hud_port_get_dominant_hand() -> String: return _config_dominant_hand
-func _hud_port_get_weapon_hand() -> String: return _weapon_hand
-
-func _hud_port_get_setup_delay() -> int: return HUD_SETUP_DELAY
-func _hud_port_get_watch_crop_shader() -> String: return WATCH_CROP_SHADER
 
 func _ensure_scope_pip():
 	if not _scope_pip:
@@ -883,443 +728,15 @@ func _grab_port_set_grab_hand(hand: String) -> void:
 
 func _ensure_weapon_sync():
 	if not _weapon_sync:
-		_weapon_sync = WeaponSync.new(get_tree(), {
-			# Scene refs / controllers
-			"get_game_camera": Callable(self, "_ws_port_get_game_camera"),
-			"get_camera": Callable(self, "_ws_port_get_camera"),
-			"get_controller": Callable(self, "_get_controller"),
-			"get_cached_mgr": Callable(self, "_ws_port_get_cached_mgr"),
-			"set_cached_mgr": Callable(self, "_ws_port_set_cached_mgr"),
-			"set_cached_weapon_rig": Callable(self, "_ws_port_set_cached_weapon_rig"),
-			"get_hand_wrapper": Callable(self, "_hands_port_get_wrapper"),
-			# State (read+write)
-			"get_holster_state": Callable(self, "_ws_port_get_holster_state"),
-			"set_holster_state": Callable(self, "_ws_port_set_holster_state"),
-			"get_state_unarmed": Callable(self, "_ws_port_get_state_unarmed"),
-			"get_state_drawn": Callable(self, "_ws_port_get_state_drawn"),
-			"get_state_sling": Callable(self, "_ws_port_get_state_sling"),
-			"get_weapon_hand": Callable(self, "_ws_port_get_weapon_hand"),
-			"get_weapon_hand_resolved": Callable(self, "_get_weapon_hand"),
-			"set_weapon_hand": Callable(self, "_ws_port_set_weapon_hand"),
-			"get_support_hand": Callable(self, "_get_support_hand"),
-			"get_dominant_hand": Callable(self, "_ws_port_get_dominant_hand"),
-			"get_weapon_slot": Callable(self, "_ws_port_get_weapon_slot"),
-			"set_weapon_slot": Callable(self, "_ws_port_set_weapon_slot"),
-			"get_weapon_loaded": Callable(self, "_ws_port_get_weapon_loaded"),
-			"set_weapon_loaded": Callable(self, "_ws_port_set_weapon_loaded"),
-			"set_weapon_is_long": Callable(self, "_ws_port_set_weapon_is_long"),
-			"get_weapon_subtype": Callable(self, "_ws_port_get_weapon_subtype"),
-			"set_weapon_subtype": Callable(self, "_ws_port_set_weapon_subtype"),
-			"set_weapon_uses_r_reload": Callable(self, "_ws_port_set_weapon_uses_r_reload"),
-			"get_action_open": Callable(self, "_ws_port_get_action_open"),
-			"set_action_open": Callable(self, "_ws_port_set_action_open"),
-			"set_pump_gesture_active": Callable(self, "_ws_port_set_pump_gesture_active"),
-			"get_pump_gesture_active": Callable(self, "_ws_port_get_pump_gesture_active"),
-			"set_pump_gesture_timer": Callable(self, "_ws_port_set_pump_gesture_timer"),
-			"get_pump_gesture_timer": Callable(self, "_ws_port_get_pump_gesture_timer"),
-			"get_pump_prev_pos": Callable(self, "_ws_port_get_pump_prev_pos"),
-			"set_pump_prev_pos": Callable(self, "_ws_port_set_pump_prev_pos"),
-			"get_pump_cooldown": Callable(self, "_ws_port_get_pump_cooldown"),
-			"set_pump_cooldown": Callable(self, "_ws_port_set_pump_cooldown"),
-			"get_current_weapon_name": Callable(self, "_ws_port_get_current_weapon_name"),
-			"set_current_weapon_name": Callable(self, "_ws_port_set_current_weapon_name"),
-			"get_recoil_rest_xform": Callable(self, "_ws_port_get_recoil_rest_xform"),
-			"set_recoil_rest_xform": Callable(self, "_ws_port_set_recoil_rest_xform"),
-			"get_recoil_rest_inv": Callable(self, "_ws_port_get_recoil_rest_inv"),
-			"set_recoil_rest_inv": Callable(self, "_ws_port_set_recoil_rest_inv"),
-			"get_walk_sway_captured": Callable(self, "_ws_port_get_walk_sway_captured"),
-			"set_walk_sway_captured": Callable(self, "_ws_port_set_walk_sway_captured"),
-			"get_walk_sway_logged": Callable(self, "_ws_port_get_walk_sway_logged"),
-			"set_walk_sway_logged": Callable(self, "_ws_port_set_walk_sway_logged"),
-			"get_walk_sway_rest": Callable(self, "_ws_port_get_walk_sway_rest"),
-			"get_walk_sway_nodes": Callable(self, "_ws_port_get_walk_sway_nodes"),
-			"get_walk_sway_capture_delay": Callable(self, "_ws_port_get_walk_sway_capture_delay"),
-			"set_walk_sway_capture_delay": Callable(self, "_ws_port_set_walk_sway_capture_delay"),
-			"get_walk_sway_capture_delay_load": Callable(self, "_ws_port_get_walk_sway_capture_delay_load"),
-			"get_disable_walk_sway": Callable(self, "_ws_port_get_disable_walk_sway"),
-			"get_rest_capture_pending": Callable(self, "_ws_port_get_rest_capture_pending"),
-			"set_rest_capture_pending": Callable(self, "_ws_port_set_rest_capture_pending"),
-			"get_rest_capture_stability_count": Callable(self, "_ws_port_get_rest_capture_stability_count"),
-			"set_rest_capture_stability_count": Callable(self, "_ws_port_set_rest_capture_stability_count"),
-			"get_rest_capture_hard_deadline": Callable(self, "_ws_port_get_rest_capture_hard_deadline"),
-			"set_rest_capture_hard_deadline": Callable(self, "_ws_port_set_rest_capture_hard_deadline"),
-			"get_rest_capture_prev_sample": Callable(self, "_ws_port_get_rest_capture_prev_sample"),
-			"set_rest_capture_prev_sample": Callable(self, "_ws_port_set_rest_capture_prev_sample"),
-			"get_recoil_chain_names": Callable(self, "_ws_port_get_recoil_chain_names"),
-			"get_recoil_fire_rise_edge": Callable(self, "_ws_port_get_recoil_fire_rise_edge"),
-			"get_fire_haptic_cooldown": Callable(self, "_ws_port_get_fire_haptic_cooldown"),
-			"set_fire_haptic_cooldown": Callable(self, "_ws_port_set_fire_haptic_cooldown"),
-			"get_prev_recoil_mag": Callable(self, "_ws_port_get_prev_recoil_mag"),
-			"set_prev_recoil_mag": Callable(self, "_ws_port_set_prev_recoil_mag"),
-			"get_support_grip_held": Callable(self, "_ws_port_get_support_grip_held"),
-			"set_support_grip_held": Callable(self, "_ws_port_set_support_grip_held"),
-			"get_two_hand_smooth_enabled": Callable(self, "_ws_port_get_two_hand_smooth_enabled"),
-			"get_two_hand_smooth_speed": Callable(self, "_ws_port_get_two_hand_smooth_speed"),
-			"get_two_hand_min_dist": Callable(self, "_ws_port_get_two_hand_min_dist"),
-			"get_interface_open": Callable(self, "_ws_port_get_interface_open"),
-			"get_fg_adjust_mode": Callable(self, "_ws_port_get_fg_adjust_mode"),
-			"set_fg_adjust_mode": Callable(self, "_ws_port_set_fg_adjust_mode"),
-			"get_fg_adjust_frozen_xform": Callable(self, "_ws_port_get_fg_adjust_frozen_xform"),
-			"set_adjust_mode": Callable(self, "_ws_port_set_adjust_mode"),
-			"get_rail_mode": Callable(self, "_ws_port_get_rail_mode"),
-			"get_rail_active": Callable(self, "_ws_port_get_rail_active"),
-			"get_rail_x_pending": Callable(self, "_ws_port_get_rail_x_pending"),
-			"set_rail_x_pending": Callable(self, "_ws_port_set_rail_x_pending"),
-			"get_rail_x_press_time": Callable(self, "_ws_port_get_rail_x_press_time"),
-			"get_rail_long_press_sec": Callable(self, "_ws_port_get_rail_long_press_sec"),
-			"get_rail_fwd": Callable(self, "_ws_port_get_rail_fwd"),
-			"get_rail_grab_origin": Callable(self, "_ws_port_get_rail_grab_origin"),
-			"set_rail_grab_origin": Callable(self, "_ws_port_set_rail_grab_origin"),
-			"get_rail_scroll_accum": Callable(self, "_ws_port_get_rail_scroll_accum"),
-			"set_rail_scroll_accum": Callable(self, "_ws_port_set_rail_scroll_accum"),
-			"get_rail_scroll_cooldown": Callable(self, "_ws_port_get_rail_scroll_cooldown"),
-			"set_rail_scroll_cooldown": Callable(self, "_ws_port_set_rail_scroll_cooldown"),
-			"get_scroll_cooldown": Callable(self, "_ws_port_get_scroll_cooldown"),
-			"set_scroll_cooldown": Callable(self, "_ws_port_set_scroll_cooldown"),
-			"get_pending_holster_key": Callable(self, "_holster_port_get_pending_key"),
-			"set_pending_holster_key": Callable(self, "_holster_port_set_pending_key"),
-			"set_weapon_raise_timer": Callable(self, "_holster_port_set_weapon_raise_timer"),
-			"get_weapon_raise_timer": Callable(self, "_ws_port_get_weapon_raise_timer"),
-			# Per-weapon dictionaries
-			"get_weapon_grip_offsets": Callable(self, "_ws_port_get_weapon_grip_offsets"),
-			"get_weapon_grip_rotations": Callable(self, "_ws_port_get_weapon_grip_rotations"),
-			"get_weapon_fg_p_local": Callable(self, "_ws_port_get_weapon_fg_p_local"),
-			"get_weapon_fg_r_local": Callable(self, "_ws_port_get_weapon_fg_r_local"),
-			"get_slot_grip_defaults": Callable(self, "_ws_port_get_slot_grip_defaults"),
-			"get_slot_rot_defaults": Callable(self, "_ws_port_get_slot_rot_defaults"),
-			# Transition state
-			"get_transition_slot": Callable(self, "_ws_port_get_transition_slot"),
-			"set_transition_slot": Callable(self, "_ws_port_set_transition_slot"),
-			"get_transition_hand": Callable(self, "_ws_port_get_transition_hand"),
-			"set_transition_hand": Callable(self, "_ws_port_set_transition_hand"),
-			"get_resume_slot": Callable(self, "_ws_port_get_resume_slot"),
-			"set_resume_slot": Callable(self, "_ws_port_set_resume_slot"),
-			"get_resume_hand": Callable(self, "_ws_port_get_resume_hand"),
-			"set_resume_hand": Callable(self, "_ws_port_set_resume_hand"),
-			# Hand offsets / rotations
-			"get_hand_offset_left": Callable(self, "_hands_port_get_offset_left"),
-			"get_hand_offset_right": Callable(self, "_hands_port_get_offset_right"),
-			"get_hand_rot_left": Callable(self, "_hands_port_get_rot_left"),
-			"get_hand_rot_right": Callable(self, "_hands_port_get_rot_right"),
-			# Sling
-			"get_sling_offset": Callable(self, "_ws_port_get_sling_offset"),
-			"get_sling_rot_offset": Callable(self, "_ws_port_get_sling_rot_offset"),
-			# Side effects
-			"inject_action": Callable(self, "_inject_action"),
-			"inject_scroll": Callable(self, "_inject_scroll"),
-			"clear_grenade_state": Callable(self, "_clear_grenade_state"),
-			"cleanup_scope": Callable(self, "_cleanup_scope"),
-			"fix_reticle_parallax": Callable(self, "_fix_reticle_parallax"),
-			"setup_scope_pip": Callable(self, "_setup_scope_pip"),
-			"update_scope_camera": Callable(self, "_update_scope_camera"),
-			"enter_rail_mode": Callable(self, "_ws_port_enter_rail_mode"),
-			"exit_rail_mode": Callable(self, "_ws_port_exit_rail_mode"),
-			"find_node_by_class": Callable(self, "_find_node_by_class"),
-			# Misc
-			"get_log_path": Callable(self, "_ws_port_get_log_path"),
-			"get_verbose_log": Callable(self, "_ws_port_get_verbose_log"),
-			"get_process_delta": Callable(self, "_ws_port_get_process_delta"),
-			"log": Callable(self, "_log_str"),
-		})
+		_weapon_sync = WeaponSync.new(self)
 	return _weapon_sync
 
 
-# Ports for weapon_sync.gd
-func _ws_port_get_game_camera() -> Camera3D: return game_camera
-func _ws_port_get_camera() -> XRCamera3D: return xr_camera
-func _ws_port_get_cached_mgr() -> Node: return _cached_mgr
-func _ws_port_set_cached_mgr(n: Node) -> void: _cached_mgr = n
-func _ws_port_set_cached_weapon_rig(n: Node3D) -> void: _cached_weapon_rig = n
-
-func _ws_port_get_holster_state() -> int: return _holster_state
-func _ws_port_set_holster_state(v: int) -> void: _holster_state = v
-func _ws_port_get_state_unarmed() -> int: return HolsterState.UNARMED
-func _ws_port_get_state_drawn() -> int: return HolsterState.DRAWN
-func _ws_port_get_state_sling() -> int: return HolsterState.SLING
-func _ws_port_get_weapon_hand() -> String: return _weapon_hand
-func _ws_port_set_weapon_hand(v: String) -> void: _weapon_hand = v
-func _ws_port_get_dominant_hand() -> String: return _config_dominant_hand
-func _ws_port_get_weapon_slot() -> int: return _weapon_slot
-func _ws_port_set_weapon_slot(v: int) -> void: _weapon_slot = v
-func _ws_port_get_weapon_loaded() -> bool: return _weapon_loaded
-func _ws_port_set_weapon_loaded(v: bool) -> void: _weapon_loaded = v
-func _ws_port_set_weapon_is_long(v: bool) -> void: _weapon_is_long = v
-func _ws_port_get_weapon_subtype() -> String: return _weapon_subtype
-func _ws_port_set_weapon_subtype(v: String) -> void: _weapon_subtype = v
-func _ws_port_set_weapon_uses_r_reload(v: bool) -> void: _weapon_uses_r_reload = v
-func _ws_port_get_action_open() -> bool: return _action_open
-func _ws_port_set_action_open(v: bool) -> void: _action_open = v
-func _ws_port_set_pump_gesture_active(v: bool) -> void: _pump_gesture_active = v
-func _ws_port_get_pump_gesture_active() -> bool: return _pump_gesture_active
-func _ws_port_set_pump_gesture_timer(v: float) -> void: _pump_gesture_timer = v
-func _ws_port_get_pump_gesture_timer() -> float: return _pump_gesture_timer
-func _ws_port_get_pump_prev_pos() -> Vector3: return _pump_prev_pos
-func _ws_port_set_pump_prev_pos(v: Vector3) -> void: _pump_prev_pos = v
-func _ws_port_get_pump_cooldown() -> float: return _pump_cooldown
-func _ws_port_set_pump_cooldown(v: float) -> void: _pump_cooldown = v
-func _ws_port_get_current_weapon_name() -> String: return _current_weapon_name
-func _ws_port_set_current_weapon_name(v: String) -> void: _current_weapon_name = v
-func _ws_port_get_recoil_rest_xform() -> Transform3D: return _recoil_rest_xform
-func _ws_port_set_recoil_rest_xform(v: Transform3D) -> void: _recoil_rest_xform = v
-func _ws_port_get_recoil_rest_inv() -> Transform3D: return _recoil_rest_inv
-func _ws_port_set_recoil_rest_inv(v: Transform3D) -> void: _recoil_rest_inv = v
-func _ws_port_get_walk_sway_captured() -> bool: return _walk_sway_captured
-func _ws_port_set_walk_sway_captured(v: bool) -> void: _walk_sway_captured = v
-func _ws_port_get_walk_sway_logged() -> bool: return _walk_sway_logged
-func _ws_port_set_walk_sway_logged(v: bool) -> void: _walk_sway_logged = v
-func _ws_port_get_walk_sway_rest() -> Dictionary: return _walk_sway_rest
-func _ws_port_get_walk_sway_nodes() -> Array: return _WALK_SWAY_NODES
-func _ws_port_get_walk_sway_capture_delay() -> float: return _walk_sway_capture_delay
-func _ws_port_set_walk_sway_capture_delay(v: float) -> void: _walk_sway_capture_delay = v
-func _ws_port_get_walk_sway_capture_delay_load() -> float: return _WALK_SWAY_CAPTURE_DELAY_LOAD
-func _ws_port_get_disable_walk_sway() -> bool: return _disable_walk_sway
-func _ws_port_get_rest_capture_pending() -> bool: return _rest_capture_pending
-func _ws_port_set_rest_capture_pending(v: bool) -> void: _rest_capture_pending = v
-func _ws_port_get_rest_capture_stability_count() -> int: return _rest_capture_stability_count
-func _ws_port_set_rest_capture_stability_count(v: int) -> void: _rest_capture_stability_count = v
-func _ws_port_get_rest_capture_hard_deadline() -> float: return _rest_capture_hard_deadline
-func _ws_port_set_rest_capture_hard_deadline(v: float) -> void: _rest_capture_hard_deadline = v
-func _ws_port_get_rest_capture_prev_sample() -> Transform3D: return _rest_capture_prev_sample
-func _ws_port_set_rest_capture_prev_sample(v: Transform3D) -> void: _rest_capture_prev_sample = v
-func _ws_port_get_recoil_chain_names() -> Array: return _RECOIL_CHAIN_NAMES
-func _ws_port_get_recoil_fire_rise_edge() -> float: return RECOIL_FIRE_RISE_EDGE
-func _ws_port_get_fire_haptic_cooldown() -> float: return _fire_haptic_cooldown
-func _ws_port_set_fire_haptic_cooldown(v: float) -> void: _fire_haptic_cooldown = v
-func _ws_port_get_prev_recoil_mag() -> float: return _prev_recoil_mag
-func _ws_port_set_prev_recoil_mag(v: float) -> void: _prev_recoil_mag = v
-func _ws_port_get_support_grip_held() -> bool: return _support_grip_held
-func _ws_port_set_support_grip_held(v: bool) -> void: _support_grip_held = v
-func _ws_port_get_two_hand_smooth_enabled() -> bool: return _two_hand_smooth_enabled
-func _ws_port_get_two_hand_smooth_speed() -> float: return _two_hand_smooth_speed
-func _ws_port_get_two_hand_min_dist() -> float: return TWO_HAND_MIN_DIST_M
-func _ws_port_get_interface_open() -> bool: return _interface_open
-func _ws_port_get_fg_adjust_mode() -> bool: return _fg_adjust_mode
-func _ws_port_set_fg_adjust_mode(v: bool) -> void: _fg_adjust_mode = v
-func _ws_port_get_fg_adjust_frozen_xform() -> Transform3D: return _fg_adjust_frozen_xform
-func _ws_port_set_adjust_mode(v: bool) -> void: _adjust_mode = v
-func _ws_port_get_rail_mode() -> bool: return _rail_mode
-func _ws_port_get_rail_active() -> bool: return _rail_active
-func _ws_port_get_rail_x_pending() -> bool: return _rail_x_pending
-func _ws_port_set_rail_x_pending(v: bool) -> void: _rail_x_pending = v
-func _ws_port_get_rail_x_press_time() -> float: return _rail_x_press_time
-func _ws_port_get_rail_long_press_sec() -> float: return RAIL_MODE_LONG_PRESS_SEC
-func _ws_port_get_rail_fwd() -> Vector3: return _rail_fwd
-func _ws_port_get_rail_grab_origin() -> float: return _rail_grab_origin
-func _ws_port_set_rail_grab_origin(v: float) -> void: _rail_grab_origin = v
-func _ws_port_get_rail_scroll_accum() -> float: return _rail_scroll_accum
-func _ws_port_set_rail_scroll_accum(v: float) -> void: _rail_scroll_accum = v
-func _ws_port_get_rail_scroll_cooldown() -> float: return _rail_scroll_cooldown
-func _ws_port_set_rail_scroll_cooldown(v: float) -> void: _rail_scroll_cooldown = v
-func _ws_port_get_scroll_cooldown() -> float: return _scroll_cooldown
-func _ws_port_set_scroll_cooldown(v: float) -> void: _scroll_cooldown = v
-func _ws_port_get_weapon_raise_timer() -> float: return _weapon_raise_timer
-
-func _ws_port_get_weapon_grip_offsets() -> Dictionary: return _weapon_grip_offsets
-func _ws_port_get_weapon_grip_rotations() -> Dictionary: return _weapon_grip_rotations
-func _ws_port_get_weapon_fg_p_local() -> Dictionary: return _weapon_fg_p_local
-func _ws_port_get_weapon_fg_r_local() -> Dictionary: return _weapon_fg_r_local
-func _ws_port_get_slot_grip_defaults() -> Dictionary: return _slot_grip_defaults
-func _ws_port_get_slot_rot_defaults() -> Dictionary: return _slot_rot_defaults
-
-func _ws_port_get_transition_slot() -> int: return _transition_slot
-func _ws_port_set_transition_slot(v: int) -> void: _transition_slot = v
-func _ws_port_get_transition_hand() -> String: return _transition_hand
-func _ws_port_set_transition_hand(v: String) -> void: _transition_hand = v
-func _ws_port_get_resume_slot() -> int: return _resume_slot
-func _ws_port_set_resume_slot(v: int) -> void: _resume_slot = v
-func _ws_port_get_resume_hand() -> String: return _resume_hand
-func _ws_port_set_resume_hand(v: String) -> void: _resume_hand = v
-
-func _ws_port_get_sling_offset() -> Vector3: return _sling_offset
-func _ws_port_get_sling_rot_offset() -> Vector3: return _sling_rot_offset
-
-func _ws_port_enter_rail_mode() -> void:
-	_enter_rail_mode()
-func _ws_port_exit_rail_mode() -> void:
-	_exit_rail_mode()
-func _ws_port_get_log_path() -> String: return _log_path
-func _ws_port_get_verbose_log() -> bool: return _verbose_log
-func _ws_port_get_process_delta() -> float: return get_process_delta_time()
-
 func _ensure_xr_rig():
 	if not _xr_rig:
-		_xr_rig = XrRig.new(get_tree(), {
-			# Scene refs
-			"get_origin": Callable(self, "_xrr_port_get_origin"),
-			"get_camera": Callable(self, "_xrr_port_get_camera"),
-			"get_game_camera": Callable(self, "_xrr_port_get_game_camera"),
-			"set_game_camera": Callable(self, "_xrr_port_set_game_camera"),
-			"get_xr_interface": Callable(self, "_xrr_port_get_xr_interface"),
-			"get_main_viewport": Callable(self, "_xrr_port_get_main_viewport"),
-			"get_owner_node": Callable(self, "_xrr_port_get_owner"),
-			"set_left_controller": Callable(self, "_xrr_port_set_left_controller"),
-			"set_right_controller": Callable(self, "_xrr_port_set_right_controller"),
-			"get_controller": Callable(self, "_get_controller"),
-			"set_grab_ray_left": Callable(self, "_xrr_port_set_grab_ray_left"),
-			"set_grab_ray_right": Callable(self, "_xrr_port_set_grab_ray_right"),
-			"set_laser_mesh": Callable(self, "_xrr_port_set_laser_mesh"),
-			"set_hover_label": Callable(self, "_xrr_port_set_hover_label"),
-			"get_config_reminder_label": Callable(self, "_xrr_port_get_config_reminder_label"),
-			# Lifecycle / state
-			"get_frames_waited": Callable(self, "_xrr_port_get_frames_waited"),
-			"get_camera_lost_frames": Callable(self, "_xrr_port_get_camera_lost_frames"),
-			"set_camera_lost_frames": Callable(self, "_xrr_port_set_camera_lost_frames"),
-			"get_in_menu_mode": Callable(self, "_xrr_port_get_in_menu_mode"),
-			"set_in_menu_mode": Callable(self, "_xrr_port_set_in_menu_mode"),
-			"get_weapons_reparented": Callable(self, "_xrr_port_get_weapons_reparented"),
-			"set_weapons_reparented": Callable(self, "_xrr_port_set_weapons_reparented"),
-			"get_standing_mode": Callable(self, "_xrr_port_get_standing_mode"),
-			"get_standing_mode_resnap": Callable(self, "_xrr_port_get_standing_mode_resnap"),
-			"set_standing_mode_resnap": Callable(self, "_xrr_port_set_standing_mode_resnap"),
-			"get_standing_height_ref": Callable(self, "_xrr_port_get_standing_height_ref"),
-			"set_standing_height_ref": Callable(self, "_xrr_port_set_standing_height_ref"),
-			"get_physical_crouch_active": Callable(self, "_xrr_port_get_physical_crouch_active"),
-			"set_physical_crouch_active": Callable(self, "_xrr_port_set_physical_crouch_active"),
-			"get_physical_crouch_resnap": Callable(self, "_xrr_port_get_physical_crouch_resnap"),
-			"set_physical_crouch_resnap": Callable(self, "_xrr_port_set_physical_crouch_resnap"),
-			"get_physical_crouch_threshold": Callable(self, "_xrr_port_get_physical_crouch_threshold"),
-			"get_auto_recenter_cooldown": Callable(self, "_xrr_port_get_auto_recenter_cooldown"),
-			"set_auto_recenter_cooldown": Callable(self, "_xrr_port_set_auto_recenter_cooldown"),
-			"get_auto_recenter_enabled": Callable(self, "_xrr_port_get_auto_recenter_enabled"),
-			"get_interface_open": Callable(self, "_xrr_port_get_interface_open"),
-			"get_config_screen_open": Callable(self, "_xrr_port_get_config_screen_open"),
-			"get_decor_mode": Callable(self, "_xrr_port_get_decor_mode"),
-			"get_holster_state": Callable(self, "_xrr_port_get_holster_state"),
-			"get_state_drawn": Callable(self, "_xrr_port_get_state_drawn"),
-			"get_state_lowered": Callable(self, "_xrr_port_get_state_lowered"),
-			"get_state_sling": Callable(self, "_xrr_port_get_state_sling"),
-			"get_dominant_hand": Callable(self, "_xrr_port_get_dominant_hand"),
-			"get_support_hand": Callable(self, "_get_support_hand"),
-			"get_weapon_hand": Callable(self, "_xrr_port_get_weapon_hand"),
-			"get_support_grip_held": Callable(self, "_xrr_port_get_support_grip_held"),
-			"get_weapon_loaded": Callable(self, "_xrr_port_get_weapon_loaded"),
-			"get_steer_have_target": Callable(self, "_xrr_port_get_steer_have_target"),
-			"set_steer_have_target": Callable(self, "_xrr_port_set_steer_have_target"),
-			"get_steer_last_aim": Callable(self, "_xrr_port_get_steer_last_aim"),
-			"set_steer_last_aim": Callable(self, "_xrr_port_set_steer_last_aim"),
-			"get_steer_last_target_yaw": Callable(self, "_xrr_port_get_steer_last_target_yaw"),
-			"set_steer_last_target_yaw": Callable(self, "_xrr_port_set_steer_last_target_yaw"),
-			"get_steer_last_target_pitch": Callable(self, "_xrr_port_get_steer_last_target_pitch"),
-			"set_steer_last_target_pitch": Callable(self, "_xrr_port_set_steer_last_target_pitch"),
-			"set_sens_cal_pending": Callable(self, "_xrr_port_set_sens_cal_pending"),
-			"get_last_game_cam_pos": Callable(self, "_xrr_port_get_last_game_cam_pos"),
-			"set_last_game_cam_pos": Callable(self, "_xrr_port_set_last_game_cam_pos"),
-			"get_world_scale": Callable(self, "_xrr_port_get_world_scale"),
-			"get_render_scale": Callable(self, "_xrr_port_get_render_scale"),
-			"get_log_path": Callable(self, "_xrr_port_get_log_path"),
-			"get_config_path": Callable(self, "_xrr_port_get_config_path"),
-			"set_assets_base": Callable(self, "_xrr_port_set_assets_base"),
-			"append_hand_load_error": Callable(self, "_xrr_port_append_hand_load_error"),
-			"flush_hand_load_errors": Callable(self, "_xrr_port_flush_hand_load_errors"),
-			# Constants
-			"get_camera_poll_interval": Callable(self, "_xrr_port_get_camera_poll_interval"),
-			"get_auto_recenter_dist": Callable(self, "_xrr_port_get_auto_recenter_dist"),
-			"get_two_hand_min_dist": Callable(self, "_xrr_port_get_two_hand_min_dist"),
-			"get_aim_deadzone_sq": Callable(self, "_xrr_port_get_aim_deadzone_sq"),
-			"get_mouse_sens": Callable(self, "_xrr_port_get_mouse_sens"),
-			# Side effects
-			"on_level_transition": Callable(self, "_on_level_transition"),
-			"on_main_menu_entered": Callable(self, "_on_main_menu_entered"),
-			"reparent_camera_children": Callable(self, "_xrr_port_reparent_camera_children"),
-			"setup_comfort_vignette": Callable(self, "_setup_comfort_vignette"),
-			"create_holster_holos": Callable(self, "_create_holster_holos"),
-			"steer_decor_camera_to_controller": Callable(self, "_steer_decor_camera_to_controller"),
-			"inject_action": Callable(self, "_inject_action"),
-			"create_hand_model": Callable(self, "_xrr_port_create_hand_model"),
-			"extract_hand_assets_from_vmz": Callable(self, "_xrr_port_extract_hand_assets_from_vmz"),
-			"save_full_config": Callable(self, "_save_full_config"),
-			"get_on_button_pressed": Callable(self, "_xrr_port_get_on_button_pressed"),
-			"get_on_button_released": Callable(self, "_xrr_port_get_on_button_released"),
-			"log": Callable(self, "_log_str"),
-		})
+		_xr_rig = XrRig.new(self)
 	return _xr_rig
 
-
-# Ports for xr_rig.gd
-func _xrr_port_get_origin() -> XROrigin3D: return xr_origin
-func _xrr_port_get_camera() -> XRCamera3D: return xr_camera
-func _xrr_port_get_game_camera() -> Camera3D: return game_camera
-func _xrr_port_set_game_camera(c: Camera3D) -> void: game_camera = c
-func _xrr_port_get_xr_interface() -> XRInterface: return xr_interface
-func _xrr_port_get_main_viewport() -> Viewport: return get_viewport()
-func _xrr_port_get_owner() -> Node: return self
-func _xrr_port_set_left_controller(c: XRController3D) -> void: left_controller = c
-func _xrr_port_set_right_controller(c: XRController3D) -> void: right_controller = c
-func _xrr_port_set_grab_ray_left(r: RayCast3D) -> void: _grab_ray_left = r
-func _xrr_port_set_grab_ray_right(r: RayCast3D) -> void: _grab_ray_right = r
-func _xrr_port_set_laser_mesh(m: MeshInstance3D) -> void: _laser_mesh = m
-func _xrr_port_set_hover_label(l: Label3D) -> void: _hover_label = l
-func _xrr_port_get_config_reminder_label() -> Label3D: return _config_reminder_label
-
-func _xrr_port_get_frames_waited() -> int: return _frames_waited
-func _xrr_port_get_camera_lost_frames() -> int: return _camera_lost_frames
-func _xrr_port_set_camera_lost_frames(v: int) -> void: _camera_lost_frames = v
-func _xrr_port_get_in_menu_mode() -> bool: return _in_menu_mode
-func _xrr_port_set_in_menu_mode(v: bool) -> void: _in_menu_mode = v
-func _xrr_port_get_weapons_reparented() -> bool: return _weapons_reparented
-func _xrr_port_set_weapons_reparented(v: bool) -> void: _weapons_reparented = v
-func _xrr_port_get_standing_mode() -> bool: return _standing_mode
-func _xrr_port_get_standing_mode_resnap() -> int: return _standing_mode_resnap
-func _xrr_port_set_standing_mode_resnap(v: int) -> void: _standing_mode_resnap = v
-func _xrr_port_get_standing_height_ref() -> float: return _standing_height_ref
-func _xrr_port_set_standing_height_ref(v: float) -> void: _standing_height_ref = v
-func _xrr_port_get_physical_crouch_active() -> bool: return _physical_crouch_active
-func _xrr_port_set_physical_crouch_active(v: bool) -> void: _physical_crouch_active = v
-func _xrr_port_get_physical_crouch_resnap() -> int: return _physical_crouch_resnap
-func _xrr_port_set_physical_crouch_resnap(v: int) -> void: _physical_crouch_resnap = v
-func _xrr_port_get_physical_crouch_threshold() -> float: return _physical_crouch_threshold
-func _xrr_port_get_auto_recenter_cooldown() -> float: return _auto_recenter_cooldown
-func _xrr_port_set_auto_recenter_cooldown(v: float) -> void: _auto_recenter_cooldown = v
-func _xrr_port_get_auto_recenter_enabled() -> bool: return _auto_recenter_enabled
-func _xrr_port_get_interface_open() -> bool: return _interface_open
-func _xrr_port_get_config_screen_open() -> bool: return _config_screen_open
-func _xrr_port_get_decor_mode() -> bool: return _decor_mode
-func _xrr_port_get_holster_state() -> int: return _holster_state
-func _xrr_port_get_state_drawn() -> int: return HolsterState.DRAWN
-func _xrr_port_get_state_lowered() -> int: return HolsterState.LOWERED
-func _xrr_port_get_state_sling() -> int: return HolsterState.SLING
-func _xrr_port_get_dominant_hand() -> String: return _config_dominant_hand
-func _xrr_port_get_weapon_hand() -> String: return _get_weapon_hand()
-func _xrr_port_get_support_grip_held() -> bool: return _support_grip_held
-func _xrr_port_get_weapon_loaded() -> bool: return _weapon_loaded
-func _xrr_port_get_steer_have_target() -> bool: return _steer_game_have_target
-func _xrr_port_set_steer_have_target(v: bool) -> void: _steer_game_have_target = v
-func _xrr_port_get_steer_last_aim() -> Vector3: return _steer_game_last_aim
-func _xrr_port_set_steer_last_aim(v: Vector3) -> void: _steer_game_last_aim = v
-func _xrr_port_get_steer_last_target_yaw() -> float: return _steer_game_last_target_yaw
-func _xrr_port_set_steer_last_target_yaw(v: float) -> void: _steer_game_last_target_yaw = v
-func _xrr_port_get_steer_last_target_pitch() -> float: return _steer_game_last_target_pitch
-func _xrr_port_set_steer_last_target_pitch(v: float) -> void: _steer_game_last_target_pitch = v
-func _xrr_port_set_sens_cal_pending(v: bool) -> void: _sens_cal_pending = v
-func _xrr_port_get_last_game_cam_pos() -> Vector3: return _last_game_cam_pos
-func _xrr_port_set_last_game_cam_pos(v: Vector3) -> void: _last_game_cam_pos = v
-func _xrr_port_get_world_scale() -> float: return world_scale
-func _xrr_port_get_render_scale() -> float: return _render_scale
-func _xrr_port_get_log_path() -> String: return _log_path
-func _xrr_port_get_config_path() -> String: return _config_path
-func _xrr_port_set_assets_base(v: String) -> void: _assets_base = v
-func _xrr_port_append_hand_load_error(msg: String) -> void: _hand_load_errors.append(msg)
-func _xrr_port_flush_hand_load_errors() -> void:
-	for msg in _hand_load_errors:
-		_log(msg)
-	_hand_load_errors.clear()
-
-func _xrr_port_get_camera_poll_interval() -> int: return CAMERA_POLL_INTERVAL
-func _xrr_port_get_auto_recenter_dist() -> float: return AUTO_RECENTER_DIST_M
-func _xrr_port_get_two_hand_min_dist() -> float: return TWO_HAND_MIN_DIST_M
-func _xrr_port_get_aim_deadzone_sq() -> float: return _STEER_AIM_DEADZONE_SQ
-func _xrr_port_get_mouse_sens() -> float: return _mouse_sens_estimate
-
-func _xrr_port_reparent_camera_children() -> void:
-	_reparent_camera_children()
-func _xrr_port_create_hand_model(ctrl: XRController3D, model_name: String) -> void:
-	_create_hand_model(ctrl, model_name)
-func _xrr_port_extract_hand_assets_from_vmz() -> bool:
-	return _extract_hand_assets_from_vmz()
-func _xrr_port_get_on_button_pressed() -> Callable:
-	return Callable(self, "_on_button_pressed")
-func _xrr_port_get_on_button_released() -> Callable:
-	return Callable(self, "_on_button_released")
 
 func _ensure_input():
 	if not _input:
@@ -1917,20 +1334,16 @@ func _is_in_bag_zone(world_pos: Vector3) -> bool:
 	return _ensure_grab().is_in_bag_zone(world_pos)
 
 
-
 func _is_in_nvg_zone(world_pos: Vector3) -> bool:
 	return _ensure_grab().is_in_nvg_zone(world_pos)
-
 
 
 func _is_decor_placing() -> bool:
 	return _ensure_decor().is_decor_placing()
 
 
-
 func _toggle_decor_mode() -> void:
 	_ensure_decor().toggle_decor_mode()
-
 
 
 func _create_holster_holos() -> void:
@@ -1940,11 +1353,8 @@ func _create_holster_holos() -> void:
 	_ensure_holster().create_holster_holos()
 
 
-
 func _draw_weapon(hand: String, slot: int) -> void:
 	_ensure_holster().draw_weapon(hand, slot)
-
-
 
 
 func _enter_sling() -> void:
@@ -2213,18 +1623,12 @@ func _build_systems_pipeline() -> void:
 	]
 
 
-
 func _setup_nvg_overlay() -> void:
 	_ensure_nvg().setup_nvg_overlay()
 
 
-
-
-
-
 func _setup_comfort_vignette() -> void:
 	_ensure_nvg().setup_comfort_vignette()
-
 
 
 func _release_physical_crouch() -> void:
@@ -2232,27 +1636,12 @@ func _release_physical_crouch() -> void:
 	_ensure_xr_rig().release_physical_crouch()
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 func _ray_quad_intersection(ray_origin: Vector3, ray_dir: Vector3, quad: MeshInstance3D) -> Vector3:
 	return _ensure_hud_watch().ray_quad_intersection(ray_origin, ray_dir, quad)
 
 
-
 func _attach_rig_to_camera() -> void:
 	_ensure_xr_rig().attach_rig_to_camera()
-
 
 
 func _on_level_transition() -> void:
@@ -2373,18 +1762,12 @@ func _sync_origin_to_game() -> void:
 	_ensure_xr_rig().sync_origin_to_game()
 
 
-
 func _steer_decor_camera_to_controller() -> void:
 	_ensure_decor().steer_decor_camera_to_controller()
 
 
-
-
-
-
 func _turn_origin(angle_deg: float) -> void:
 	_ensure_xr_rig().turn_origin(angle_deg)
-
 
 
 func _on_button_pressed(button_name: String, hand: String) -> void:
@@ -2947,35 +2330,20 @@ func _create_hand_model(controller: XRController3D, model_name: String) -> void:
 	_ensure_hands().create_hand_model(controller, model_name)
 
 
-
-
-
-
-
 func _create_watch_mesh() -> void:
 	_ensure_hud_watch().create_watch_mesh()
-
 
 
 func _destroy_watch_mesh() -> void:
 	_ensure_hud_watch().destroy_watch_mesh()
 
 
-
 func _setup_watch_content() -> void:
 	_ensure_hud_watch().setup_watch_content()
 
 
-
-
-
-
-
-
-
 func _teardown_watch_content() -> void:
 	_ensure_hud_watch().teardown_watch_content()
-
 
 
 func _esc_find_deepest_stop_control(node: Node, pos: Vector2) -> Control:
@@ -3094,141 +2462,98 @@ func _toggle_esc_menu() -> void:
 		_log("[VR Mod] ESC menu closed (menu button)")
 
 
-
-
-
-
 func _clear_grenade_state() -> void:
 	# Genuine integration boundary: 5 cross-module call sites (holster x4 +
 	# weapon_sync x1) go through this wrapper for the side-effect cleanup.
 	_ensure_grenade().clear_state()
 
 
-
-
-
-
-
-
-
-
-
-
-
 func _hand_laser_sees_grabbable(hand: String) -> bool:
 	return _ensure_grab().hand_laser_sees_grabbable(hand)
-
 
 
 func _try_grab(hand: String) -> void:
 	_ensure_grab().try_grab(hand)
 
 
-
 func _drop_grabbed() -> void:
 	_ensure_grab().drop_grabbed()
-
 
 
 func _pickup_to_inventory() -> void:
 	_ensure_grab().pickup_to_inventory()
 
 
-
-
-
-
 func _collect_arms_meshes(node: Node, out: Array) -> void:
 	_ensure_weapon_sync().collect_arms_meshes(node, out)
-
 
 
 func _ensure_weapon_cache(weapon_rig: Node3D) -> Dictionary:
 	return _ensure_weapon_sync().ensure_weapon_cache(weapon_rig)
 
 
-
 func _hide_arms_in_subtree(weapon_rig: Node3D) -> void:
 	_ensure_weapon_sync().hide_arms_in_subtree(weapon_rig)
-
 
 
 func _weapon_key() -> String:
 	return _ensure_weapon_sync().weapon_key()
 
 
-
 func _get_weapon_grip_offset() -> Vector3:
 	return _ensure_weapon_sync().get_weapon_grip_offset()
-
 
 
 func _get_weapon_grip_rotation() -> float:
 	return _ensure_weapon_sync().get_weapon_grip_rotation()
 
 
-
 func _set_weapon_grip_offset(v: Vector3) -> void:
 	_ensure_weapon_sync().set_weapon_grip_offset(v)
-
 
 
 func _set_weapon_grip_rotation(v: float) -> void:
 	_ensure_weapon_sync().set_weapon_grip_rotation(v)
 
 
-
 func _has_weapon_fg_p() -> bool:
 	return _ensure_weapon_sync().has_weapon_fg_p()
-
 
 
 func _get_weapon_fg_p() -> Vector3:
 	return _ensure_weapon_sync().get_weapon_fg_p()
 
 
-
 func _get_weapon_fg_r() -> Basis:
 	return _ensure_weapon_sync().get_weapon_fg_r()
-
 
 
 func _set_weapon_fg_p(v: Vector3) -> void:
 	_ensure_weapon_sync().set_weapon_fg_p(v)
 
 
-
 func _set_weapon_fg_r(v: Basis) -> void:
 	_ensure_weapon_sync().set_weapon_fg_r(v)
-
-
-
-
 
 
 func _apply_sway_to_hands(weapon_rig: Node3D, dom_ctrl: XRController3D, sup_ctrl: XRController3D, aim_basis: Basis, local_offset: Vector3, recoil_delta: Transform3D, use_two_hand: bool, arc_comp: Vector3) -> void:
 	_ensure_weapon_sync().apply_sway_to_hands(weapon_rig, dom_ctrl, sup_ctrl, aim_basis, local_offset, recoil_delta, use_two_hand, arc_comp)
 
 
-
 func _sync_weapon_to_sling(weapon_rig: Node3D) -> void:
 	_ensure_weapon_sync().sync_weapon_to_sling(weapon_rig)
-
 
 
 func _sample_recoil_chain(weapon_rig: Node3D) -> Transform3D:
 	return _ensure_weapon_sync().sample_recoil_chain(weapon_rig)
 
 
-
 func _walk_chain_node(weapon_rig: Node3D, node_name: String) -> Node3D:
 	return _ensure_weapon_sync().walk_chain_node(weapon_rig, node_name)
 
 
-
 func _suppress_walk_sway(weapon_rig: Node3D) -> void:
 	_ensure_weapon_sync().suppress_walk_sway(weapon_rig)
-
 
 
 func _is_transition_node(node: Node) -> bool:
@@ -3311,10 +2636,8 @@ func _fix_reticle_parallax(weapon_rig: Node3D) -> void:
 	_ensure_scope_pip().fix_reticle_parallax(weapon_rig)
 
 
-
 func _patch_reticle_shader(node: Node) -> void:
 	_ensure_scope_pip().patch_reticle_shader(node)
-
 
 
 func _find_node_by_class(root: Node, class_name_str: String) -> Node:
@@ -3331,10 +2654,8 @@ func _setup_scope_pip(weapon_rig: Node3D) -> void:
 	_ensure_scope_pip().setup_scope_pip(weapon_rig)
 
 
-
 func _update_scope_camera() -> void:
 	_ensure_scope_pip().update_scope_camera()
-
 
 
 func _cycle_scope_zoom(direction: int) -> void:
@@ -3349,10 +2670,8 @@ func _scope_zoom_branch_eligible() -> bool:
 	return sp.active and sp.is_variable and _holster_state == HolsterState.DRAWN
 
 
-
 func _cleanup_scope() -> void:
 	_ensure_scope_pip().cleanup_scope()
-
 
 
 func _enter_rail_mode() -> void:
@@ -3394,10 +2713,8 @@ func _reparent_camera_children() -> void:
 	_ensure_xr_rig().reparent_camera_children()
 
 
-
 func _find_game_camera(node: Node) -> Camera3D:
 	return _ensure_xr_rig().find_game_camera(node)
-
 
 
 func _load_config() -> void:
@@ -3571,8 +2888,6 @@ func _toggle_config_screen() -> void:
 	_ensure_config_ui().toggle_config_screen()
 
 
-
-
 func _apply_hud_spread() -> void:
 	_ensure_config_ui().apply_hud_spread()
 
@@ -3595,8 +2910,6 @@ func _save_full_config() -> void:
 
 func _watch_rot_basis() -> Basis:
 	return _ensure_config_ui().watch_rot_basis()
-
-
 
 
 # ── Bullet hole pool trim (Forward Mobile renders max ~8 decals per mesh) ──

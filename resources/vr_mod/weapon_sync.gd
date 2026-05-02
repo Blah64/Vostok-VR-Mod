@@ -11,55 +11,45 @@ extends RefCounted
 # grip dictionaries (_weapon_grip_offsets, _weapon_fg_p_local, etc.) stay
 # on the autoload because the F8 config screen and config_io serializer
 # both write them directly.
-#
-# This subsystem genuinely touches a lot of cross-system state, so the port
-# surface is large. Ports are reached through `_p(name).call(...)`.
 
-# Subsystem-owned state.
+var autoload: Node
+
+# Subsystem-owned state. Previously these fields were dynamically assigned
+# on the autoload (e.g. weapon_cache = {...}), which works because
+# Node is duck-typed but bypassed any declaration. Owning them here makes
+# the lifecycle explicit and keeps the autoload's surface clean.
 var weapon_cache: Dictionary = {}
 var weapon_cache_id: int = 0
 var invis_mat: StandardMaterial3D = null
 
-# Two-hand aim smoothing.
+# Two-hand aim smoothing: smoothed Basis seeded each two-hand transition,
+# plus an unsmoothed raw target used for arc-pivot compensation.
 var two_hand_smooth_basis: Basis = Basis.IDENTITY
 var two_hand_was_active: bool = false
 var arc_raw_aim_basis: Basis = Basis.IDENTITY
 
-# Foregrip lock.
+# Foregrip lock: weapon-local position/rotation of the support hand on the
+# foregrip, captured/loaded each two-hand grab, restored each frame.
 var fg_p_sup_local: Vector3 = Vector3.ZERO
 var fg_r_sup_local: Basis = Basis.IDENTITY
 var fg_grip_captured: bool = false
 
 
-# Ports
-var _tree: SceneTree
-var _ports: Dictionary
-var _log_fn: Callable
-
-
-func _init(tree: SceneTree, ports: Dictionary) -> void:
-	_tree = tree
-	_ports = ports
-	_log_fn = ports.get("log", Callable())
-
-
-func _log(msg: String) -> void:
-	if _log_fn.is_valid():
-		_log_fn.call(msg)
-
-
-func _p(name: String) -> Callable:
-	return _ports[name]
+func _init(p_autoload: Node) -> void:
+	autoload = p_autoload
 
 
 func process(frame: Dictionary, delta: float) -> void:
-	# Weapon-related per-frame work owned by weapon_sync.
+	# Weapon-related per-frame work owned by weapon_sync:
+	#  * scroll cooldowns (general + rail-slide stick scroll)
+	#  * rail-mode long-press X resolution
+	#  * shotgun pump gesture detection (DRAWN + two-hand only)
+	#  * weapon-load detection + DRAWN restore + auto-raise timer
+	#  * weapon-rig per-frame transform/sway sync (skipped in decor mode)
+	#  * rail slide (off-hand projection -> Ctrl+scroll injection)
 	_tick_scroll_cooldowns(delta)
 	_tick_rail_long_press()
-	if _p("get_weapon_subtype").call() == "Shotgun" \
-			and _p("get_holster_state").call() == _p("get_state_drawn").call() \
-			and _p("get_support_grip_held").call() \
-			and not _p("get_action_open").call():
+	if autoload._weapon_subtype == "Shotgun" and autoload._holster_state == autoload.HolsterState.DRAWN and autoload._support_grip_held and not autoload._action_open:
 		update_pump_gesture(delta)
 	_detect_weapon_loaded()
 	_tick_weapon_raise(delta)
@@ -69,123 +59,119 @@ func process(frame: Dictionary, delta: float) -> void:
 
 
 func _tick_scroll_cooldowns(delta: float) -> void:
-	var sc: float = _p("get_scroll_cooldown").call()
-	if sc > 0.0:
-		_p("set_scroll_cooldown").call(sc - delta)
-	var rsc: float = _p("get_rail_scroll_cooldown").call()
-	if rsc > 0.0:
-		_p("set_rail_scroll_cooldown").call(rsc - delta)
+	if autoload._scroll_cooldown > 0.0:
+		autoload._scroll_cooldown -= delta
+	if autoload._rail_scroll_cooldown > 0.0:
+		autoload._rail_scroll_cooldown -= delta
 
 
 func _tick_rail_long_press() -> void:
-	if not _p("get_rail_x_pending").call():
+	# X held >= RAIL_MODE_LONG_PRESS_SEC while DRAWN -> enter rail-slide mode.
+	if not autoload._rail_x_pending:
 		return
-	var elapsed: float = Time.get_ticks_msec() / 1000.0 - _p("get_rail_x_press_time").call()
-	if elapsed >= _p("get_rail_long_press_sec").call():
-		_p("set_rail_x_pending").call(false)
-		_p("enter_rail_mode").call()
+	var elapsed: float = Time.get_ticks_msec() / 1000.0 - autoload._rail_x_press_time
+	if elapsed >= autoload.RAIL_MODE_LONG_PRESS_SEC:
+		autoload._rail_x_pending = false
+		autoload._enter_rail_mode()
 
 
 func _detect_weapon_loaded() -> void:
-	if _p("get_weapon_loaded").call():
+	# Game weapon nodes appear under game_camera/Manager a few frames after the
+	# camera does. When the first child appears, classify the weapon, defer
+	# rest-pose capture until Handling.gd has finished its raise animation, and
+	# restore DRAWN state if the player was armed before the load (level
+	# transition or app-restart resume).
+	if autoload._weapon_loaded or not autoload.game_camera or not is_instance_valid(autoload.game_camera):
 		return
-	var gc = _p("get_game_camera").call()
-	if not gc or not is_instance_valid(gc):
-		return
-	var mgr = gc.get_node_or_null("Manager")
+	var mgr = autoload.game_camera.get_node_or_null("Manager")
 	if not mgr or mgr.get_child_count() <= 0:
 		return
-	_p("set_weapon_loaded").call(true)
+	autoload._weapon_loaded = true
 	var wep = mgr.get_child(0)
-	_log("[VR Mod] *** WEAPON LOADED: " + str(wep.name) + " ***")
-	_p("set_weapon_is_long").call(classify_weapon_is_long(wep))
-	var subtype: String = get_weapon_subtype(wep)
-	_p("set_weapon_subtype").call(subtype)
-	_p("set_weapon_uses_r_reload").call(subtype == "Shotgun" or subtype == "Bolt")
-	_p("set_action_open").call(false)
-	_p("set_pump_gesture_active").call(false)
-	_p("set_pump_prev_pos").call(Vector3.ZERO)
-	_p("set_recoil_rest_xform").call(Transform3D.IDENTITY)
-	_p("set_recoil_rest_inv").call(Transform3D.IDENTITY)
-	_p("set_walk_sway_captured").call(false)
-	_p("set_walk_sway_logged").call(false)
-	_p("set_rest_capture_pending").call(true)
-	_p("set_walk_sway_capture_delay").call(_p("get_walk_sway_capture_delay_load").call())
-	_p("set_rest_capture_stability_count").call(0)
-	if _p("get_holster_state").call() == _p("get_state_unarmed").call():
-		var ts: int = _p("get_transition_slot").call()
-		var rs: int = _p("get_resume_slot").call()
-		var restore_slot: int = ts if ts > 0 else rs
+	autoload._log("[VR Mod] *** WEAPON LOADED: ", wep.name, " ***")
+	autoload._weapon_is_long = classify_weapon_is_long(wep)
+	autoload._weapon_subtype = get_weapon_subtype(wep)
+	autoload._weapon_uses_r_reload = autoload._weapon_subtype == "Shotgun" or autoload._weapon_subtype == "Bolt"
+	autoload._action_open = false
+	autoload._pump_gesture_active = false
+	autoload._pump_prev_pos = Vector3.ZERO
+	# Defer rest capture until Handling.gd has animated the weapon from
+	# pre-raise offset to its aimed position so _recoil_rest_xform and
+	# _walk_sway_rest agree on the steady-state aimed pose. Capturing at load
+	# time locks _recoil_rest_xform at (0,-0.5,-0.5) which creates a ~0.7m jump
+	# whenever walk-sway is toggled.
+	autoload._recoil_rest_xform = Transform3D.IDENTITY
+	autoload._recoil_rest_inv = Transform3D.IDENTITY
+	autoload._walk_sway_captured = false
+	autoload._walk_sway_logged = false
+	autoload._rest_capture_pending = true
+	autoload._walk_sway_capture_delay = autoload._WALK_SWAY_CAPTURE_DELAY_LOAD
+	autoload._rest_capture_stability_count = 0
+	# Restore DRAWN state whenever weapon loads and mod isn't controlling it.
+	# Priority: _transition_slot (in-session zone change) -> _resume_slot
+	# (persisted to config, survives app restarts) -> slot 1 fallback (handles
+	# first-ever launch before any resume state exists).
+	if autoload._holster_state == autoload.HolsterState.UNARMED:
+		var restore_slot: int = autoload._transition_slot if autoload._transition_slot > 0 else autoload._resume_slot
 		if restore_slot == 0:
 			restore_slot = 1
-		var th: String = _p("get_transition_hand").call()
-		var rh: String = _p("get_resume_hand").call()
-		var dh: String = _p("get_dominant_hand").call()
-		var restore_hand: String = th if th != "" else (rh if rh != "" else dh)
-		_p("set_holster_state").call(_p("get_state_drawn").call())
-		_p("set_weapon_slot").call(restore_slot)
-		_p("set_weapon_hand").call(restore_hand)
-		_log("[VR Mod] Restoring DRAWN state: slot=" + str(restore_slot) + " hand=" + restore_hand)
-		_p("set_transition_slot").call(0)
-		_p("set_transition_hand").call("")
-		_p("set_resume_slot").call(0)
-		_p("set_resume_hand").call("")
-	_p("set_weapon_raise_timer").call(0.5)
-	_log("[VR Mod] Will auto-raise weapon in 0.5s")
+		var restore_hand: String = autoload._transition_hand if autoload._transition_hand != "" else (autoload._resume_hand if autoload._resume_hand != "" else autoload._config_dominant_hand)
+		autoload._holster_state = autoload.HolsterState.DRAWN
+		autoload._weapon_slot = restore_slot
+		autoload._weapon_hand = restore_hand
+		autoload._log("[VR Mod] Restoring DRAWN state: slot=", autoload._weapon_slot, " hand=", autoload._weapon_hand)
+		autoload._transition_slot = 0
+		autoload._transition_hand = ""
+		autoload._resume_slot = 0
+		autoload._resume_hand = ""
+	# Auto-raise weapon after short delay
+	autoload._weapon_raise_timer = 0.5
+	autoload._log("[VR Mod] Will auto-raise weapon in 0.5s")
 
 
 func _tick_weapon_raise(delta: float) -> void:
-	var t: float = _p("get_weapon_raise_timer").call()
-	if t <= 0:
+	if autoload._weapon_raise_timer <= 0:
 		return
-	t -= delta
-	_p("set_weapon_raise_timer").call(t)
-	if t > 0:
+	autoload._weapon_raise_timer -= delta
+	if autoload._weapon_raise_timer > 0:
 		return
-	_p("set_weapon_raise_timer").call(-1.0)
-	if _p("get_holster_state").call() != _p("get_state_drawn").call():
+	autoload._weapon_raise_timer = -1.0
+	if autoload._holster_state != autoload.HolsterState.DRAWN:
 		return
-	if not _p("get_weapon_loaded").call():
-		_log("[VR Mod] Slot " + str(_p("get_weapon_slot").call()) + " empty, reverting to UNARMED")
-		_p("set_holster_state").call(_p("get_state_unarmed").call())
-		_p("set_weapon_hand").call("")
-		_p("set_weapon_slot").call(0)
-		_p("set_support_grip_held").call(false)
+	if not autoload._weapon_loaded:
+		# Slot was empty - abort and revert to unarmed
+		autoload._log("[VR Mod] Slot ", autoload._weapon_slot, " empty, reverting to UNARMED")
+		autoload._holster_state = autoload.HolsterState.UNARMED
+		autoload._weapon_hand = ""
+		autoload._weapon_slot = 0
+		autoload._support_grip_held = false
 	else:
-		_log("[VR Mod] Auto-raising weapon (weapon_high)")
-		_p("inject_action").call("weapon_high", true, 1.0)
-		_tree.create_timer(0.1).timeout.connect(Callable(self, "_release_weapon_high"))
-
-
-func _release_weapon_high() -> void:
-	_p("inject_action").call("weapon_high", false, 1.0)
+		autoload._log("[VR Mod] Auto-raising weapon (weapon_high)")
+		autoload._inject_action("weapon_high", true)
+		autoload.get_tree().create_timer(0.1).timeout.connect(
+			func(): autoload._inject_action("weapon_high", false)
+		)
 
 
 func update_rail_slide() -> void:
-	if not _p("get_rail_active").call():
+	if not autoload._rail_active:
 		return
-	var support_ctrl = _p("get_controller").call(_p("get_support_hand").call())
-	var gc = _p("get_game_camera").call()
-	if not support_ctrl or not gc:
+	var support_ctrl = autoload._get_controller(autoload._get_support_hand())
+	if not support_ctrl or not autoload.game_camera:
 		return
-	var rail_fwd: Vector3 = _p("get_rail_fwd").call()
-	var rail_grab_origin: float = _p("get_rail_grab_origin").call()
-	var rail_scroll_accum: float = _p("get_rail_scroll_accum").call()
-	var current_proj: float = support_ctrl.global_position.dot(rail_fwd)
-	var delta_proj: float = current_proj - rail_grab_origin
-	rail_scroll_accum += delta_proj
-	rail_grab_origin = current_proj
+	var current_proj: float = support_ctrl.global_position.dot(autoload._rail_fwd)
+	var delta_proj: float = current_proj - autoload._rail_grab_origin
+	autoload._rail_scroll_accum += delta_proj
+	autoload._rail_grab_origin = current_proj
 	var threshold := 0.02  # 2 cm per scroll tick
-	while rail_scroll_accum > threshold:
-		_p("inject_scroll").call(1)
-		rail_scroll_accum -= threshold
+	while autoload._rail_scroll_accum > threshold:
+		autoload._inject_scroll(1)
+		autoload._rail_scroll_accum -= threshold
 		support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.15, 0.05, 0.0)
-	while rail_scroll_accum < -threshold:
-		_p("inject_scroll").call(-1)
-		rail_scroll_accum += threshold
+	while autoload._rail_scroll_accum < -threshold:
+		autoload._inject_scroll(-1)
+		autoload._rail_scroll_accum += threshold
 		support_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.15, 0.05, 0.0)
-	_p("set_rail_grab_origin").call(rail_grab_origin)
-	_p("set_rail_scroll_accum").call(rail_scroll_accum)
 
 
 func collect_arms_meshes(node: Node, out: Array) -> void:
@@ -198,6 +184,9 @@ func collect_arms_meshes(node: Node, out: Array) -> void:
 
 func ensure_weapon_cache(weapon_rig: Node3D) -> Dictionary:
 	var id := weapon_rig.get_instance_id()
+	# Reuse cache only when (a) same weapon_rig and (b) the chain was complete
+	# last time. An incomplete chain means the game was still loading the weapon,
+	# so we keep retrying each frame until all chain nodes are present.
 	if id == weapon_cache_id and weapon_cache.get("chain_complete", false):
 		return weapon_cache
 	var prev_arms_hidden: bool = weapon_cache.get("arms_hidden", false) if id == weapon_cache_id else false
@@ -205,8 +194,7 @@ func ensure_weapon_cache(weapon_rig: Node3D) -> Dictionary:
 	var chain: Dictionary = {}
 	var complete := true
 	var current: Node3D = weapon_rig
-	var chain_names: Array = _p("get_recoil_chain_names").call()
-	for chain_name in chain_names:
+	for chain_name in autoload._RECOIL_CHAIN_NAMES:
 		var child = current.get_node_or_null(chain_name)
 		if not child or not child is Node3D:
 			complete = false
@@ -219,7 +207,7 @@ func ensure_weapon_cache(weapon_rig: Node3D) -> Dictionary:
 	var skeleton: Node = null
 	var attachments: Node = null
 	if complete:
-		skeleton = _p("find_node_by_class").call(weapon_rig, "Skeleton3D")
+		skeleton = autoload._find_node_by_class(weapon_rig, "Skeleton3D")
 		if skeleton:
 			attachments = skeleton.get_node_or_null("Attachments")
 	weapon_cache = {
@@ -262,173 +250,141 @@ func hide_arms_in_subtree(weapon_rig: Node3D) -> void:
 
 
 func weapon_key() -> String:
-	return _p("get_weapon_hand").call() + "|" + _p("get_current_weapon_name").call()
+	return autoload._weapon_hand + "|" + autoload._current_weapon_name
 
 
 func get_weapon_grip_offset() -> Vector3:
 	var k := weapon_key()
-	var name: String = _p("get_current_weapon_name").call()
-	var off_dict: Dictionary = _p("get_weapon_grip_offsets").call()
-	if name != "" and off_dict.has(k):
-		return off_dict[k]
-	var slot_def: Dictionary = _p("get_slot_grip_defaults").call()
-	return slot_def.get(_p("get_weapon_slot").call(), Vector3.ZERO)
+	if autoload._current_weapon_name != "" and autoload._weapon_grip_offsets.has(k):
+		return autoload._weapon_grip_offsets[k]
+	return autoload._slot_grip_defaults.get(autoload._weapon_slot, Vector3.ZERO)
 
 
 func get_weapon_grip_rotation() -> float:
 	var k := weapon_key()
-	var name: String = _p("get_current_weapon_name").call()
-	var rot_dict: Dictionary = _p("get_weapon_grip_rotations").call()
-	if name != "" and rot_dict.has(k):
-		return rot_dict[k]
-	var slot_def: Dictionary = _p("get_slot_rot_defaults").call()
-	return slot_def.get(_p("get_weapon_slot").call(), 0.0)
+	if autoload._current_weapon_name != "" and autoload._weapon_grip_rotations.has(k):
+		return autoload._weapon_grip_rotations[k]
+	return autoload._slot_rot_defaults.get(autoload._weapon_slot, 0.0)
 
 
 func set_weapon_grip_offset(v: Vector3) -> void:
-	var name: String = _p("get_current_weapon_name").call()
-	if name != "":
-		var d: Dictionary = _p("get_weapon_grip_offsets").call()
-		d[weapon_key()] = v
+	if autoload._current_weapon_name != "":
+		autoload._weapon_grip_offsets[weapon_key()] = v
 
 
 func set_weapon_grip_rotation(v: float) -> void:
-	var name: String = _p("get_current_weapon_name").call()
-	if name != "":
-		var d: Dictionary = _p("get_weapon_grip_rotations").call()
-		d[weapon_key()] = v
+	if autoload._current_weapon_name != "":
+		autoload._weapon_grip_rotations[weapon_key()] = v
 
 
 func has_weapon_fg_p() -> bool:
-	var name: String = _p("get_current_weapon_name").call()
-	if name == "":
-		return false
-	var d: Dictionary = _p("get_weapon_fg_p_local").call()
-	return d.has(weapon_key())
+	return autoload._current_weapon_name != "" and autoload._weapon_fg_p_local.has(weapon_key())
 
 
 func get_weapon_fg_p() -> Vector3:
-	var name: String = _p("get_current_weapon_name").call()
-	if name != "":
-		var d: Dictionary = _p("get_weapon_fg_p_local").call()
-		return d.get(weapon_key(), Vector3.ZERO)
+	if autoload._current_weapon_name != "":
+		return autoload._weapon_fg_p_local.get(weapon_key(), Vector3.ZERO)
 	return Vector3.ZERO
 
 
 func get_weapon_fg_r() -> Basis:
-	var name: String = _p("get_current_weapon_name").call()
-	if name != "":
-		var d: Dictionary = _p("get_weapon_fg_r_local").call()
-		return d.get(weapon_key(), Basis.IDENTITY)
+	if autoload._current_weapon_name != "":
+		return autoload._weapon_fg_r_local.get(weapon_key(), Basis.IDENTITY)
 	return Basis.IDENTITY
 
 
 func set_weapon_fg_p(v: Vector3) -> void:
-	var name: String = _p("get_current_weapon_name").call()
-	if name != "":
-		var d: Dictionary = _p("get_weapon_fg_p_local").call()
-		d[weapon_key()] = v
+	if autoload._current_weapon_name != "":
+		autoload._weapon_fg_p_local[weapon_key()] = v
 
 
 func set_weapon_fg_r(v: Basis) -> void:
-	var name: String = _p("get_current_weapon_name").call()
-	if name != "":
-		var d: Dictionary = _p("get_weapon_fg_r_local").call()
-		d[weapon_key()] = v
+	if autoload._current_weapon_name != "":
+		autoload._weapon_fg_r_local[weapon_key()] = v
 
 
 func sync_weapon_to_controller() -> void:
-	var gc = _p("get_game_camera").call()
-	if not gc or not is_instance_valid(gc):
+	if not autoload.game_camera or not is_instance_valid(autoload.game_camera):
 		return
-	if _p("get_interface_open").call():
+	if autoload._interface_open:
 		return
 
-	var cached_mgr = _p("get_cached_mgr").call()
-	if not cached_mgr or not is_instance_valid(cached_mgr):
-		cached_mgr = gc.get_node_or_null("Manager")
-		_p("set_cached_mgr").call(cached_mgr)
-	var mgr = cached_mgr
+	if not autoload._cached_mgr or not is_instance_valid(autoload._cached_mgr):
+		autoload._cached_mgr = autoload.game_camera.get_node_or_null("Manager")
+	var mgr = autoload._cached_mgr
 	if not mgr or mgr.get_child_count() == 0:
 		# If we think a weapon is equipped but the rig is gone, the game unequipped it
 		# externally (e.g. via inventory while drawn).
-		if _p("get_holster_state").call() != _p("get_state_unarmed").call() and _p("get_weapon_loaded").call():
-			_log("[VR Mod] Weapon rig gone externally - resetting to UNARMED")
-			_p("set_pending_holster_key").call(-1)
-			_p("set_adjust_mode").call(false)
-			_p("set_fg_adjust_mode").call(false)
-			if _p("get_rail_mode").call():
-				_p("exit_rail_mode").call()
-			_p("cleanup_scope").call()
-			_p("inject_action").call("aim", false, 1.0)
-			_p("inject_action").call("weapon_high", false, 1.0)
-			_p("set_holster_state").call(_p("get_state_unarmed").call())
-			_p("set_weapon_hand").call("")
-			_p("set_weapon_slot").call(0)
-			_p("set_current_weapon_name").call("")
-			_p("set_weapon_loaded").call(false)
-			_p("set_weapon_is_long").call(false)
-			_p("set_weapon_subtype").call("")
-			_p("set_weapon_uses_r_reload").call(false)
-			_p("set_action_open").call(false)
-			_p("set_pump_gesture_active").call(false)
-			_p("set_pump_prev_pos").call(Vector3.ZERO)
-			_p("set_pump_cooldown").call(0.0)
-			_p("clear_grenade_state").call()
-			_p("set_support_grip_held").call(false)
+		if autoload._holster_state != autoload.HolsterState.UNARMED and autoload._weapon_loaded:
+			autoload._log("[VR Mod] Weapon rig gone externally - resetting to UNARMED")
+			autoload._pending_holster_key = -1
+			autoload._adjust_mode = false
+			autoload._fg_adjust_mode = false
+			if autoload._rail_mode:
+				autoload._exit_rail_mode()
+			autoload._cleanup_scope()
+			autoload._inject_action("aim", false)
+			autoload._inject_action("weapon_high", false)
+			autoload._holster_state = autoload.HolsterState.UNARMED
+			autoload._weapon_hand = ""
+			autoload._weapon_slot = 0
+			autoload._current_weapon_name = ""
+			autoload._weapon_loaded = false
+			autoload._weapon_is_long = false
+			autoload._weapon_subtype = ""
+			autoload._weapon_uses_r_reload = false
+			autoload._action_open = false
+			autoload._pump_gesture_active = false
+			autoload._pump_prev_pos = Vector3.ZERO
+			autoload._pump_cooldown = 0.0
+			autoload._clear_grenade_state()
+			autoload._support_grip_held = false
 		return
 
 	var weapon_rig = mgr.get_child(0)
 	if not weapon_rig or not weapon_rig is Node3D:
 		return
-	_p("set_cached_weapon_rig").call(weapon_rig)
-	_p("set_current_weapon_name").call(weapon_rig.name.trim_suffix("_Rig"))
+	autoload._cached_weapon_rig = weapon_rig
+	autoload._current_weapon_name = weapon_rig.name.trim_suffix("_Rig")
 
-	var hs: int = _p("get_holster_state").call()
 	# Only sync when weapon is equipped (DRAWN or LOWERED)
-	if hs == _p("get_state_unarmed").call():
+	if autoload._holster_state == autoload.HolsterState.UNARMED:
 		return
 
 	# SLING: position weapon at chest, not at controller
-	if hs == _p("get_state_sling").call():
+	if autoload._holster_state == autoload.HolsterState.SLING:
 		sync_weapon_to_sling(weapon_rig)
 		return
 
-	var weapon_hand: String = _p("get_weapon_hand_resolved").call()
-	var support_hand: String = _p("get_support_hand").call()
-	var controller = _p("get_controller").call(weapon_hand)
+	var controller = autoload._get_controller(autoload._get_weapon_hand())
 	if not controller or not controller.get_is_active():
 		return
 
 	# Two-hand aiming: only when support grip is held
-	var off_controller = _p("get_controller").call(support_hand)
+	var off_controller = autoload._get_controller(autoload._get_support_hand())
 	var use_two_hand = false
 	var aim_basis: Basis
 
 	# Single-hand basis computed at function scope so the smooth-init path can also use it.
 	# Grenades (slot 4): ignore grip rotation - throw direction must follow controller forward.
-	var weapon_slot: int = _p("get_weapon_slot").call()
-	var sh_rot_offset: float = 0.0 if weapon_slot == 4 else get_weapon_grip_rotation()
+	var sh_rot_offset: float = 0.0 if autoload._weapon_slot == 4 else get_weapon_grip_rotation()
 	var single_hand_basis: Basis = controller.global_basis * Basis(Vector3.UP, deg_to_rad(180 + sh_rot_offset))
 	var local_offset: Vector3 = get_weapon_grip_offset()
 
-	# Foregrip adjust: freeze the weapon in place so the player can position their support hand freely.
-	if _p("get_fg_adjust_mode").call():
-		weapon_rig.global_transform = _p("get_fg_adjust_frozen_xform").call()
+	# Foregrip adjust: freeze the weapon in place so the player can position their support
+	# hand freely. Canonical hand resets are applied; normal sync skipped.
+	if autoload._fg_adjust_mode:
+		weapon_rig.global_transform = autoload._fg_adjust_frozen_xform
 		apply_sway_to_hands(weapon_rig, controller, off_controller, single_hand_basis, local_offset, Transform3D.IDENTITY, false, Vector3.ZERO)
 		hide_arms_in_subtree(weapon_rig)
 		return
 
-	var two_hand_min_dist: float = _p("get_two_hand_min_dist").call()
-	var hand_offset_left: Vector3 = _p("get_hand_offset_left").call()
-	var hand_offset_right: Vector3 = _p("get_hand_offset_right").call()
-
-	if _p("get_support_grip_held").call() and off_controller and off_controller.get_is_active():
+	if autoload._support_grip_held and off_controller and off_controller.get_is_active():
 		var hand_dist = controller.global_position.distance_to(off_controller.global_position)
-		if hand_dist > two_hand_min_dist:
+		if hand_dist > autoload.TWO_HAND_MIN_DIST_M:
 			use_two_hand = true
 			# Aim direction: from dominant hand model center toward off-hand controller.
-			var dom_hand_off = hand_offset_right if weapon_hand == "right" else hand_offset_left
+			var dom_hand_off = autoload.HAND_GLTF_OFFSET_RIGHT if autoload._get_weapon_hand() == "right" else autoload.HAND_GLTF_OFFSET_LEFT
 			var forward = (off_controller.global_position - controller.global_position - controller.global_basis * dom_hand_off).normalized()
 			# Use dominant hand's up as roll reference.
 			var up = controller.global_basis.y
@@ -444,21 +400,25 @@ func sync_weapon_to_controller() -> void:
 	if not use_two_hand:
 		aim_basis = single_hand_basis
 
-	# Two-hand stabilization
-	if use_two_hand and _p("get_two_hand_smooth_enabled").call():
+	# Two-hand stabilization: slerp the FULL aim basis from single-hand to the two-hand target.
+	if use_two_hand and autoload._two_hand_smooth_enabled:
 		var target_basis := aim_basis
 		if not two_hand_was_active:
+			# First frame: seed from the exact single-hand basis so the weapon stays
+			# exactly where it was the moment the off-hand grabs.
 			two_hand_smooth_basis = single_hand_basis
+			# Also seed raw aim basis - arc_comp on first frame will be ZERO (no jump).
 			arc_raw_aim_basis = single_hand_basis
 		else:
+			# Subsequent frames: record unsmoothed raw aim for arc_comp (no lag).
 			arc_raw_aim_basis = target_basis
-		var smooth_speed: float = _p("get_two_hand_smooth_speed").call()
-		two_hand_smooth_basis = two_hand_smooth_basis.slerp(target_basis, clampf(_p("get_process_delta").call() * smooth_speed, 0.0, 1.0))
+		two_hand_smooth_basis = two_hand_smooth_basis.slerp(target_basis, clampf(autoload.get_process_delta_time() * autoload._two_hand_smooth_speed, 0.0, 1.0))
 		aim_basis = two_hand_smooth_basis
 
 	if use_two_hand:
 		two_hand_was_active = true
-		if not _p("get_two_hand_smooth_enabled").call():
+		if not autoload._two_hand_smooth_enabled:
+			# Smooth disabled: aim_basis IS raw aim.
 			arc_raw_aim_basis = aim_basis
 	else:
 		two_hand_was_active = false
@@ -466,95 +426,87 @@ func sync_weapon_to_controller() -> void:
 		arc_raw_aim_basis = single_hand_basis  # reset so next grab starts clean
 
 	# Handle deferred rest capture
-	if _p("get_rest_capture_pending").call():
-		var delay: float = _p("get_walk_sway_capture_delay").call() - _p("get_process_delta").call()
-		_p("set_walk_sway_capture_delay").call(delay)
-		if delay <= 0.0:
+	if autoload._rest_capture_pending:
+		autoload._walk_sway_capture_delay -= autoload.get_process_delta_time()
+		if autoload._walk_sway_capture_delay <= 0.0:
 			# Stability gate
 			var sample := sample_recoil_chain(weapon_rig)
-			var stability: int = _p("get_rest_capture_stability_count").call()
-			if stability == 0:
-				_p("set_rest_capture_hard_deadline").call(2.0)
-				_p("set_rest_capture_stability_count").call(1)
+			if autoload._rest_capture_stability_count == 0:
+				autoload._rest_capture_hard_deadline = 2.0  # hard cap after initial 2s delay
+				autoload._rest_capture_stability_count = 1
 			else:
-				_p("set_rest_capture_hard_deadline").call(_p("get_rest_capture_hard_deadline").call() - _p("get_process_delta").call())
-				var prev_sample: Transform3D = _p("get_rest_capture_prev_sample").call()
+				autoload._rest_capture_hard_deadline -= autoload.get_process_delta_time()
 				var fwd_now: Vector3 = sample.basis * Vector3(0, 0, 1)
-				var fwd_prev: Vector3 = prev_sample.basis * Vector3(0, 0, 1)
+				var fwd_prev: Vector3 = autoload._rest_capture_prev_sample.basis * Vector3(0, 0, 1)
 				var angle_diff: float = fwd_now.angle_to(fwd_prev)
-				var pos_diff: float = (sample.origin - prev_sample.origin).length()
+				var pos_diff: float = (sample.origin - autoload._rest_capture_prev_sample.origin).length()
 				if pos_diff < 0.003 and angle_diff < 0.003:
-					_p("set_rest_capture_stability_count").call(stability + 1)
+					autoload._rest_capture_stability_count += 1
 				else:
-					_p("set_rest_capture_stability_count").call(1)
-			_p("set_rest_capture_prev_sample").call(sample)
-			var force_commit: bool = _p("get_rest_capture_hard_deadline").call() <= 0.0
-			if _p("get_rest_capture_stability_count").call() >= 5 or force_commit:
-				_p("set_rest_capture_pending").call(false)
-				_p("set_walk_sway_capture_delay").call(0.0)
-				_p("set_recoil_rest_xform").call(sample)
-				_p("set_recoil_rest_inv").call(sample.affine_inverse())
-				var ws_rest: Dictionary = _p("get_walk_sway_rest").call()
-				ws_rest.clear()
-				var ws_nodes: Array = _p("get_walk_sway_nodes").call()
-				var disable_walk: bool = _p("get_disable_walk_sway").call()
-				for node_name in ws_nodes:
+					autoload._rest_capture_stability_count = 1
+			autoload._rest_capture_prev_sample = sample
+			var force_commit: bool = autoload._rest_capture_hard_deadline <= 0.0
+			if autoload._rest_capture_stability_count >= 5 or force_commit:
+				autoload._rest_capture_pending = false
+				autoload._walk_sway_capture_delay = 0.0
+				autoload._recoil_rest_xform = sample
+				autoload._recoil_rest_inv = sample.affine_inverse()
+				autoload._walk_sway_rest.clear()
+				for node_name in autoload._WALK_SWAY_NODES:
 					var wn := walk_chain_node(weapon_rig, node_name)
 					if wn:
-						ws_rest[node_name] = wn.transform
-						if disable_walk:
+						autoload._walk_sway_rest[node_name] = wn.transform
+						if autoload._disable_walk_sway:
 							wn.set_process(false)
 							wn.set_physics_process(false)
-				_p("set_walk_sway_captured").call(true)
-				_p("set_walk_sway_logged").call(false)
+				autoload._walk_sway_captured = true
+				autoload._walk_sway_logged = false
 				var ori: Vector3 = sample.origin
 				var eul: Vector3 = sample.basis.get_euler()
-				_log("REST CAPTURE: weapon=" + _p("get_current_weapon_name").call() + " slot=" + str(_p("get_weapon_slot").call())
+				autoload._log("REST CAPTURE: weapon=" + autoload._current_weapon_name + " slot=" + str(autoload._weapon_slot)
 					+ " origin=(" + str(snapped(ori.x, 0.0001)) + "," + str(snapped(ori.y, 0.0001)) + "," + str(snapped(ori.z, 0.0001)) + ")"
 					+ " euler_deg=(" + str(snapped(rad_to_deg(eul.x), 0.01)) + "," + str(snapped(rad_to_deg(eul.y), 0.01)) + "," + str(snapped(rad_to_deg(eul.z), 0.01)) + ")"
-					+ " stable_frames=" + str(_p("get_rest_capture_stability_count").call())
+					+ " stable_frames=" + str(autoload._rest_capture_stability_count)
 					+ " forced=" + str(force_commit))
-				_p("set_rest_capture_stability_count").call(0)
+				autoload._rest_capture_stability_count = 0
 
 	# Suppress walk bob at the chain nodes
-	if _p("get_disable_walk_sway").call() and not _p("get_rest_capture_pending").call():
+	if autoload._disable_walk_sway and not autoload._rest_capture_pending:
 		suppress_walk_sway(weapon_rig)
 
 	# Sample recoil chain and apply delta on top of controller aim.
 	var recoil_delta := Transform3D.IDENTITY
-	if not _p("get_rest_capture_pending").call():
-		recoil_delta = _p("get_recoil_rest_inv").call() * sample_recoil_chain(weapon_rig)
+	if not autoload._rest_capture_pending:
+		recoil_delta = autoload._recoil_rest_inv * sample_recoil_chain(weapon_rig)
 	weapon_rig.global_basis = aim_basis * recoil_delta.basis
 
 	# Fire haptics
-	var fire_haptic_cd: float = _p("get_fire_haptic_cooldown").call() - _p("get_process_delta").call()
-	_p("set_fire_haptic_cooldown").call(fire_haptic_cd)
+	autoload._fire_haptic_cooldown -= autoload.get_process_delta_time()
 	var cur_recoil_mag := recoil_delta.origin.length()
-	var prev_recoil_mag: float = _p("get_prev_recoil_mag").call()
-	if cur_recoil_mag - prev_recoil_mag > _p("get_recoil_fire_rise_edge").call() and fire_haptic_cd <= 0.0:
-		var hap_dom = _p("get_controller").call(_p("get_weapon_hand").call())
+	if cur_recoil_mag - autoload._prev_recoil_mag > autoload.RECOIL_FIRE_RISE_EDGE and autoload._fire_haptic_cooldown <= 0.0:
+		var hap_dom = autoload._get_controller(autoload._weapon_hand)
 		if hap_dom:
 			hap_dom.trigger_haptic_pulse("haptic", 0.0, 0.8, 0.08, 0.0)
-		if _p("get_support_grip_held").call():
-			var hap_sup = _p("get_controller").call(_p("get_support_hand").call())
+		if autoload._support_grip_held:
+			var hap_sup = autoload._get_controller(autoload._get_support_hand())
 			if hap_sup:
 				hap_sup.trigger_haptic_pulse("haptic", 0.0, 0.5, 0.08, 0.0)
-		_p("set_fire_haptic_cooldown").call(0.08)
-		if _p("get_verbose_log").call():
+		autoload._fire_haptic_cooldown = 0.08
+		if autoload._verbose_log:
 			var rfwd: Vector3 = recoil_delta.basis * Vector3(0, 0, 1)
 			var rfwd_angle_deg: float = rad_to_deg(rfwd.angle_to(Vector3(0, 0, 1)))
-			_log("FIRE: weapon=" + _p("get_current_weapon_name").call() + " slot=" + str(_p("get_weapon_slot").call())
+			autoload._log("FIRE: weapon=" + autoload._current_weapon_name + " slot=" + str(autoload._weapon_slot)
 				+ " delta_origin_m=" + str(snapped(recoil_delta.origin.length(), 0.0001))
 				+ " delta_fwd_angle_deg=" + str(snapped(rfwd_angle_deg, 0.01))
-				+ " prev_origin_m=" + str(snapped(prev_recoil_mag, 0.0001)))
-	_p("set_prev_recoil_mag").call(cur_recoil_mag)
+				+ " prev_origin_m=" + str(snapped(autoload._prev_recoil_mag, 0.0001)))
+	autoload._prev_recoil_mag = cur_recoil_mag
 
 	# Pivot compensation
 	var arc_comp := Vector3.ZERO
-	var arc_is_right = weapon_hand == "right"
-	var arc_dom_off = hand_offset_right if arc_is_right else hand_offset_left
-	var arc_dom_rot = _p("get_hand_rot_right").call() if arc_is_right else _p("get_hand_rot_left").call()
-	var arc_sh_rot := 0.0 if weapon_slot == 4 else get_weapon_grip_rotation()
+	var arc_is_right = autoload._get_weapon_hand() == "right"
+	var arc_dom_off = autoload.HAND_GLTF_OFFSET_RIGHT if arc_is_right else autoload.HAND_GLTF_OFFSET_LEFT
+	var arc_dom_rot = autoload.HAND_GLTF_ROTATION_RIGHT if arc_is_right else autoload.HAND_GLTF_ROTATION_LEFT
+	var arc_sh_rot := 0.0 if autoload._weapon_slot == 4 else get_weapon_grip_rotation()
 	var arc_rot_b := Basis.from_euler(arc_dom_rot * (PI / 180.0))
 	var arc_w2h := Basis(Vector3.UP, deg_to_rad(-(180.0 + arc_sh_rot))) * arc_rot_b
 	var arc_r_delta := Basis.IDENTITY
@@ -570,11 +522,11 @@ func sync_weapon_to_controller() -> void:
 	hide_arms_in_subtree(weapon_rig)
 
 	# Fix reticle parallax for VR (once per sight mesh)
-	_p("fix_reticle_parallax").call(weapon_rig)
+	autoload._fix_reticle_parallax(weapon_rig)
 
 	# Scope PIP: detect and activate game's scope SubViewport, position camera
-	_p("setup_scope_pip").call(weapon_rig)
-	_p("update_scope_camera").call()
+	autoload._setup_scope_pip(weapon_rig)
+	autoload._update_scope_camera()
 
 
 func apply_sway_to_hands(
@@ -583,18 +535,14 @@ func apply_sway_to_hands(
 		aim_basis: Basis, local_offset: Vector3,
 		recoil_delta: Transform3D, use_two_hand: bool,
 		arc_comp: Vector3) -> void:
-	var weapon_hand = _p("get_weapon_hand_resolved").call()
+	var weapon_hand = autoload._get_weapon_hand()
 	var is_right_weapon = weapon_hand == "right"
-	var hand_offset_left: Vector3 = _p("get_hand_offset_left").call()
-	var hand_offset_right: Vector3 = _p("get_hand_offset_right").call()
-	var hand_rot_left: Vector3 = _p("get_hand_rot_left").call()
-	var hand_rot_right: Vector3 = _p("get_hand_rot_right").call()
-	var dom_wrapper: Node3D = _p("get_hand_wrapper").call("right" if is_right_weapon else "left")
-	var sup_wrapper: Node3D = _p("get_hand_wrapper").call("left" if is_right_weapon else "right")
-	var dom_off = hand_offset_right if is_right_weapon else hand_offset_left
-	var dom_rot = hand_rot_right if is_right_weapon else hand_rot_left
-	var sup_off = hand_offset_left if is_right_weapon else hand_offset_right
-	var sup_rot = hand_rot_left if is_right_weapon else hand_rot_right
+	var dom_wrapper = autoload._hand_wrapper_right if is_right_weapon else autoload._hand_wrapper_left
+	var sup_wrapper = autoload._hand_wrapper_left  if is_right_weapon else autoload._hand_wrapper_right
+	var dom_off = autoload.HAND_GLTF_OFFSET_RIGHT    if is_right_weapon else autoload.HAND_GLTF_OFFSET_LEFT
+	var dom_rot = autoload.HAND_GLTF_ROTATION_RIGHT  if is_right_weapon else autoload.HAND_GLTF_ROTATION_LEFT
+	var sup_off = autoload.HAND_GLTF_OFFSET_LEFT     if is_right_weapon else autoload.HAND_GLTF_OFFSET_RIGHT
+	var sup_rot = autoload.HAND_GLTF_ROTATION_LEFT   if is_right_weapon else autoload.HAND_GLTF_ROTATION_RIGHT
 
 	# Always reset both wrappers to canonical pose first; sway is then additive
 	if dom_wrapper:
@@ -606,8 +554,7 @@ func apply_sway_to_hands(
 
 	# During two-hand aiming, rotate dominant hand to track the weapon tilt.
 	if use_two_hand and dom_wrapper:
-		var weapon_slot: int = _p("get_weapon_slot").call()
-		var sh_rot_deg := 0.0 if weapon_slot == 4 else get_weapon_grip_rotation()
+		var sh_rot_deg := 0.0 if autoload._weapon_slot == 4 else get_weapon_grip_rotation()
 		var dom_rot_basis := Basis.from_euler(dom_rot * (PI / 180.0))
 		var weapon_to_hand := Basis(Vector3.UP, deg_to_rad(-(180.0 + sh_rot_deg))) * dom_rot_basis
 		var new_hand_basis := dom_ctrl.global_basis.inverse() * weapon_rig.global_basis * weapon_to_hand
@@ -625,7 +572,7 @@ func apply_sway_to_hands(
 
 	if use_two_hand and sup_ctrl and sup_ctrl.get_is_active() and sup_wrapper:
 		# Foregrip adjust active: gun is frozen, support hand follows controller canonically.
-		if not _p("get_fg_adjust_mode").call():
+		if not autoload._fg_adjust_mode:
 			# First frame of two-hand or after release: load per-slot saved position/rotation.
 			if not fg_grip_captured:
 				if has_weapon_fg_p():
@@ -644,30 +591,27 @@ func apply_sway_to_hands(
 
 
 func sync_weapon_to_sling(weapon_rig: Node3D) -> void:
-	var cam = _p("get_camera").call()
-	if not cam or not is_instance_valid(cam):
+	if not autoload.xr_camera or not is_instance_valid(autoload.xr_camera):
 		return
 	weapon_rig.visible = true  # override any game-side visibility flag each frame
 	# Build a yaw-only basis from the camera so the weapon follows the player's turn
-	var head_yaw = cam.global_rotation.y
+	var head_yaw = autoload.xr_camera.global_rotation.y
 	var yaw_basis := Basis(Vector3.UP, head_yaw)
-	weapon_rig.global_position = cam.global_position + yaw_basis * _p("get_sling_offset").call()
+	weapon_rig.global_position = autoload.xr_camera.global_position + yaw_basis * autoload._sling_offset
 	# Orient weapon to face forward with the same handedness as the drawn single-hand basis
 	var slot_y_rot: float = get_weapon_grip_rotation()
 	var base_basis := yaw_basis * Basis(Vector3.UP, deg_to_rad(180.0 + slot_y_rot))
-	var sling_rot: Vector3 = _p("get_sling_rot_offset").call()
 	weapon_rig.global_basis = base_basis * Basis.from_euler(Vector3(
-		deg_to_rad(sling_rot.x),
-		deg_to_rad(sling_rot.y),
-		deg_to_rad(sling_rot.z)))
+		deg_to_rad(autoload._sling_rot_offset.x),
+		deg_to_rad(autoload._sling_rot_offset.y),
+		deg_to_rad(autoload._sling_rot_offset.z)))
 	hide_arms_in_subtree(weapon_rig)
 
 
 func sample_recoil_chain(weapon_rig: Node3D) -> Transform3D:
 	var chain: Dictionary = ensure_weapon_cache(weapon_rig)["chain"]
 	var composed := Transform3D.IDENTITY
-	var chain_names: Array = _p("get_recoil_chain_names").call()
-	for chain_name in chain_names:
+	for chain_name in autoload._RECOIL_CHAIN_NAMES:
 		if not chain.has(chain_name):
 			break
 		var node: Node3D = chain[chain_name]
@@ -693,37 +637,34 @@ func walk_chain_node(weapon_rig: Node3D, node_name: String) -> Node3D:
 
 
 func suppress_walk_sway(weapon_rig: Node3D) -> void:
-	var ws_rest: Dictionary = _p("get_walk_sway_rest").call()
-	var ws_nodes: Array = _p("get_walk_sway_nodes").call()
-	if not _p("get_walk_sway_captured").call():
-		ws_rest.clear()
-		for node_name in ws_nodes:
+	if not autoload._walk_sway_captured:
+		autoload._walk_sway_rest.clear()
+		for node_name in autoload._WALK_SWAY_NODES:
 			var n := walk_chain_node(weapon_rig, node_name)
 			if n:
-				ws_rest[node_name] = n.transform
+				autoload._walk_sway_rest[node_name] = n.transform
 				n.set_process(false)
 				n.set_physics_process(false)
-		_p("set_walk_sway_captured").call(true)
-		_p("set_walk_sway_logged").call(false)
-	for node_name in ws_nodes:
-		if not ws_rest.has(node_name):
+		autoload._walk_sway_captured = true
+		autoload._walk_sway_logged = false
+	for node_name in autoload._WALK_SWAY_NODES:
+		if not autoload._walk_sway_rest.has(node_name):
 			continue
 		var n := walk_chain_node(weapon_rig, node_name)
 		if n:
-			n.transform = ws_rest[node_name]
+			n.transform = autoload._walk_sway_rest[node_name]
 	# One-time diagnostic
-	if not _p("get_walk_sway_logged").call():
-		_p("set_walk_sway_logged").call(true)
-		var log_path: String = _p("get_log_path").call()
-		var f = FileAccess.open(log_path, FileAccess.READ_WRITE)
+	if not autoload._walk_sway_logged:
+		autoload._walk_sway_logged = true
+		var f = FileAccess.open(autoload._log_path, FileAccess.READ_WRITE)
 		if not f:
-			f = FileAccess.open(log_path, FileAccess.WRITE)
+			f = FileAccess.open(autoload._log_path, FileAccess.WRITE)
 		if f:
 			f.seek_end(0)
 			f.store_line("[walk_sway] captured rest poses:")
-			for node_name in ws_nodes:
-				if ws_rest.has(node_name):
-					var t: Transform3D = ws_rest[node_name]
+			for node_name in autoload._WALK_SWAY_NODES:
+				if autoload._walk_sway_rest.has(node_name):
+					var t: Transform3D = autoload._walk_sway_rest[node_name]
 					f.store_line("  " + node_name + " origin=" + str(t.origin) + " basis_x=" + str(t.basis.x) + " basis_y=" + str(t.basis.y) + " basis_z=" + str(t.basis.z))
 				else:
 					f.store_line("  " + node_name + " NOT FOUND in chain")
@@ -731,40 +672,40 @@ func suppress_walk_sway(weapon_rig: Node3D) -> void:
 
 
 func classify_weapon_is_long(weapon_rig: Node3D) -> bool:
-	var weapon_slot: int = _p("get_weapon_slot").call()
 	# Slots 3 (knife) and 4 (grenade) are never long weapons
-	if weapon_slot == 3 or weapon_slot == 4:
-		_log("Weapon class: short (slot " + str(weapon_slot) + ")")
+	if autoload._weapon_slot == 3 or autoload._weapon_slot == 4:
+		autoload._log("Weapon class: short (slot " + str(autoload._weapon_slot) + ")")
 		return false
 	# Check weapon data resource for weaponType property (authoritative)
 	var data_res = weapon_rig.get("data")
 	if data_res and data_res is Resource:
 		var weapon_type = data_res.get("weaponType")
 		var subtype = data_res.get("subtype")
-		_log("Weapon classify: name=" + weapon_rig.name + " slot=" + str(weapon_slot)
+		autoload._log("Weapon classify: name=" + weapon_rig.name + " slot=" + str(autoload._weapon_slot)
 			+ " weaponType=" + str(weapon_type) + " subtype=" + str(subtype))
 		if weapon_type != null:
 			var wt: String = str(weapon_type).to_lower()
+			# Long weapon types: rifle, shotgun, SMG, carbine, DMR, sniper, LMG, etc.
+			# Short weapon types: pistol
 			if "pistol" in wt:
-				_log("Weapon class: short (weaponType=" + str(weapon_type) + ")")
+				autoload._log("Weapon class: short (weaponType=" + str(weapon_type) + ")")
 				return false
 			# Any non-pistol firearm type is long
-			_log("Weapon class: long (weaponType=" + str(weapon_type) + ")")
+			autoload._log("Weapon class: long (weaponType=" + str(weapon_type) + ")")
 			return true
 	# Fallback: slot 2 defaults to short, slot 1 defaults to long
-	_log("Weapon classify: name=" + weapon_rig.name + " slot=" + str(weapon_slot) + " (no data resource)")
-	if weapon_slot == 2:
-		_log("Weapon class: short (sidearm slot, no weaponType)")
+	autoload._log("Weapon classify: name=" + weapon_rig.name + " slot=" + str(autoload._weapon_slot) + " (no data resource)")
+	if autoload._weapon_slot == 2:
+		autoload._log("Weapon class: short (sidearm slot, no weaponType)")
 		return false
-	_log("Weapon class: long (default for slot " + str(weapon_slot) + ")")
+	autoload._log("Weapon class: long (default for slot " + str(autoload._weapon_slot) + ")")
 	return true
 
 
 func get_weapon_subtype(weapon_rig: Node3D) -> String:
-	var weapon_slot: int = _p("get_weapon_slot").call()
-	if weapon_slot == 3:
+	if autoload._weapon_slot == 3:
 		return "Melee"
-	if weapon_slot == 4:
+	if autoload._weapon_slot == 4:
 		return "Grenade"
 	var data_res = weapon_rig.get("data")
 	if data_res and data_res is Resource:
@@ -775,43 +716,41 @@ func get_weapon_subtype(weapon_rig: Node3D) -> String:
 
 
 func update_pump_gesture(delta: float) -> void:
-	_p("set_pump_cooldown").call(_p("get_pump_cooldown").call() - delta)
-	var sup_ctrl = _p("get_controller").call(_p("get_support_hand").call())
+	autoload._pump_cooldown -= delta
+	var sup_ctrl = autoload._get_controller(autoload._get_support_hand())
 	if not sup_ctrl:
 		return
 	var pos: Vector3 = sup_ctrl.position
-	var pump_prev: Vector3 = _p("get_pump_prev_pos").call()
 	# Initialize reference on first call or after reset
-	if pump_prev == Vector3.ZERO:
-		_p("set_pump_prev_pos").call(pos)
+	if autoload._pump_prev_pos == Vector3.ZERO:
+		autoload._pump_prev_pos = pos
 		return
 	# PUMP_OUT: how far hand must move from reference to start the gesture.
 	# PUMP_BACK: how close hand must return to the frozen reference to complete it.
 	const PUMP_OUT := 0.04
 	const PUMP_BACK := 0.03
 	const TRACK_RATE := 2.0
-	if not _p("get_pump_gesture_active").call():
-		pump_prev = pump_prev.lerp(pos, delta * TRACK_RATE)
-		_p("set_pump_prev_pos").call(pump_prev)
-		if pos.distance_to(pump_prev) > PUMP_OUT:
-			_p("set_pump_gesture_active").call(true)
-			_p("set_pump_gesture_timer").call(1.2)
-			_log("[VR Mod] PUMP: fwd phase dist=" + str(snappedf(pos.distance_to(pump_prev) * 100.0, 0.1)) + "cm")
+	if not autoload._pump_gesture_active:
+		autoload._pump_prev_pos = autoload._pump_prev_pos.lerp(pos, delta * TRACK_RATE)
+		if pos.distance_to(autoload._pump_prev_pos) > PUMP_OUT:
+			autoload._pump_gesture_active = true
+			autoload._pump_gesture_timer = 1.2
+			autoload._log("[VR Mod] PUMP: fwd phase dist=", snappedf(pos.distance_to(autoload._pump_prev_pos) * 100.0, 0.1), "cm")
 	else:
-		_p("set_pump_gesture_timer").call(_p("get_pump_gesture_timer").call() - delta)
-		var dist: float = pos.distance_to(pump_prev)
+		autoload._pump_gesture_timer -= delta
+		var dist: float = pos.distance_to(autoload._pump_prev_pos)
 		if dist < PUMP_BACK:
-			if _p("get_pump_cooldown").call() <= 0.0:
-				_p("inject_action").call("reload", true, 1.0)
-				_p("inject_action").call("reload", false, 1.0)
-				_log("[VR Mod] PUMP - shell cycled (R)")
-				var dom_ctrl = _p("get_controller").call(_p("get_weapon_hand").call())
+			if autoload._pump_cooldown <= 0.0:
+				autoload._inject_action("reload", true)
+				autoload._inject_action("reload", false)
+				autoload._log("[VR Mod] PUMP - shell cycled (R)")
+				var dom_ctrl = autoload._get_controller(autoload._weapon_hand)
 				if dom_ctrl:
 					dom_ctrl.trigger_haptic_pulse("haptic", 0.0, 0.3, 0.12, 0.0)
-				_p("set_pump_cooldown").call(0.5)
-			_p("set_pump_gesture_active").call(false)
-			_p("set_pump_prev_pos").call(pos)
-		elif _p("get_pump_gesture_timer").call() <= 0.0:
-			_log("[VR Mod] PUMP: timeout dist=" + str(snappedf(dist * 100.0, 0.1)) + "cm")
-			_p("set_pump_gesture_active").call(false)
-			_p("set_pump_prev_pos").call(pos)
+				autoload._pump_cooldown = 0.5
+			autoload._pump_gesture_active = false
+			autoload._pump_prev_pos = pos
+		elif autoload._pump_gesture_timer <= 0.0:
+			autoload._log("[VR Mod] PUMP: timeout dist=", snappedf(dist * 100.0, 0.1), "cm")
+			autoload._pump_gesture_active = false
+			autoload._pump_prev_pos = pos
