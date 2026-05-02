@@ -15,6 +15,7 @@ rem ── Stage VMZ contents ────────────────�
 echo Staging VMZ...
 
 mkdir "%STAGE%\vmz\resources\hands"
+mkdir "%STAGE%\vmz\resources\vr_mod"
 
 copy "%ROOT%\mod.txt"                                    "%STAGE%\vmz\mod.txt"                                >nul || goto :error
 copy "%ROOT%\resources\override.cfg"                     "%STAGE%\vmz\resources\override.cfg"                >nul || goto :error
@@ -24,6 +25,7 @@ copy "%ROOT%\resources\controls.md"                      "%STAGE%\vmz\resources\
 copy "%ROOT%\resources\hands\Hand_Nails_low_L.gltf"      "%STAGE%\vmz\resources\hands\Hand_Nails_low_L.gltf" >nul || goto :error
 copy "%ROOT%\resources\hands\Hand_Nails_low_R.gltf"      "%STAGE%\vmz\resources\hands\Hand_Nails_low_R.gltf" >nul || goto :error
 copy "%ROOT%\resources\hands\hand_col.png"               "%STAGE%\vmz\resources\hands\hand_col.png"          >nul || goto :error
+copy "%ROOT%\resources\vr_mod\*.gd"                      "%STAGE%\vmz\resources\vr_mod\"                      >nul || goto :error
 
 rem Build VMZ into a temp location
 rem NOTE: Must use ZipArchive (not Compress-Archive) to ensure forward-slash entry paths.

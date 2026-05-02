@@ -13,6 +13,22 @@ var _config_path := "user://vr_mod/vr_mod_config.json"
 var _assets_base := "res://resources/hands/"
 var _verbose_log := false  # set true to enable high-frequency debug logging
 
+# Subsystem modules. preload() fails the parse if the path is missing, so the
+# corresponding file MUST be in the VMZ (see build.bat manifest). Instances
+# are constructed via the _ensure_*() getters below.
+const ConfigIO = preload("res://resources/vr_mod/config_io.gd")
+var _config_io: ConfigIO
+
+func _ensure_config_io() -> ConfigIO:
+	if not _config_io:
+		_config_io = ConfigIO.new(_config_path, Callable(self, "_log_str"))
+	return _config_io
+
+# Single-arg wrapper around the variadic _log() so subsystems can hand a
+# Callable of known arity to anything that wants logging.
+func _log_str(msg: String) -> void:
+	_log(msg)
+
 # Tunables — class-level const uses = not := per GDScript 4
 const RAIL_MODE_LONG_PRESS_SEC = 0.3
 const DECOR_MODE_LONG_PRESS_SEC = 0.5
@@ -5315,161 +5331,134 @@ func _find_game_camera(node: Node) -> Camera3D:
 
 
 func _load_config() -> void:
-	var config_path = _config_path
-	if not FileAccess.file_exists(config_path):
-		var bundled := "res://resources/default_config.json"
-		if FileAccess.file_exists(bundled):
-			var src := FileAccess.open(bundled, FileAccess.READ)
-			if src:
-				var content := src.get_as_text()
-				src.close()
-				DirAccess.make_dir_recursive_absolute("user://vr_mod")
-				var dst := FileAccess.open(config_path, FileAccess.WRITE)
-				if dst:
-					dst.store_string(content)
-					dst.close()
-					_log("[VR Mod] Seeded config from bundled defaults: ", config_path)
-		if not FileAccess.file_exists(config_path):
-			_log("[VR Mod] Config not found at: ", config_path, ", using defaults")
-			return
-
-	var file = FileAccess.open(config_path, FileAccess.READ)
-	if not file:
+	var data: Variant = _ensure_config_io().read()
+	if not (data is Dictionary):
 		return
-
-	var json = JSON.new()
-	if json.parse(file.get_as_text()) == OK:
-		var data = json.data
-		if data is Dictionary:
-			if data.has("xr"):
-				world_scale = data["xr"].get("world_scale", 1.0)
-				_render_scale = data["xr"].get("render_scale", 1.0)
-				_mouse_sens_estimate = data["xr"].get("mouse_sens", 0.003)
-			if data.has("comfort"):
-				use_snap_turn = data["comfort"].get("turn_type", "smooth") == "snap"
-				snap_turn_degrees = data["comfort"].get("snap_turn_degrees", 45.0)
-				smooth_turn_speed = data["comfort"].get("smooth_turn_speed", 120.0)
-				_vignette_enabled = data["comfort"].get("vignette_enabled", false)
-				_vignette_strength = data["comfort"].get("vignette_strength", 0.7)
-				_two_hand_smooth_enabled = data["comfort"].get("two_hand_smooth_enabled", true)
-				_two_hand_smooth_speed = data["comfort"].get("two_hand_smooth_speed", 14.0)
-				_disable_walk_sway = not data["comfort"].get("walk_sway_enabled", true)
-			if data.has("controls"):
-				thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
-				_config_dominant_hand = data["controls"].get("dominant_hand", "right")
-				_standing_mode = data["controls"].get("standing_mode", false)
-				_gun_config_enabled = data["controls"].get("gun_config_enabled", false)
-				_laser_always_on = data["controls"].get("laser_always_on", true)
-				_move_direction_mode = data["controls"].get("move_direction_mode", "camera")
-				_move_direction_hand = data["controls"].get("move_direction_hand", "left")
-				_holster_zones_mirrored = data["controls"].get("holster_zones_mirrored", false)
-				_auto_recenter_enabled = data["controls"].get("auto_recenter", true)
-			if data.has("holsters"):
-				_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
-				_holster_holos_enabled = data["holsters"].get("holos_enabled", true)
-				for slot in [1, 2, 3, 4]:
-					var key = str(slot)
-					var def = _holster_offsets[slot]
-					var ho = data["holsters"].get("offsets", {})
-					if ho.has(key):
-						var o = ho[key]
-						_holster_offsets[slot] = Vector3(o.get("x", def.x), o.get("y", def.y), o.get("z", def.z))
-				if data["holsters"].has("bag"):
-					var b = data["holsters"]["bag"]
-					_bag_zone_offset = Vector3(b.get("x", 0.15), b.get("y", -0.10), b.get("z", 0.35))
-					_bag_zone_radius = b.get("radius", 0.35)
-			if data.has("nvg_zone"):
-				var nz = data["nvg_zone"]
-				_nvg_zone_offset.y = nz.get("y", 0.30)
-				_nvg_zone_radius = nz.get("radius", 0.25)
-				_nvg_brightness = nz.get("brightness", 5.0)
-				_nvg_mono = nz.get("mono", true)
-			if data.has("weapon_offsets"):
-				var wo = data["weapon_offsets"]
-				for wname in wo:
-					var o = wo[wname]
-					_weapon_grip_offsets[wname] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
-					_weapon_grip_rotations[wname] = o.get("rot", 0.0)
-			if data.has("foregrip_p_local"):
-				var fgp = data["foregrip_p_local"]
-				for wname in fgp:
-					var o = fgp[wname]
-					_weapon_fg_p_local[wname] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
-			if data.has("foregrip_r_local"):
-				var fgr = data["foregrip_r_local"]
-				for wname in fgr:
-					var o = fgr[wname]
-					var q := Quaternion(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0), o.get("w", 1.0))
-					_weapon_fg_r_local[wname] = Basis(q)
-			if data.has("hud"):
-				var h = data["hud"]
-				_hud_width = h.get("width", 2.3)
-				_hud_distance = h.get("distance", 0.9)
-				_hud_height_offset = h.get("height_offset", -0.05)
-				_hud_lr_offset = h.get("lr_offset", 0.0)
-				_hud_smooth_follow = h.get("smooth_follow", true)
-				_hud_smooth_speed = h.get("smooth_speed", 2.0)
-				_hud_spread = h.get("spread", 0.5)
-			if data.has("watch"):
-				var w = data["watch"]
-				_watch_size = w.get("size", 0.15)
-				_watch_glance_enabled = w.get("glance_enabled", false)
-				_watch_glance_angle = w.get("glance_angle", 40.0)
-				_watch_fade_speed = w.get("fade_speed", 8.0)
-				_watch_spread = w.get("spread", 0.15)
-				var wo = w.get("offset", {})
-				_watch_offset = Vector3(wo.get("x", -0.06), wo.get("y", -0.08), wo.get("z", 0.34))
-				var wr = w.get("rot", {})
-				_watch_rot = Vector3(wr.get("x", 180.0), wr.get("y", 90.0), wr.get("z", -90.0))
-			if data.has("hand_models"):
-				var hm = data["hand_models"]
-				var hl = hm.get("left", {})
-				HAND_GLTF_OFFSET_LEFT = Vector3(hl.get("x", -0.03), hl.get("y", -0.015), hl.get("z", 0.195))
-				var hlr = hl.get("rot", {})
-				HAND_GLTF_ROTATION_LEFT = Vector3(hlr.get("x", 0.0), hlr.get("y", 0.0), hlr.get("z", 0.0))
-				var hr = hm.get("right", {})
-				HAND_GLTF_OFFSET_RIGHT = Vector3(hr.get("x", 0.025), hr.get("y", 0.01), hr.get("z", 0.195))
-				var hrr = hr.get("rot", {})
-				HAND_GLTF_ROTATION_RIGHT = Vector3(hrr.get("x", 0.0), hrr.get("y", 0.0), hrr.get("z", 0.0))
-			if data.has("sling"):
-				var sl = data["sling"]
-				_sling_offset = Vector3(sl.get("x", 0.2), sl.get("y", -0.31), sl.get("z", -0.06))
-				var slr = sl.get("rot", {})
-				_sling_rot_offset = Vector3(slr.get("x", 0.0), slr.get("y", 60.0), slr.get("z", 0.0))
-			if data.has("menu"):
-				var m = data["menu"]
-				_menu_width = m.get("width", 3.0)
-				_menu_distance = m.get("distance", 1.0)
-				_menu_lr_offset = m.get("lr_offset", 0.0)
-				_menu_laser_uv_x = m.get("laser_uv_x", 0.0)
-				_menu_laser_uv_y = m.get("laser_uv_y", 0.0)
-			if data.has("resume"):
-				_resume_slot = data["resume"].get("slot", 0)
-				_resume_hand = data["resume"].get("hand", "")
-			_log("[VR Mod] Config loaded successfully")
-	file.close()
+	# Apply each section to autoload state. Anything unknown is left untouched
+	# so the file round-trips cleanly through _save_full_config().
+	if data.has("xr"):
+		world_scale = data["xr"].get("world_scale", 1.0)
+		_render_scale = data["xr"].get("render_scale", 1.0)
+		_mouse_sens_estimate = data["xr"].get("mouse_sens", 0.003)
+	if data.has("comfort"):
+		use_snap_turn = data["comfort"].get("turn_type", "smooth") == "snap"
+		snap_turn_degrees = data["comfort"].get("snap_turn_degrees", 45.0)
+		smooth_turn_speed = data["comfort"].get("smooth_turn_speed", 120.0)
+		_vignette_enabled = data["comfort"].get("vignette_enabled", false)
+		_vignette_strength = data["comfort"].get("vignette_strength", 0.7)
+		_two_hand_smooth_enabled = data["comfort"].get("two_hand_smooth_enabled", true)
+		_two_hand_smooth_speed = data["comfort"].get("two_hand_smooth_speed", 14.0)
+		_disable_walk_sway = not data["comfort"].get("walk_sway_enabled", true)
+	if data.has("controls"):
+		thumbstick_deadzone = data["controls"].get("thumbstick_deadzone", 0.15)
+		_config_dominant_hand = data["controls"].get("dominant_hand", "right")
+		_standing_mode = data["controls"].get("standing_mode", false)
+		_gun_config_enabled = data["controls"].get("gun_config_enabled", false)
+		_laser_always_on = data["controls"].get("laser_always_on", true)
+		_move_direction_mode = data["controls"].get("move_direction_mode", "camera")
+		_move_direction_hand = data["controls"].get("move_direction_hand", "left")
+		_holster_zones_mirrored = data["controls"].get("holster_zones_mirrored", false)
+		_auto_recenter_enabled = data["controls"].get("auto_recenter", true)
+	if data.has("holsters"):
+		_holster_zone_radius = data["holsters"].get("zone_radius", 0.27)
+		_holster_holos_enabled = data["holsters"].get("holos_enabled", true)
+		for slot in [1, 2, 3, 4]:
+			var key = str(slot)
+			var def = _holster_offsets[slot]
+			var ho = data["holsters"].get("offsets", {})
+			if ho.has(key):
+				var o = ho[key]
+				_holster_offsets[slot] = Vector3(o.get("x", def.x), o.get("y", def.y), o.get("z", def.z))
+		if data["holsters"].has("bag"):
+			var b = data["holsters"]["bag"]
+			_bag_zone_offset = Vector3(b.get("x", 0.15), b.get("y", -0.10), b.get("z", 0.35))
+			_bag_zone_radius = b.get("radius", 0.35)
+	if data.has("nvg_zone"):
+		var nz = data["nvg_zone"]
+		_nvg_zone_offset.y = nz.get("y", 0.30)
+		_nvg_zone_radius = nz.get("radius", 0.25)
+		_nvg_brightness = nz.get("brightness", 5.0)
+		_nvg_mono = nz.get("mono", true)
+	if data.has("weapon_offsets"):
+		var wo = data["weapon_offsets"]
+		for wname in wo:
+			var o = wo[wname]
+			_weapon_grip_offsets[wname] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
+			_weapon_grip_rotations[wname] = o.get("rot", 0.0)
+	if data.has("foregrip_p_local"):
+		var fgp = data["foregrip_p_local"]
+		for wname in fgp:
+			var o = fgp[wname]
+			_weapon_fg_p_local[wname] = Vector3(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0))
+	if data.has("foregrip_r_local"):
+		var fgr = data["foregrip_r_local"]
+		for wname in fgr:
+			var o = fgr[wname]
+			var q := Quaternion(o.get("x", 0.0), o.get("y", 0.0), o.get("z", 0.0), o.get("w", 1.0))
+			_weapon_fg_r_local[wname] = Basis(q)
+	if data.has("hud"):
+		var h = data["hud"]
+		_hud_width = h.get("width", 2.3)
+		_hud_distance = h.get("distance", 0.9)
+		_hud_height_offset = h.get("height_offset", -0.05)
+		_hud_lr_offset = h.get("lr_offset", 0.0)
+		_hud_smooth_follow = h.get("smooth_follow", true)
+		_hud_smooth_speed = h.get("smooth_speed", 2.0)
+		_hud_spread = h.get("spread", 0.5)
+	if data.has("watch"):
+		var w = data["watch"]
+		_watch_size = w.get("size", 0.15)
+		_watch_glance_enabled = w.get("glance_enabled", false)
+		_watch_glance_angle = w.get("glance_angle", 40.0)
+		_watch_fade_speed = w.get("fade_speed", 8.0)
+		_watch_spread = w.get("spread", 0.15)
+		var wo = w.get("offset", {})
+		_watch_offset = Vector3(wo.get("x", -0.06), wo.get("y", -0.08), wo.get("z", 0.34))
+		var wr = w.get("rot", {})
+		_watch_rot = Vector3(wr.get("x", 180.0), wr.get("y", 90.0), wr.get("z", -90.0))
+	if data.has("hand_models"):
+		var hm = data["hand_models"]
+		var hl = hm.get("left", {})
+		HAND_GLTF_OFFSET_LEFT = Vector3(hl.get("x", -0.03), hl.get("y", -0.015), hl.get("z", 0.195))
+		var hlr = hl.get("rot", {})
+		HAND_GLTF_ROTATION_LEFT = Vector3(hlr.get("x", 0.0), hlr.get("y", 0.0), hlr.get("z", 0.0))
+		var hr = hm.get("right", {})
+		HAND_GLTF_OFFSET_RIGHT = Vector3(hr.get("x", 0.025), hr.get("y", 0.01), hr.get("z", 0.195))
+		var hrr = hr.get("rot", {})
+		HAND_GLTF_ROTATION_RIGHT = Vector3(hrr.get("x", 0.0), hrr.get("y", 0.0), hrr.get("z", 0.0))
+	if data.has("sling"):
+		var sl = data["sling"]
+		_sling_offset = Vector3(sl.get("x", 0.2), sl.get("y", -0.31), sl.get("z", -0.06))
+		var slr = sl.get("rot", {})
+		_sling_rot_offset = Vector3(slr.get("x", 0.0), slr.get("y", 60.0), slr.get("z", 0.0))
+	if data.has("menu"):
+		var m = data["menu"]
+		_menu_width = m.get("width", 3.0)
+		_menu_distance = m.get("distance", 1.0)
+		_menu_lr_offset = m.get("lr_offset", 0.0)
+		_menu_laser_uv_x = m.get("laser_uv_x", 0.0)
+		_menu_laser_uv_y = m.get("laser_uv_y", 0.0)
+	if data.has("resume"):
+		_resume_slot = data["resume"].get("slot", 0)
+		_resume_hand = data["resume"].get("hand", "")
+	_log("[VR Mod] Config loaded successfully")
 
 
 func _save_grip_config() -> void:
-	var config_path = _config_path
-	if not FileAccess.file_exists(config_path):
-		_log("[VR Mod] Config not found, cannot save: ", config_path)
+	if not _ensure_config_io().mutate(_grip_config_mutator):
 		return
+	_log("[VR Mod] Grip config saved to: ", _config_path)
+	for wname in _weapon_grip_offsets:
+		var o = _weapon_grip_offsets[wname]
+		_log("[VR Mod]   " + str(wname)
+			+ ": grip x=" + str(snapped(o.x, 0.001))
+			+ " y=" + str(snapped(o.y, 0.001))
+			+ " z=" + str(snapped(o.z, 0.001))
+			+ " rot=" + str(snapped(_weapon_grip_rotations.get(wname, 0.0), 0.1))
+			+ " deg foregrip_configured=" + str(_weapon_fg_p_local.has(wname)))
 
-	var file = FileAccess.open(config_path, FileAccess.READ)
-	if not file:
-		return
-	var json = JSON.new()
-	if json.parse(file.get_as_text()) != OK:
-		file.close()
-		return
-	var data = json.data
-	file.close()
 
-	if not data is Dictionary:
-		return
-
-	# Update weapon_offsets section with current values
+func _grip_config_mutator(data: Dictionary) -> void:
 	var wo := {}
 	for wname in _weapon_grip_offsets:
 		var o := _weapon_grip_offsets[wname] as Vector3
@@ -5493,20 +5482,6 @@ func _save_grip_config() -> void:
 		var q := b.get_rotation_quaternion()
 		fgr[wname] = {"x": snapped(q.x, 0.0001), "y": snapped(q.y, 0.0001), "z": snapped(q.z, 0.0001), "w": snapped(q.w, 0.0001)}
 	data["foregrip_r_local"] = fgr
-
-	var out = FileAccess.open(config_path, FileAccess.WRITE)
-	if out:
-		out.store_string(JSON.stringify(data, "\t"))
-		out.close()
-		_log("[VR Mod] Grip config saved to: ", config_path)
-		for wname in _weapon_grip_offsets:
-			var o = _weapon_grip_offsets[wname]
-			_log("[VR Mod]   " + str(wname)
-				+ ": grip x=" + str(snapped(o.x, 0.001))
-				+ " y=" + str(snapped(o.y, 0.001))
-				+ " z=" + str(snapped(o.z, 0.001))
-				+ " rot=" + str(snapped(_weapon_grip_rotations.get(wname, 0.0), 0.1))
-				+ " deg foregrip_configured=" + str(_weapon_fg_p_local.has(wname)))
 
 
 # ── Smooth HUD follow ──────────────────────────────────────────────────────────
@@ -6715,36 +6690,19 @@ func _scroll_config_panel(amount: float) -> void:
 func _patch_resume_state(slot: int, hand: String) -> void:
 	_resume_slot = slot
 	_resume_hand = hand
-	var config_path = _config_path
-	var data := {}
-	if FileAccess.file_exists(config_path):
-		var file = FileAccess.open(config_path, FileAccess.READ)
-		if file:
-			var json = JSON.new()
-			if json.parse(file.get_as_text()) == OK and json.data is Dictionary:
-				data = json.data
-			file.close()
+	_ensure_config_io().mutate(_apply_resume_state.bind(slot, hand))
+
+
+func _apply_resume_state(data: Dictionary, slot: int, hand: String) -> void:
 	data["resume"] = {"slot": slot, "hand": hand}
-	var out = FileAccess.open(config_path, FileAccess.WRITE)
-	if out:
-		out.store_string(JSON.stringify(data, "\t"))
-		out.close()
 
 
 func _save_full_config() -> void:
-	var config_path = _config_path
-	var data := {}
+	if _ensure_config_io().mutate(_full_config_mutator):
+		_log("[VR Mod] Full config saved to: ", _config_path)
 
-	# Read existing config first
-	if FileAccess.file_exists(config_path):
-		var file = FileAccess.open(config_path, FileAccess.READ)
-		if file:
-			var json = JSON.new()
-			if json.parse(file.get_as_text()) == OK:
-				if json.data is Dictionary:
-					data = json.data
-			file.close()
 
+func _full_config_mutator(data: Dictionary) -> void:
 	# XR
 	data["xr"] = {"world_scale": world_scale, "render_scale": _render_scale, "mouse_sens": _mouse_sens_estimate}
 
@@ -6901,12 +6859,6 @@ func _save_full_config() -> void:
 			"z": snapped(_sling_rot_offset.z, 0.1)
 		}
 	}
-
-	var out = FileAccess.open(config_path, FileAccess.WRITE)
-	if out:
-		out.store_string(JSON.stringify(data, "\t"))
-		out.close()
-		_log("[VR Mod] Full config saved to: ", config_path)
 
 
 # ── Bullet hole pool trim (Forward Mobile renders max ~8 decals per mesh) ──
