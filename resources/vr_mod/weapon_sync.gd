@@ -593,10 +593,6 @@ func apply_sway_to_hands(
 func sync_weapon_to_sling(weapon_rig: Node3D) -> void:
 	if not autoload.xr_camera or not is_instance_valid(autoload.xr_camera):
 		return
-	# Make sure weapon is reflected as down and not aiming
-	autoload._inject_action("aim", false)
-	autoload._inject_action("weapon_high", false)
-	autoload._inject_action("weapon_low", true)
 	weapon_rig.visible = true  # override any game-side visibility flag each frame
 	# Build a yaw-only basis from the camera so the weapon follows the player's turn
 	var head_yaw = autoload.xr_camera.global_rotation.y
@@ -649,10 +645,6 @@ func walk_chain_node(weapon_rig: Node3D, node_name: String) -> Node3D:
 
 
 func suppress_walk_sway(weapon_rig: Node3D) -> void:
-	if autoload._holster_state == autoload.HolsterState.SLING:
-		autoload._inject_action("aim", false)
-		autoload._inject_action("weapon_high", false)
-		autoload._inject_action("weapon_low", true)
 	if not autoload._walk_sway_captured:
 		autoload._walk_sway_rest.clear()
 		for node_name in autoload._WALK_SWAY_NODES:
