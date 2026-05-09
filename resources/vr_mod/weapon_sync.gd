@@ -605,7 +605,6 @@ func sync_weapon_to_sling(weapon_rig: Node3D) -> void:
 		deg_to_rad(autoload._sling_rot_offset.x),
 		deg_to_rad(autoload._sling_rot_offset.y),
 		deg_to_rad(autoload._sling_rot_offset.z)))
-	hide_arms_in_subtree(weapon_rig)
 	# Re-enable processing so the game knows the weapon is lowered
 	if autoload._disable_walk_sway:
 		if autoload._WALK_SWAY_NODES:
@@ -614,6 +613,7 @@ func sync_weapon_to_sling(weapon_rig: Node3D) -> void:
 				if n:
 					n.set_process(true)
 					n.set_physics_process(true)
+	hide_arms_in_subtree(weapon_rig)
 
 
 func sample_recoil_chain(weapon_rig: Node3D) -> Transform3D:
